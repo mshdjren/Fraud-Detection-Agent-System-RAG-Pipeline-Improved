@@ -1,0 +1,136 @@
+# ===========================
+# ServiceAccount (기존 evaluation-sa 재사용 — 이미 apply됐으면 생략)
+# ===========================
+# apiVersion: v1
+# kind: ServiceAccount
+# metadata:
+#   name: evaluation-sa
+#   namespace: elastic
+#   annotations:
+#     iam.gke.io/gcp-service-account: evaluation-sa@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+
+# ===========================
+# ConfigMap 등록 명령어 (hard_negative_miner.py 추가됨)
+# ===========================
+# kubectl create configmap evaluation-code \
+#   --from-file=batch_inference.py \
+#   --from-file=gt_loader.py \
+#   --from-file=evaluation_metrics.py \
+#   --from-file=hard_negative_miner.py \
+#   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+
+---
+# ===========================
+# Hard Negative Mining Job
+#   - pipeline_mode: router_retriever  (retrieved_original_indices 필요)
+#   - --mine-hard-negatives: 전체 test set 앞 10% 자동 실행
+#   - Type 1: Router Misrouting  (gt_cluster != predicted_cluster)
+#   - Type 2: Cross-Cluster Retrieval  (HNSW 경계 이웃 혼입)
+#   - 결과 GCS 저장:
+#     gs://fraudecom/tree-search/analyzer_ft/{EXPERIMENT_CASE}/
+#       hard_negatives/query_{PERCOLATE_QUERY_VERSION}_pct_{CORESET_PERCENTAGE}/
+#         hard_negatives_{MMDD}.parquet
+#         hard_negatives_{MMDD}_summary.txt
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hard-negative-mining-pca64-k100-v14-pct100-0415
+  namespace: elastic
+  labels:
+    app: hard-negative-mining
+    version: v1.0
+    pipeline: router-retriever
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: hard-negative-mining
+        pipeline: router-retriever
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+      containers:
+      - name: miner
+        image: python:3.10-slim
+        env:
+        # ── 실험 설정 (anomaly-config ConfigMap에서 주입) ──────────
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        # ── Mining 고정 파라미터 ───────────────────────────────────
+        - name: CORESET_PERCENTAGE
+          value: "100"
+        - name: N_SAMPLES
+          value: ""          # ← 비워두면 10% 자동 / 숫자 입력하면 해당 수만 실행
+          # value: "1000"          # ← 비워두면 10% 자동 / 숫자 입력하면 해당 수만 실행
+        - name: BATCH_SIZE
+          value: "100"
+        - name: TIMEOUT
+          value: "600"
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Hard Negative Mining V1.0"
+          echo "  experiment_case    : ${EXPERIMENT_CASE}"
+          echo "  percolate_version  : ${PERCOLATE_QUERY_VERSION}"
+          echo "  coreset_percentage : ${CORESET_PERCENTAGE}"
+          echo "  n_samples          : 전체 test set 앞 10% 자동"
+          echo "  Type 1: Router Misrouting (gt != predicted)"
+          echo "  Type 2: Cross-Cluster Retrieval (HNSW boundary)"
+          echo "  GCS: fraudecom/tree-search/analyzer_ft/${EXPERIMENT_CASE}/"
+          echo "       hard_negatives/query_${PERCOLATE_QUERY_VERSION}_pct_${CORESET_PERCENTAGE}/"
+          echo "================================================"
+
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx structlog scikit-learn google-cloud-storage
+
+          cd /app
+
+          python batch_inference.py \
+            --pipeline-mode         router_retriever \
+            --experiment-case       ${EXPERIMENT_CASE} \
+            --percolate-version     ${PERCOLATE_QUERY_VERSION} \
+            --coreset-percentage    ${CORESET_PERCENTAGE} \
+            --batch-size            ${BATCH_SIZE} \
+            --timeout               ${TIMEOUT} \
+            --output-dir            /results \
+            --mine-hard-negatives \
+            ${N_SAMPLES:+--n-samples ${N_SAMPLES}} \
+            --mining-output-dir     /results/hard_negatives
+
+          echo ""
+          echo "── Mining Summary ──────────────────────────────"
+          SUMMARY=$(find /results/hard_negatives -name "*_summary.txt" | head -1)
+          [ -n "${SUMMARY}" ] && cat "${SUMMARY}"
+          echo "================================================"
+        resources:
+          requests:
+              cpu: 100m
+              memory: 1Gi
+          limits:
+              cpu: 1000m
+              memory: 2Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code

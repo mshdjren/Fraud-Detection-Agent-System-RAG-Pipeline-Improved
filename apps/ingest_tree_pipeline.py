@@ -1,0 +1,921 @@
+"""
+Tree-based Pipeline Ingestion - v5.0.
+============================================================
+[03.31. V5.0 변경사항]
+1. #Percolator 개선: 쿼리 필드 RAM 상주(Preload) 및 분산 설정
+    def gen_mapping_percolator 함수(vector_fields: list... ) -> dict: 
+    settings = {
+        "number_of_shards": N_SHARDS if box_type else 1, 
+        "number_of_replicas": N_REPLICAS,
+        "index.store.preload": ["query", "_percolator"] # 쿼리 매칭 속도 극대화
+    }
+
+2. #
+    gen_raw_vec_actions 함수
+    cluster_id 인수 추가, 
+    # [변경 사항] _routing 필드 추가
+        yield {
+            "_op_type": "index",
+            "_index":   index_name,
+            "_id":      str(original_idx),
+            "_routing": str(cluster_id),  # 같은 cluster_id는 같은 샤드로 유도
+            "_source":  source,
+        }
+
+[V4.4 변경사항]
+  ① original_index → raw+vec 매핑에 명시적 추가 (index=False, doc_values=False)
+      - ES doc _id로 사용 + _source에도 저장
+      - GT top5_indices 매핑 시 직접 조회 가능
+  ② ES doc _id 변경: row_pos → original_index
+      - parquet의 original_index 값을 ES _id로 사용
+      - (aug 아닌 경우, parquet에 es_doc_id 없음)
+  ③ tree_id 제거: 매핑 및 _source에서 완전 제거
+  ④ persona JSON 저장 및 GCS 업로드
+      - 100% coreset parquet(항상 존재)에서 cluster_personas 계산
+      - persona 데이터는 percolator 인덱스 전용 (raw+vec 인덱스와 무관)
+      - calculate_cluster_personas() 완료 후 로컬 JSON 저장
+      - gsutil로 GCS에 업로드 (aug 스크립트에서는 재사용 없음)
+      - GCS_PERSONA_JSON env로 경로 지정 가능
+
+[V4.3 변경사항 - 유지]
+  ① gen_mapping_percolator(): purity/support에 index=False 추가
+  ② log_index_stats(): bulk_ingest 완료 후 docs count 확인
+
+[설계 원칙 - V4.2와 동일, 완전 유지]
+  ★ raw+vec 인덱스: experiment_case와 완전 무관, coreset percentage별로만 구분
+      fraud_ecom_percentage_100_cluster_tree_vec
+      fraud_ecom_percentage_10_cluster_tree_vec
+      fraud_ecom_percentage_1_cluster_tree_vec
+    # 변경
+    #   ★ raw+vec 인덱스: experiment_case + coreset percentage별로 구분
+    #       fraud_ecom_{experiment_case}_percentage_{percentage}_cluster_tree_vec
+    #       (cluster_id가 case별 tree inference 결과이므로 case별 분리 필수)
+
+  ★ percolate 인덱스: experiment_case + version별로 구분
+      fraud_ecom_{experiment_case}_{version}_tree_rules_percolator
+
+  ★ SKIP_RAW_VEC: 2번째 이후 experiment_case 실행 시 raw+vec bulk 스킵
+
+[임베딩 인덱싱]
+  ★ emb_array[row_pos] — parquet 행 위치(enumerate) 기준
+    ES _id는 original_index 사용 (GT top5_indices 매핑용)
+
+Usage:
+    EXPERIMENT_CASE=pca_64 python ingest_tree_pipeline.py
+    EXPERIMENT_CASE=pca_64_k200 SKIP_RAW_VEC=true python ingest_tree_pipeline.py
+    EXPERIMENT_CASE=pca_64 CORESET_PERCENTAGES=100,10,1 VERSIONS=v2 python ingest_tree_pipeline.py
+"""
+
+import os
+import time
+import json
+import copy
+import numpy as np
+import pandas as pd
+from elasticsearch import Elasticsearch
+from elasticsearch.helpers import streaming_bulk
+
+import sys
+sys.path.append('/app')
+from percolate_query_builder import get_query_builder, EXPERIMENT_CONFIG, get_vector_dim
+
+# ===========================
+# Configuration
+# ===========================
+
+ES_URL   = os.getenv("ES_URL")
+PASSWORD = os.getenv("PASSWORD")
+
+BASE = "/data/tree_artifacts"
+
+CORESET_PARQUET_DIR = os.getenv("CORESET_PARQUET_DIR", "/data/coreset_parquets")
+CORESET_PARQUET_FILENAME_TEMPLATE = os.getenv(
+    "CORESET_PARQUET_FILENAME_TEMPLATE",
+    "raw_plus_cluster_tree_percentage_{pct}.parquet"
+)
+
+EMB_DATA_DIR = os.getenv("EMB_DATA_DIR", "/data/embeddings")
+EMB_FILENAME_PREFIX = os.getenv(
+    "EMB_FILENAME_PREFIX",
+    "anollm_lr5e-05_standard_smolLM_train_embeddings_percentage"
+)
+
+EXPERIMENT_CASES_TO_PROCESS = os.getenv("EXPERIMENT_CASE", "pca_64").split(",")
+VERSIONS_TO_PROCESS = os.getenv("VERSIONS", "v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13").split(",")
+
+CORESET_PERCENTAGES = [
+    int(p.strip())
+    for p in os.getenv("CORESET_PERCENTAGES", "100,10,1").split(",")
+    if p.strip()
+]
+
+SKIP_RAW_VEC_MODE = os.getenv("SKIP_RAW_VEC", "false").strip().lower()
+
+INGEST_SEARCH_MODE = os.getenv("INGEST_SEARCH_MODE", "knn").strip().lower()
+
+# ── 노드 pinning (실험용) ──────────────────────────────────────────────
+NODE_PINNING_ENABLED = os.getenv("NODE_PINNING", "false").strip().lower() == "true"
+NODE_ALLOCATION = {
+    100: os.getenv("NODE_100PCT", "elasticsearch-ha-es-vec-100pct-0"),
+    10:  os.getenv("NODE_10PCT",  "elasticsearch-ha-es-vec-10pct-0"),
+    1:   os.getenv("NODE_1PCT",   "elasticsearch-ha-es-vec-1pct-0"),
+}
+PERCOLATOR_NODE = os.getenv("NODE_PERCOLATOR", "elasticsearch-ha-es-main-3")
+
+GCS_TREE_BASE = os.getenv("GCS_TREE_BASE", "gs://fraudecom/tree-search/tree_fraudecom")
+
+PERCOLATOR_SHARD_DISTRIBUTION = os.getenv("PERCOLATOR_SHARD_DISTRIBUTION", "false").strip().lower() == "true"
+ATTR_PERCOLATOR = os.getenv("ATTR_PERCOLATOR", "percolator")
+ATTR_DOCS  = os.getenv("ATTR_DOCS", "docs")
+N_SHARDS  = int(os.getenv("N_SHARDS", "3"))
+N_REPLICAS  = int(os.getenv("N_REPLICAS", "0"))
+
+CHUNK_SIZE       = int(os.getenv("BULK_CHUNK_SIZE",      "1000"))
+MAX_CHUNK_BYTES  = int(os.getenv("BULK_MAX_CHUNK_BYTES",  str(20 * 1024 * 1024)))
+REQUEST_TIMEOUT  = int(os.getenv("ES_REQUEST_TIMEOUT",    "120"))
+
+_msm_str = os.getenv("PERCOLATE_MIN_SHOULD_MATCH", "").strip()
+try:
+    MIN_SHOULD_MATCH = int(_msm_str) if _msm_str else None
+except ValueError:
+    print(f"[warn] Invalid PERCOLATE_MIN_SHOULD_MATCH: '{_msm_str}', using auto")
+    MIN_SHOULD_MATCH = None
+
+print(f"\n{'='*80}")
+print(f"INGESTION V4.4: Coreset Parquet + original_index as _id + tree_id 제거")
+print(f"{'='*80}")
+print(f"Experiment cases     : {EXPERIMENT_CASES_TO_PROCESS}")
+print(f"Versions             : {VERSIONS_TO_PROCESS}")
+print(f"Coreset percentages  : {CORESET_PERCENTAGES}")
+print(f"SKIP_RAW_VEC         : {SKIP_RAW_VEC_MODE}")
+print(f"Coreset parquet dir  : {CORESET_PARQUET_DIR}")
+print(f"GCS tree base        : {GCS_TREE_BASE}")
+print(f"Persona JSON         : per experiment_case → {EXPERIMENT_CASES_TO_PROCESS}/cluster_personas.json")
+print(f"Emb dir              : {EMB_DATA_DIR}")
+print(f"Emb prefix           : {EMB_FILENAME_PREFIX}")
+print()
+
+# ===========================
+# Path Helpers
+# ===========================
+
+
+def get_coreset_parquet_path(percentage: int, experiment_case: str = "") -> str:
+    filename = CORESET_PARQUET_FILENAME_TEMPLATE.format(pct=percentage)
+    if experiment_case:
+        return os.path.join(CORESET_PARQUET_DIR, experiment_case, filename)
+    return os.path.join(CORESET_PARQUET_DIR, filename)
+
+def get_emb_path(percentage: int) -> str:
+    return os.path.join(EMB_DATA_DIR, f"{EMB_FILENAME_PREFIX}_{percentage}_merged.npy")
+
+# 수정
+print("Coreset parquet files (per experiment_case):")
+for _ec in EXPERIMENT_CASES_TO_PROCESS:
+    _ec = _ec.strip()
+    for _pct in CORESET_PERCENTAGES:
+        _p = get_coreset_parquet_path(_pct, _ec)
+        print(f"  [{_ec}][{_pct:>3}%]  {_p}  {'✅' if os.path.exists(_p) else '❌ MISSING'}")
+        
+print("\nEmbedding files:")
+for _pct in CORESET_PERCENTAGES:
+    _p = get_emb_path(_pct)
+    print(f"  [{_pct:>3}%]  {_p}  {'✅' if os.path.exists(_p) else '❌ MISSING'}")
+
+print(f"\nPersona source (per experiment_case):")
+for _ec in EXPERIMENT_CASES_TO_PROCESS:
+    _p = os.path.join(CORESET_PARQUET_DIR, _ec.strip(), "raw_plus_cluster_tree_percentage_100.parquet")
+    print(f"  [{_ec}]  {_p}  {'✅' if os.path.exists(_p) else '❌ MISSING'}")
+
+
+# ===========================
+# Bucketization Helpers
+# ===========================
+import bisect
+
+BUCKET_DEPTH_PCT = os.getenv("BUCKET_DEPTH_PCT", "15")
+ENABLE_BUCKETIZATION = os.getenv("ENABLE_BUCKETIZATION", "auto").lower()
+
+def load_bucket_config(experiment_case: str) -> dict:
+    """bucketization 에셋 로드"""
+
+    if ENABLE_BUCKETIZATION == "false":
+        print(f"[bucketization] DISABLED — env ENABLE_BUCKETIZATION=false")
+        return {"enabled": False}
+    
+    bucket_dir = os.path.join(
+        BASE, experiment_case, "bucketization", f"depth_pct_{BUCKET_DEPTH_PCT}"
+    )
+    feature_rank_path = os.path.join(bucket_dir, "feature_importance_rank.json")
+    split_points_path = os.path.join(bucket_dir, "tree_split_points.json")
+    
+    if not os.path.exists(feature_rank_path) or not os.path.exists(split_points_path):
+        if ENABLE_BUCKETIZATION == "true":
+            raise RuntimeError(f"ENABLE_BUCKETIZATION=true but assets not found: {bucket_dir}")
+        print(f"[bucketization] DISABLED — {bucket_dir} 없음")
+        return {"enabled": False}
+
+        # print(f"[bucketization] DISABLED — {bucket_dir} 없음")
+        # return {"enabled": False}
+    
+    with open(feature_rank_path, 'r') as f:
+        feature_data = json.load(f)
+    with open(split_points_path, 'r') as f:
+        split_data = json.load(f)
+    
+    config = {
+        "enabled": True,
+        "version": "v1",
+        "depth_pct": int(BUCKET_DEPTH_PCT),
+        "target_depth": feature_data["target_depth"],
+        "selected_features": feature_data["selected_features"],
+        "split_points": split_data["split_points"],
+    }
+    
+    print(f"[bucketization] ENABLED — depth_pct_{BUCKET_DEPTH_PCT}")
+    print(f"  Features: {len(config['selected_features'])} {config['selected_features']}")
+    return config
+
+
+def find_bucket_index(value: float, split_points: list) -> int:
+    """value가 속한 bucket index (binary search)"""
+    return bisect.bisect_left(split_points, value)
+
+
+def generate_bucket_fields(rule_doc: dict, bucket_config: dict) -> dict:
+    """Rule의 range 조건 → bucket 필드 생성"""
+    if not bucket_config.get("enabled"):
+        return {}
+    
+    selected = set(bucket_config["selected_features"])
+    split_map = bucket_config["split_points"]
+    fields = {}
+    
+    filters = rule_doc.get("query", {}).get("bool", {}).get("filter", [])
+    
+    for cond in filters:
+        if "range" not in cond:
+            continue
+        
+        field = list(cond["range"].keys())[0]
+        if field not in selected or field not in split_map:
+            continue
+        
+        range_spec = cond["range"][field]
+        split_points = split_map[field]
+        
+        # Threshold 추출
+        if "lte" in range_spec:
+            threshold = float(range_spec["lte"])
+            direction = "lte"
+        elif "lt" in range_spec:
+            threshold = float(range_spec["lt"])
+            direction = "lt"
+        elif "gte" in range_spec:
+            threshold = float(range_spec["gte"])
+            direction = "gte"
+        elif "gt" in range_spec:
+            threshold = float(range_spec["gt"])
+            direction = "gt"
+        else:
+            continue
+        
+        bucket_idx = find_bucket_index(threshold, split_points)
+        fields[f"{field}_bucket"] = bucket_idx
+        fields[f"{field}_direction"] = direction
+    
+    return fields
+
+# ===========================
+# Elasticsearch Client
+# ===========================
+
+client = Elasticsearch(
+    [ES_URL],
+    verify_certs=False,
+    ssl_show_warn=False,
+    basic_auth=("elastic", PASSWORD),
+    request_timeout=REQUEST_TIMEOUT,
+)
+print(f"\n[es] Connected: {client.info()['cluster_name']}")
+
+# ===========================
+# Utilities
+# ===========================
+
+def normalize_field_name(s: str) -> str:
+    return s.replace(" ", "_")
+
+
+def normalize_query_fields(query_obj: dict) -> dict:
+    if not isinstance(query_obj, dict):
+        return query_obj
+    normalized = {}
+    for key, value in query_obj.items():
+        if key == 'range' and isinstance(value, dict):
+            normalized[key] = {normalize_field_name(f): c for f, c in value.items()}
+        elif key == 'term' and isinstance(value, dict):
+            normalized[key] = {normalize_field_name(f): v for f, v in value.items()}
+        elif isinstance(value, dict):
+            normalized[key] = normalize_query_fields(value)
+        elif isinstance(value, list):
+            normalized[key] = [normalize_query_fields(i) for i in value]
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def extract_vector_fields_from_rules(rules_list: list) -> list:
+    used_fields = set()
+    for rule in rules_list:
+        for f in rule.get('query', {}).get('bool', {}).get('filter', []):
+            if 'range' in f:
+                used_fields.add(normalize_field_name(list(f['range'].keys())[0]))
+    vector_fields = sorted(
+        [f for f in used_fields if f.startswith('v') and f[1:].isdigit()],
+        key=lambda x: int(x[1:])
+    )
+    max_dim = max(int(f[1:]) for f in vector_fields) if vector_fields else 0
+    print(f"  Used vector fields in rules: {len(vector_fields)} (max v{max_dim})")
+    return vector_fields
+
+
+def extract_original_columns(df: pd.DataFrame) -> dict:
+    """
+    ★ V4.4 변경:
+      - tree_id: 완전 제거 (exclude에 추가)
+      - original_index: 별도 처리 (exclude 유지, gen_mapping_raw_vec에서 추가)
+    """
+    exclude = {'label', 'original_index', 'tree_id'}  # ★ tree_id 추가
+    props = {}
+    for col in df.columns:
+        col_norm = normalize_field_name(col)
+        if col in exclude or col_norm in exclude:
+            continue
+        if col_norm in ('cluster_id', 'leaf_id'):  # ★ tree_id 제거
+            props[col_norm] = {"type": "integer"}
+        elif np.issubdtype(df[col].dtype, np.number):
+            props[col_norm] = {"type": "float"}
+        else:
+            props[col_norm] = {"type": "keyword"}
+    return props
+
+
+def calculate_cluster_personas(df: pd.DataFrame) -> dict:
+    exclude = {'label', 'original_index', 'cluster_id', 'tree_id', 'leaf_id'}
+    personas = {}
+    numeric_cols     = [c for c in df.select_dtypes(include=[np.number]).columns
+                        if normalize_field_name(c) not in exclude]
+    categorical_cols = [c for c in df.select_dtypes(include=['object']).columns
+                        if normalize_field_name(c) not in exclude]
+
+    for cluster_id in sorted(df['cluster_id'].unique()):
+        cdf = df[df['cluster_id'] == cluster_id]
+        persona = {
+            "cluster_id": int(cluster_id), "size": len(cdf),
+            "numeric_stats": {}, "categorical_distribution": {}, "description": "",
+        }
+        for col in numeric_cols:
+            vals = cdf[col].dropna()
+            if len(vals) > 0:
+                persona["numeric_stats"][normalize_field_name(col)] = {
+                    "mean": float(vals.mean()), "median": float(vals.median()),
+                    "std":  float(vals.std()),  "min":    float(vals.min()),
+                    "max":  float(vals.max()),
+                }
+        for col in categorical_cols:
+            vc = cdf[col].value_counts()
+            if len(vc) > 0:
+                persona["categorical_distribution"][normalize_field_name(col)] = {
+                    "dominant":    str(vc.index[0]),
+                    "frequency":   float(vc.iloc[0] / len(cdf)),
+                    "distribution": {str(k): int(v) for k, v in vc.head(5).items()},
+                }
+        desc_parts = [f"Cluster {cluster_id} ({len(cdf)} samples)"]
+        if "purchase_value" in persona["numeric_stats"]:
+            pv = persona["numeric_stats"]["purchase_value"]["mean"]
+            desc_parts.append("high-value" if pv > 0.5 else ("low-value" if pv < -0.5 else "mid-value"))
+        for cat, info in persona["categorical_distribution"].items():
+            if info["frequency"] > 0.6:
+                desc_parts.append(f"{cat}={info['dominant']}")
+        persona["description"] = ", ".join(desc_parts)
+        personas[int(cluster_id)] = persona
+
+    print(f"[persona] Generated {len(personas)} cluster personas")
+    return personas
+
+# 변경
+def save_persona_json(cluster_personas: dict, local_path: str, gcs_path: str):
+    os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+    serializable = {str(k): v for k, v in cluster_personas.items()}
+    with open(local_path, 'w', encoding='utf-8') as f:
+        json.dump(serializable, f, ensure_ascii=False, indent=2)
+    print(f"[persona] Saved JSON → {local_path} ({len(cluster_personas)} clusters)")
+
+    try:
+        from google.cloud import storage
+        assert gcs_path.startswith("gs://"), f"Invalid GCS path: {gcs_path}"
+        without_prefix = gcs_path[len("gs://"):]
+        bucket_name, blob_name = without_prefix.split("/", 1)
+
+        gcs_client = storage.Client()
+        gcs_client.bucket(bucket_name).blob(blob_name).upload_from_filename(local_path)
+        print(f"[persona] Uploaded → {gcs_path}")
+    except Exception as e:
+        print(f"[persona] ⚠ GCS upload failed (로컬 파일은 유지됨: {local_path}) — {e}")
+
+
+
+# ===========================
+# Index Mappings
+# ===========================
+
+
+def gen_mapping_raw_vec(df: pd.DataFrame, node_name: str = None, box_type: str = None) -> dict: 
+    """
+    ★ V4.4 변경:
+      - original_index: index=False, doc_values=False (저장 전용, _id로 이미 사용)
+      - tree_id: 제거 (extract_original_columns에서 exclude 처리)
+    """
+    props = extract_original_columns(df)
+    # ★ original_index: _id와 동일값, _source에도 저장 (참조 편의)
+    props["original_index"] = {"type": "integer", "index": False, "doc_values": False}
+
+    # cosine 
+    # props["vec"] = {
+    #     "type": "dense_vector", "dims": 576,
+    #     "index": True, "similarity": "cosine"
+    # }
+
+    if INGEST_SEARCH_MODE=='knn':
+        props["vec"] = {
+        "type": "dense_vector", "dims": 576,
+        "index": False, 
+        # "similarity": "l2_norm"  # ★ 핵심: L2 거리 기반 인덱싱으로 변경
+        }
+    else:
+        props["vec"] = {
+        "type": "dense_vector", "dims": 576,
+        "index": True, 
+        "similarity": "l2_norm"  # ★ 핵심: L2 거리 기반 인덱싱으로 변경
+        }
+    
+    mapping = {"mappings": {"_source": {"excludes": ["vec"]}, "properties": props}}
+    settings = {"number_of_shards": 1, "number_of_replicas": 0}
+    # [통합 배치 설정]
+    if box_type:
+        settings["index.routing.allocation.include.box_type"] = box_type
+    elif node_name:
+        settings["index.routing.allocation.require._name"] = node_name
+        
+    mapping["settings"] = settings
+    return mapping
+
+def gen_mapping_percolator(
+    vector_fields: list,
+    bucket_config: dict,  # ★ NEW
+    node_name: str = None,
+    box_type: str = None
+) -> dict:
+    props = {
+        "cluster_id": {"type": "integer"},
+        "leaf_id": {"type": "integer", "doc_values": False},
+        "purity": {"type": "float", "index": False, "doc_values": False},
+        "support": {"type": "integer", "index": False, "doc_values": False},
+        "query": {"type": "percolator"},
+        "persona": {"type": "object", "enabled": False},
+    }
+    
+    # ★ Bucket 필드 추가
+    if bucket_config.get("enabled"):
+        for feature in bucket_config["selected_features"]:
+            props[f"{feature}_bucket"] = {"type": "integer"}
+            props[f"{feature}_direction"] = {"type": "keyword"}
+    
+    for field in vector_fields:
+        props[field] = {"type": "float"}
+    
+    mapping = {"mappings": {"properties": props}}
+    
+    # ★ _meta에 bucket_config 저장
+    if bucket_config.get("enabled"):
+        mapping["mappings"]["_meta"] = {
+            "bucket_config": {
+                "version": bucket_config["version"],
+                "depth_pct": bucket_config["depth_pct"],
+                "split_points": bucket_config["split_points"],
+            }
+        }
+    
+    # 분산 모드일 때는 N_SHARDS 반영
+    settings = {
+        "number_of_shards": N_SHARDS if box_type else 1,
+        "number_of_replicas": N_REPLICAS,
+        "index.store.preload": ["query", "_percolator"]  # 쿼리 매칭 속도 극대화
+    }
+    if box_type:
+        settings["index.routing.allocation.include.box_type"] = box_type
+    elif node_name:
+        settings["index.routing.allocation.require._name"] = node_name
+    
+    mapping["settings"] = settings
+    return mapping
+
+# ===========================
+# Bulk Action Generators
+# ===========================
+
+def gen_raw_vec_actions(df: pd.DataFrame, emb_array: np.ndarray, index_name: str):
+    """
+    ★ V4.4 변경:
+      - ES _id: original_index (row_pos → original_index)
+      - original_index: _source에도 저장
+      - tree_id: _source에서 완전 제거
+
+    임베딩 참조: emb_array[row_pos] — parquet 행 위치 기준 (변경 없음)
+    """
+    # label/class_label: 모델 학습용, ES 저장 불필요
+    # tree_id: V4.4에서 완전 제거
+    exclude_from_source = {'label', 'class_label', 'tree_id'}
+
+    for row_pos, row in enumerate(df.itertuples(index=False, name=None)):
+        rec = dict(zip(df.columns, row))
+
+        # ★ original_index: _id + _source 양쪽에 사용
+        original_idx = int(rec.get('original_index', 0))
+        cluster_id = int(rec.get('cluster_id', 0))
+
+        # _source 구성: exclude 필드 제거, field name normalize
+        source = {
+            normalize_field_name(k): v
+            for k, v in rec.items()
+            if k not in exclude_from_source
+            and normalize_field_name(k) not in exclude_from_source
+        }
+
+        # 정수형 보장
+        for int_col in ('cluster_id', 'leaf_id', 'original_index'):
+            if int_col in source and source[int_col] is not None:
+                source[int_col] = int(source[int_col])
+
+        # ★ row_pos 기반 embedding 참조 (변경 없음)
+        if row_pos >= len(emb_array):
+            print(f"[warn] row_pos={row_pos} >= emb_array size={len(emb_array)}, skip")
+            continue
+
+        source["vec"] = emb_array[row_pos].astype(np.float32, copy=False).tolist()
+
+        # ★ _id = original_index (str)
+        yield {
+            "_op_type": "index",
+            "_index":   index_name,
+            "_id":      str(original_idx),
+            "_routing": str(cluster_id),  # 같은 cluster_id는 같은 샤드로 유도
+            "_source":  source,
+        }
+
+def gen_percolator_actions(
+    rules_list: list,
+    index_name: str,
+    query_builder,
+    cluster_personas: dict,
+    bucket_config: dict  # ★ NEW
+):
+    for i, rule in enumerate(rules_list):
+        if not rule.get("query"):
+            continue
+        
+        cluster_id = rule.get("cluster_id")
+        rule_norm = copy.deepcopy(rule)
+        rule_norm['query'] = normalize_query_fields(rule_norm['query'])
+        rule_norm.pop('text_meta', None)
+        
+        try:
+            new_query = query_builder.build_query(
+                rule_doc=rule_norm, min_should_match=MIN_SHOULD_MATCH
+            )
+        except Exception as e:
+            print(f"[error] Rule {i} (cluster {cluster_id}): {e}")
+            continue
+        
+        # ★ Bucket 필드 생성
+        bucket_fields = generate_bucket_fields(rule_norm, bucket_config)
+        
+        doc = {
+            "cluster_id": cluster_id,
+            "leaf_id": rule.get("leaf_id", 0),
+            "purity": rule.get("purity", 0.0),
+            "support": rule.get("support", 0),
+            "query": new_query,
+            "persona": cluster_personas.get(cluster_id),
+            **bucket_fields  # ★ v1_bucket, v1_direction 등 추가
+        }
+        
+        yield {
+            "_op_type": "index",
+            "_index": index_name,
+            "_id": f"rule_{cluster_id}_{i}",
+            "_source": doc
+        }
+
+# ===========================
+# Bulk Ingestion
+# ===========================
+
+def bulk_ingest(actions, description: str) -> tuple:
+    t0 = time.perf_counter()
+    ok_count, fail_count, first_errors = 0, 0, []
+    for ok, item in streaming_bulk(
+        client, actions,
+        chunk_size=CHUNK_SIZE, max_chunk_bytes=MAX_CHUNK_BYTES,
+        raise_on_error=False, raise_on_exception=False,
+    ):
+        if ok:
+            ok_count += 1
+            if ok_count % 5000 == 0:
+                print(f"    Progress: {ok_count:,} indexed...")
+        else:
+            fail_count += 1
+            if len(first_errors) < 3:
+                first_errors.append(item)
+    elapsed = time.perf_counter() - t0
+    print(f"  {description}: ok={ok_count:,}, fail={fail_count}, time={elapsed:.2f}s")
+    if first_errors:
+        for e in first_errors[:2]:
+            print(f"    Error sample: {e}")
+    return ok_count, fail_count
+
+
+def log_index_stats(index_name: str):
+    try:
+        client.indices.refresh(index=index_name)
+        stats = client.cat.indices(index=index_name, format="json")
+        if stats:
+            docs = stats[0].get("docs.count", "?")
+            size = stats[0].get("store.size", "?")
+            print(f"  [stats] docs={docs}, size={size}")
+    except Exception as e:
+        print(f"  [stats] error: {e}")
+
+# ===========================
+# Raw+Vec Processing
+# ===========================
+
+def load_coreset_parquet(percentage: int, experiment_case) -> pd.DataFrame:
+    path = get_coreset_parquet_path(percentage, experiment_case)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Coreset parquet not found: {path}\n"
+            f"  GCS: gs://fraudecom/tree-search/tree_fraudecom/"
+            f"raw_plus_cluster_tree_percentage_{percentage}.parquet"
+        )
+    print(f"\n[parquet] Loading {percentage}% coreset: {path}")
+    df = pd.read_parquet(path)
+    print(f"  Shape          : {df.shape}")
+    print(f"  original_index : {df['original_index'].min()} ~ {df['original_index'].max()}")
+    print(f"  n_docs         : {len(df):,}")
+    return df
+
+
+def process_raw_vec_for_percentage(percentage: int, experiment_case: str):
+    df_coreset = load_coreset_parquet(percentage, experiment_case)
+
+    path = get_emb_path(percentage)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Embedding not found: {path}")
+    print(f"\n[emb] Loading {percentage}% embeddings: {path}")
+    emb = np.load(path, mmap_mode='r')
+    print(f"  Shape: {emb.shape}")
+
+    if len(df_coreset) != len(emb):
+        raise ValueError(
+            f"[{percentage}%] Row count mismatch: "
+            f"parquet={len(df_coreset):,}, emb={len(emb):,}. "
+            f"동일한 coreset sampling으로 생성된 파일인지 확인."
+        )
+
+    # index_raw_vec = f"fraud_ecom_percentage_{percentage}_cluster_tree_vec"
+    index_raw_vec = f"fraud_ecom_{experiment_case}_percentage_{percentage}_cluster_tree_vec"
+    print(f"\n[es] Creating RAW+VEC index: {index_raw_vec}")
+
+    # [통합 로직] 배치 전략 결정
+    routing_config = {}
+    if PERCOLATOR_SHARD_DISTRIBUTION:
+        # 분산 모드: 'docs' 속성 노드로 격리
+        routing_config = {"box_type": ATTR_DOCS}
+    elif NODE_PINNING_ENABLED:
+        # 피닝 모드: 특정 노드 이름에 고정
+        routing_config = {"node_name": NODE_ALLOCATION.get(percentage)}
+
+    mapping_raw = gen_mapping_raw_vec(df_coreset, **routing_config)
+    # _node = NODE_ALLOCATION.get(percentage) if NODE_PINNING_ENABLED else None
+    # mapping_raw = gen_mapping_raw_vec(df_coreset, node_name=_node)
+    client.options(ignore_status=[400, 404]).indices.delete(index=index_raw_vec)
+    client.indices.create(index=index_raw_vec, body=mapping_raw)
+    print(f"  ✅ Created — {len(mapping_raw['mappings']['properties'])} fields, "
+          f"vec dim=576, expected_docs={len(df_coreset):,}")
+
+    bulk_ingest(gen_raw_vec_actions(df_coreset, emb, index_raw_vec),
+                f"RAW+VEC ({percentage}%)")
+    log_index_stats(index_raw_vec)
+    del emb
+
+# ===========================
+# SKIP_RAW_VEC Helper
+# ===========================
+
+def check_raw_vec_indices_exist(percentages: list, experiment_case: str) -> dict:
+    result = {}
+    for pct in percentages:
+        # index_name = f"fraud_ecom_percentage_{pct}_cluster_tree_vec"
+        index_name = f"fraud_ecom_{experiment_case}_percentage_{pct}_cluster_tree_vec"
+        try:
+            exists = client.indices.exists(index=index_name)
+            if exists:
+                stats  = client.cat.indices(index=index_name, format="json")
+                n_docs = int(stats[0].get("docs.count", 0)) if stats else 0
+                result[pct] = n_docs > 0
+                print(f"  [auto-skip] {index_name}: ✅ EXISTS ({n_docs:,} docs)")
+            else:
+                result[pct] = False
+                print(f"  [auto-skip] {index_name}: ❌ NOT FOUND")
+        except Exception as e:
+            result[pct] = False
+            print(f"  [auto-skip] {index_name}: ❌ ERROR: {e}")
+    return result
+
+
+def should_skip_raw_vec(percentages: list, experiment_case: str) -> bool:
+    if SKIP_RAW_VEC_MODE == "true":
+        print(f"\n[SKIP_RAW_VEC=true] raw+vec 스킵 — percolate query만 실행")
+        return True
+    if SKIP_RAW_VEC_MODE == "auto":
+        print(f"\n[SKIP_RAW_VEC=auto] ES 인덱스 자동 확인...")
+        exist_map = check_raw_vec_indices_exist(percentages, experiment_case)
+        if all(exist_map.values()):
+            print(f"  → 모든 인덱스 존재 → raw+vec 스킵")
+            return True
+        missing = [p for p, ok in exist_map.items() if not ok]
+        print(f"  → 누락 인덱스 pct={missing} → raw+vec 실행")
+        return False
+    return False
+
+# ===========================
+# Main Processing
+# ===========================
+
+def process_experiment_case(experiment_case: str):
+    if experiment_case not in EXPERIMENT_CONFIG:
+        raise ValueError(
+            f"Unknown experiment_case '{experiment_case}'. "
+            f"Available: {list(EXPERIMENT_CONFIG.keys())}"
+        )
+
+    print(f"\n{'='*80}")
+    print(f"PROCESSING: {experiment_case}  (SKIP_RAW_VEC={SKIP_RAW_VEC_MODE})")
+    print(f"{'='*80}")
+
+    case_dir   = os.path.join(BASE, experiment_case)
+    jsonl_file = os.path.join(case_dir, "tree_rules_docs.jsonl")
+
+    print(f"\n[load] tree rules: {jsonl_file}")
+    with open(jsonl_file, 'r', encoding='utf-8') as f:
+        rules_list = [json.loads(line) for line in f]
+    print(f"  Total rules: {len(rules_list)}")
+
+    vector_fields = extract_vector_fields_from_rules(rules_list)
+
+    # # ★ V4.4: persona JSON 저장 + GCS 업로드 (라우터 서비스가 GCS에서 직접 참조)
+    # save_persona_json(cluster_personas)
+
+    if not should_skip_raw_vec(CORESET_PERCENTAGES, experiment_case):
+        # ── persona 계산 (experiment_case별 raw_plus_cluster_tree.parquet) ──
+        persona_parquet_path = os.path.join(
+            CORESET_PARQUET_DIR, experiment_case, "raw_plus_cluster_tree_percentage_100.parquet"
+        )
+        print(f"\n[persona] Loading {experiment_case} parquet: {persona_parquet_path}")
+        if not os.path.exists(persona_parquet_path):
+            raise FileNotFoundError(
+                f"Persona parquet not found: {persona_parquet_path}\n"
+                f"  init container가 {experiment_case}/raw_plus_cluster_tree_percentage_100.parquet를 다운로드했는지 확인."
+            )
+        df_persona = pd.read_parquet(persona_parquet_path)
+        cluster_personas = calculate_cluster_personas(df_persona)
+        del df_persona
+
+        # ★ V4.5: persona JSON 저장 + GCS 업로드 (experiment_case별 경로)
+        persona_json_local = os.path.join(CORESET_PARQUET_DIR, experiment_case, "cluster_personas.json")
+        gcs_persona_json   = f"{GCS_TREE_BASE}/{experiment_case}/cluster_personas.json"
+        save_persona_json(cluster_personas, persona_json_local, gcs_persona_json)
+    else:
+        # [Case B] Skip 모드: 이미 계산된 JSON 로드 (Parquet 필요 없음)
+        persona_json_local = os.path.join(CORESET_PARQUET_DIR, experiment_case, "cluster_personas.json")
+        print(f"\n[persona] SKIP_RAW_VEC=true: Loading existing JSON -> {persona_json_local}")
+        
+        if not os.path.exists(persona_json_local):
+            raise FileNotFoundError(
+                f"Persona JSON not found: {persona_json_local}. "
+                f"SKIP_RAW_VEC 실행 전 최초 1회는 계산(false)이 필요합니다."
+            )
+            
+        with open(persona_json_local, 'r', encoding='utf-8') as f:
+            # JSON 키가 문자열이므로 다시 int로 변환 (기존 코드 호환성)
+            raw_data = json.load(f)
+            cluster_personas = {int(k): v for k, v in raw_data.items()}
+        print(f"  ✅ Loaded {len(cluster_personas)} personas from local JSON")    
+    
+    # ── 1. raw+vec 인덱스 ──────────────────────────────────────────
+    if not should_skip_raw_vec(CORESET_PERCENTAGES, experiment_case):
+        for pct in CORESET_PERCENTAGES:
+            try:
+                # process_raw_vec_for_percentage(pct)
+                process_raw_vec_for_percentage(pct,experiment_case)
+            except Exception as e:
+                print(f"  ❌ [percentage_{pct}] Error: {e}")
+                import traceback; traceback.print_exc()
+    else:
+        print(f"\n[skip] raw+vec 인덱스 유지:")
+        for pct in CORESET_PERCENTAGES:
+            print(f"  fraud_ecom_percentage_{pct}_cluster_tree_vec")
+
+    # ★ Bucket config 로드
+    bucket_config = load_bucket_config(experiment_case)
+    
+    # ── 2. percolator 인덱스 ───────────────────────────────────────
+    # mapping_perc = gen_mapping_percolator(vector_fields)
+    # [통합 로직] 배치 전략 결정
+    # ── 2. percolator 인덱스 ───────────────────────────────────────
+    perc_routing = {}
+    if PERCOLATOR_SHARD_DISTRIBUTION:
+        perc_routing = {"box_type": ATTR_PERCOLATOR}
+    elif NODE_PINNING_ENABLED:
+        perc_routing = {"node_name": PERCOLATOR_NODE}
+    
+    mapping_perc = gen_mapping_percolator(
+        vector_fields,
+        bucket_config,  # ★ NEW
+        **perc_routing
+    )
+    
+    print(f"\n[percolator] Creating {len(VERSIONS_TO_PROCESS)} indices...")
+    
+    for version in VERSIONS_TO_PROCESS:
+        version = version.strip()
+        index_perc = f"fraud_ecom_{experiment_case}_{version}_tree_rules_percolator"
+        print(f"\n[es] Percolator index: {index_perc}")
+        
+        client.options(ignore_status=[400, 404]).indices.delete(index=index_perc)
+        client.indices.create(index=index_perc, body=mapping_perc)
+        print(f"  ✅ Created — {len(mapping_perc['mappings']['properties'])} fields")
+        
+        query_builder = get_query_builder(version=version, experiment_case=experiment_case)
+        
+        bulk_ingest(
+            gen_percolator_actions(
+                rules_list, index_perc, query_builder, cluster_personas,
+                bucket_config  # ★ NEW
+            ),
+            f"PERCOLATOR ({version})"
+        )
+        log_index_stats(index_perc)
+        
+    print(f"\n✅ DONE: {experiment_case}")
+
+# ===========================
+# Main
+# ===========================
+
+def main():
+    start = time.perf_counter()
+
+    for experiment_case in EXPERIMENT_CASES_TO_PROCESS:
+        experiment_case = experiment_case.strip()
+        try:
+            process_experiment_case(experiment_case)
+        except Exception as e:
+            print(f"\n❌ Error: {experiment_case} — {e}")
+            import traceback; traceback.print_exc()
+
+    elapsed = time.perf_counter() - start
+
+    print(f"\n{'='*80}")
+    print(f"✅ ALL DONE (V4.4)")
+    print(f"{'='*80}")
+    print(f"Cases processed    : {EXPERIMENT_CASES_TO_PROCESS}")
+    print(f"Versions           : {VERSIONS_TO_PROCESS}")
+    print(f"Coreset percentages: {CORESET_PERCENTAGES}")
+    print(f"Total time         : {elapsed:.2f}s")
+
+    print(f"\n[verify] Refreshing indices...")
+    client.indices.refresh(index="fraud_ecom_*")
+
+    print(f"\n[verify] Final indices (post-refresh):")
+    indices = client.cat.indices(index="fraud_ecom_*", format="json")
+    for idx in sorted(indices, key=lambda x: x['index']):
+        docs = idx.get('docs.count', '0')
+        size = idx.get('store.size', '?')
+        print(f"  {idx['index']}: {docs} docs  ({size})")
+
+
+if __name__ == "__main__":
+    main()

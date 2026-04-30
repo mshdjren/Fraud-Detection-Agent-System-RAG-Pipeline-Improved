@@ -1,0 +1,531 @@
+# ===========================
+# Ingest Tree Pipeline Job
+# ===========================
+#
+# 역할: ingest_tree_pipeline.py 실행
+#   - Coreset 임베딩 + parquet을 ES vec 인덱스에 bulk 적재
+#   - Percolate 룰 (tree_rules_docs.jsonl) 을 percolator 인덱스에 적재
+#   - Cluster persona JSON 계산 → /data 저장 + GCS 업로드
+#
+# 실행 순서:
+#   1. kubectl apply -f 00-anomaly-config.yaml
+#   2. kubectl apply -f 01-ingest-tree.yaml
+#   3. (완료 후) kubectl apply -f 01-ingest-gaussian-aug.yaml  ← 선택
+#
+# es-scripts ConfigMap 등록 (최초 1회):
+#   kubectl create configmap es-scripts \
+#     --from-file=ingest_tree_pipeline.py \
+#     --from-file=percolate_query_builder.py \
+#     -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# ===========================
+# GCS 파일 구조
+# ===========================
+#
+# gs://fraudecom/tree-search/
+# ├── tree_fraudecom/
+# │   ├── raw_plus_cluster_tree_percentage_100.parquet  ← coreset 100%
+# │   ├── raw_plus_cluster_tree_percentage_10.parquet   ← coreset 10%
+# │   ├── raw_plus_cluster_tree_percentage_1.parquet    ← coreset 1%
+# │   └── {EXPERIMENT_CASE}/
+# │       ├── tree_rules_docs.jsonl       ← percolate 룰
+# │       └── cluster_tree_params.json    ← 케이스 파라미터 (use_pca, pca_dim 등)
+# └── embeddings_fraudecom/
+#     ├── anollm_..._train_embeddings_percentage_100_merged.npy
+#     ├── anollm_..._train_embeddings_percentage_10_merged.npy
+#     └── anollm_..._train_embeddings_percentage_1_merged.npy
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingest-tree-pipeline-pca64-k100
+  namespace: elastic
+  labels:
+    app: ingest-tree-pipeline-pca64-k100
+    version: v4.5
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: ingest-tree-pipeline-pca64-k100
+        version: v4.5
+    spec:
+      serviceAccountName: ingest-sa
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: anomaly-orchestrator
+              topologyKey: kubernetes.io/hostname
+      restartPolicy: Never
+
+      # ===========================
+      # Init Container: GCS → /data 다운로드
+      # ===========================
+      #
+      # [다운로드 대상]
+      # 1. Coreset 임베딩 (.npy, percentage별)
+      #    SKIP_RAW_VEC=true/auto → 스킵
+      #
+      # 2. Coreset Parquet (percentage별)
+      #    SKIP_RAW_VEC=true/auto → 100% 만 다운로드 (persona 계산용)
+      #                          → 나머지 percentage 스킵
+      #
+      # 3. Percolate 룰 JSONL
+      #    항상 다운로드
+      #
+      # 4. 케이스 파라미터 JSON
+      #    항상 다운로드
+      # ===========================
+      initContainers:
+      - name: download-artifacts
+        image: google/cloud-sdk:slim
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: CORESET_PERCENTAGES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_PERCENTAGES
+        - name: GCS_EMB_BASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GCS_EMB_BASE
+        - name: GCS_EMB_FILENAME_PREFIX
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GCS_EMB_FILENAME_PREFIX
+        - name: EMB_DATA_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EMB_DATA_DIR
+        - name: GCS_TREE_BASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GCS_TREE_BASE
+        - name: CORESET_PARQUET_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_PARQUET_DIR
+        - name: SKIP_RAW_VEC
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_RAW_VEC
+
+        #Bucketization 변수
+        - name: ENABLE_BUCKETIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ENABLE_BUCKETIZATION
+        - name: BUCKET_DEPTH_PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: BUCKET_DEPTH_PCT
+
+        command: ["bash", "-lc"]
+        args:
+          - |
+            set -euo pipefail
+
+            echo "[init] =================================================="
+            echo "[init] ingest-tree-pipeline V4.5 — GCS Download"
+            echo "[init] EXPERIMENT_CASE     : ${EXPERIMENT_CASE}"
+            echo "[init] CORESET_PERCENTAGES : ${CORESET_PERCENTAGES}"
+            echo "[init] GCS_EMB_BASE        : ${GCS_EMB_BASE}"
+            echo "[init] GCS_TREE_BASE       : ${GCS_TREE_BASE}"
+            echo "[init] EMB_DATA_DIR        : ${EMB_DATA_DIR}"
+            echo "[init] CORESET_PARQUET_DIR : ${CORESET_PARQUET_DIR}"
+            echo "[init] SKIP_RAW_VEC        : ${SKIP_RAW_VEC}"
+            echo "[init] =================================================="
+
+            # mkdir -p "${EMB_DATA_DIR}" "${CORESET_PARQUET_DIR}" \
+            #          "/data/tree_artifacts/${EXPERIMENT_CASE}"
+
+            mkdir -p "${EMB_DATA_DIR}" "${CORESET_PARQUET_DIR}" \
+                    "${CORESET_PARQUET_DIR}/${EXPERIMENT_CASE}" \
+                    "/data/tree_artifacts/${EXPERIMENT_CASE}"
+
+            IFS=',' read -ra PCTS <<< "${CORESET_PERCENTAGES}"
+            total_pcts=${#PCTS[@]}
+            pct_idx=0
+
+            # ── 1. Coreset 임베딩 (percentage별) ─────────────────────
+            if [ "${SKIP_RAW_VEC}" = "true" ] || [ "${SKIP_RAW_VEC}" = "auto" ]; then
+              echo ""
+              echo "[init] (1/4) SKIP — SKIP_RAW_VEC=${SKIP_RAW_VEC}, embedding download skipped"
+            else
+              echo ""
+              echo "[init] (1/4) Downloading embedding files..."
+              for pct in "${PCTS[@]}"; do
+                pct=$(echo "$pct" | tr -d ' ')
+                pct_idx=$((pct_idx + 1))
+                FNAME="${GCS_EMB_FILENAME_PREFIX}_${pct}_merged.npy"
+                GCS_SRC="${GCS_EMB_BASE}/${FNAME}"
+                LOCAL_DST="${EMB_DATA_DIR}/${FNAME}"
+                echo "[init]   (${pct_idx}/${total_pcts}) pct=${pct}%  ${GCS_SRC}"
+                gsutil -m cp "${GCS_SRC}" "${LOCAL_DST}"
+                echo "[init]   ✅  $(du -sh ${LOCAL_DST} | cut -f1)"
+              done
+            fi
+
+            # ── 2. Coreset Parquet (percentage별) ────────────────────
+            if [ "${SKIP_RAW_VEC}" = "true" ] || [ "${SKIP_RAW_VEC}" = "auto" ]; then
+              echo "[init] (2/4) SKIP_RAW_VEC=${SKIP_RAW_VEC} — Download Persona JSON ONLY"
+              # Parquet 다운로드 대신 기존에 업로드된 JSON만 가져옴
+              LOCAL_JSON="${CORESET_PARQUET_DIR}/${EXPERIMENT_CASE}/cluster_personas.json"
+              gsutil -m cp "${GCS_TREE_BASE}/${EXPERIMENT_CASE}/cluster_personas.json" "${LOCAL_JSON}" || echo "[warn] No existing persona JSON found on GCS"
+              echo "[init]   ✅ Done (Parquet download skipped)"
+            else
+              echo "[init] (2/4) Downloading coreset parquets + persona parquet..."
+              # ... (기존 100% parquet 다운로드 로직 유지)else
+              echo "[init] (2/4) Downloading coreset parquets (all percentages) + persona parquet..."
+              pct_idx=0
+              for pct in "${PCTS[@]}"; do
+                pct=$(echo "$pct" | tr -d ' ')
+                pct_idx=$((pct_idx + 1))
+                FNAME="raw_plus_cluster_tree_percentage_${pct}.parquet"
+                # GCS_SRC="${GCS_TREE_BASE}/${FNAME}"
+                # LOCAL_DST="${CORESET_PARQUET_DIR}/${FNAME}"
+                GCS_SRC="${GCS_TREE_BASE}/${EXPERIMENT_CASE}/${FNAME}"          # ← case별 경로
+                LOCAL_DST="${CORESET_PARQUET_DIR}/${EXPERIMENT_CASE}/${FNAME}"  # ← case별 로컬
+            
+                echo "[init]   (${pct_idx}/${total_pcts}) pct=${pct}%  ${GCS_SRC}"
+                gsutil -m cp "${GCS_SRC}" "${LOCAL_DST}"
+                echo "[init]   ✅  $(du -sh ${LOCAL_DST} | cut -f1)"
+                python3 -c "
+            import pandas as pd
+            df = pd.read_parquet('${LOCAL_DST}', columns=['original_index'])
+            print(f'         rows={len(df):,}  orig_idx=[{df.original_index.min()}, {df.original_index.max()}]')
+            " 2>/dev/null || echo "         (parquet preview skipped)"
+              done
+              # ★ V4.5: persona 계산용 experiment_case parquet (항상 다운로드)
+              LOCAL_PERSONA="${CORESET_PARQUET_DIR}/${EXPERIMENT_CASE}/raw_plus_cluster_tree_percentage_100.parquet"
+              echo "[init]   persona: ${GCS_TREE_BASE}/${EXPERIMENT_CASE}/raw_plus_cluster_tree_percentage_100.parquet"
+              gsutil -m cp "${GCS_TREE_BASE}/${EXPERIMENT_CASE}/raw_plus_cluster_tree_percentage_100.parquet" "${LOCAL_PERSONA}"
+              echo "[init]   ✅  $(du -sh ${LOCAL_PERSONA} | cut -f1)"
+            fi
+
+            # ── 3. Percolate 룰 JSONL ─────────────────────────────────
+            echo ""
+            echo "[init] (3/4) Downloading tree_rules_docs.jsonl ..."
+            DEST="/data/tree_artifacts/${EXPERIMENT_CASE}"
+            GCS_CASE="${GCS_TREE_BASE}/${EXPERIMENT_CASE}"
+            gsutil -m cp "${GCS_CASE}/tree_rules_docs.jsonl" "${DEST}/"
+            echo "[init] ✅  $(du -sh ${DEST}/tree_rules_docs.jsonl | cut -f1)"
+
+            # ── 4. 케이스 파라미터 JSON ───────────────────────────────
+            echo ""
+            echo "[init] (4/4) Downloading cluster_tree_params.json ..."
+            gsutil -m cp "${GCS_CASE}/cluster_tree_params.json" "${DEST}/"
+            USE_PCA=$(python3 -c "
+            import json
+            p = json.load(open('${DEST}/cluster_tree_params.json'))
+            print(str(p.get('use_pca', False)).lower())
+            " 2>/dev/null || echo "unknown")
+            PCA_DIM=$(python3 -c "
+            import json
+            p = json.load(open('${DEST}/cluster_tree_params.json'))
+            print(p.get('pca_dim', 'None'))
+            " 2>/dev/null || echo "unknown")
+            echo "[init] ✅  cluster_tree_params.json  use_pca=${USE_PCA}, pca_dim=${PCA_DIM}"
+
+            # ── 5. Bucketization 에셋 ────────────────────────────
+            echo "[init] Downloading bucketization assets..."
+            # for CASE in ${EXPERIMENT_CASES//,/ }; do
+            for CASE in ${EXPERIMENT_CASE//,/ }; do
+              CASE=$(echo $CASE | xargs)  # trim
+              
+              # depth_pct_15 디렉토리 다운로드
+              GCS_BUCKET_DIR="${GCS_TREE_BASE}/${CASE}/bucketization/depth_pct_${BUCKET_DEPTH_PCT}"
+              DEST_BUCKET_DIR="/data/tree_artifacts/${CASE}/bucketization/depth_pct_${BUCKET_DEPTH_PCT}"
+              
+              echo "[init] Checking ${GCS_BUCKET_DIR} ..."
+              if gsutil -q stat "${GCS_BUCKET_DIR}/tree_split_points.json" 2>/dev/null; then
+                echo "[init] Downloading bucketization assets for ${CASE} ..."
+                mkdir -p "${DEST_BUCKET_DIR}"
+                gsutil -m cp -r "${GCS_BUCKET_DIR}/*" "${DEST_BUCKET_DIR}/"
+                echo "[init] OK bucketization for ${CASE}"
+              else
+                echo "[init] WARNING: bucketization assets not found for ${CASE} (disabled)"
+              fi
+            done
+
+            # ── 다운로드 요약 ─────────────────────────────────────────
+            echo ""
+            echo "[init] =================================================="
+            echo "[init] Download Summary"
+            echo "[init]   Embeddings       : $(ls ${EMB_DATA_DIR}/ 2>/dev/null | wc -l) files"
+            echo "[init]   Coreset parquets : $(ls ${CORESET_PARQUET_DIR}/ 2>/dev/null | wc -l) files"
+            echo "[init]   Tree artifacts   : $(ls ${DEST}/ 2>/dev/null | wc -l) files"
+            # ★ Bucketization 요약 추가
+            BUCKET_COUNT=$(find /data/tree_artifacts/ -name "tree_split_points.json" 2>/dev/null | wc -l)
+            if [ "$BUCKET_COUNT" -gt 0 ]; then
+              BUCKET_SIZE=$(du -sh /data/tree_artifacts/*/bucketization/depth_pct_${BUCKET_DEPTH_PCT} 2>/dev/null | tail -n 1 | cut -f1)
+              echo "[init]   Bucketization    : ${BUCKET_COUNT} cases enabled (Total size: ${BUCKET_SIZE})"
+            else
+              echo "[init]   Bucketization    : DISABLED (No assets found)"
+            fi
+            echo "[init] =================================================="
+
+        volumeMounts:
+        - name: data
+          mountPath: /data
+
+      # ===========================
+      # Main Container: ingest_tree_pipeline.py
+      # ===========================
+      containers:
+      - name: ingest
+        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/es-tree-ingest:3.0
+        imagePullPolicy: Always
+
+        command: ["bash", "-lc"]
+        args:
+          - |
+            echo "========================================="
+            echo " ingest_tree_pipeline.py V4.5"
+            echo "  EXPERIMENT_CASE     : ${EXPERIMENT_CASE}"
+            echo "  VERSIONS            : ${VERSIONS}"
+            echo "  CORESET_PERCENTAGES : ${CORESET_PERCENTAGES}"
+            echo "  SKIP_RAW_VEC        : ${SKIP_RAW_VEC}"
+            echo "========================================="
+
+            echo "[verify] Coreset parquets:"
+            ls -lh "${CORESET_PARQUET_DIR}/" || echo "  (empty)"
+            echo "[verify] Embeddings:"
+            ls -lh "${EMB_DATA_DIR}/" || echo "  (empty)"
+            echo "[verify] Tree artifacts:"
+            ls -lh "/data/tree_artifacts/${EXPERIMENT_CASE}/" || true
+
+            echo ""
+            echo "[run] Starting ingest_tree_pipeline.py ..."
+            python /app/ingest_tree_pipeline.py
+
+            echo ""
+            echo "========================================="
+            echo " ingest_tree_pipeline.py Complete!"
+            echo "========================================="
+
+        env:
+        # ── Elasticsearch ─────────────────────────────────────────
+        - name: ES_URL
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_URL
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-ha-es-elastic-user
+              key: elastic
+        - name: ES_REQUEST_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_REQUEST_TIMEOUT
+
+        # ── Experiment ────────────────────────────────────────────
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: VERSIONS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VERSIONS
+        - name: PERCOLATE_MIN_SHOULD_MATCH
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_MIN_SHOULD_MATCH
+
+        # ── Coreset ───────────────────────────────────────────────
+        - name: CORESET_PERCENTAGES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_PERCENTAGES
+        - name: SKIP_RAW_VEC
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_RAW_VEC
+        - name: CORESET_PARQUET_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_PARQUET_DIR
+        - name: CORESET_PARQUET_FILENAME_TEMPLATE
+          value: "raw_plus_cluster_tree_percentage_{pct}.parquet"
+
+        # ── HNSW 유무 ───────────────────────────────────────────────
+        - name: INGEST_SEARCH_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: INGEST_SEARCH_MODE
+
+        # ── Node Pinning ──────────────────────────────────────────
+        - name: NODE_PINNING
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: NODE_PINNING
+        - name: NODE_100PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: NODE_100PCT
+        - name: NODE_10PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: NODE_10PCT
+        - name: NODE_1PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: NODE_1PCT
+        - name: NODE_PERCOLATOR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: NODE_PERCOLATOR
+
+      # percolate query 분할 저장 / 정상 docs는 한곳에 저장
+        - name: PERCOLATOR_SHARD_DISTRIBUTION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATOR_SHARD_DISTRIBUTION
+        - name: ATTR_PERCOLATOR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ATTR_PERCOLATOR
+        - name: ATTR_DOCS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ATTR_DOCS
+        - name: N_SHARDS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: N_SHARDS
+        - name: N_REPLICAS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: N_REPLICAS
+        # ── Embedding ─────────────────────────────────────────────
+        - name: EMB_DATA_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EMB_DATA_DIR
+        - name: EMB_FILENAME_PREFIX
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EMB_FILENAME_PREFIX
+
+        # ── Persona ───────────────────────────────────────────────
+        # # v4.5: persona는 100% coreset parquet에서 직접 계산
+        # # PERSONA_JSON_LOCAL: 로컬 저장 경로 (기본: /data/cluster_personas.json)
+        # - name: PERSONA_JSON_LOCAL
+        #   value: "/data/cluster_personas.json"
+        # GCS_PERSONA_JSON: GCS 업로드 경로
+        #   기본: {GCS_TREE_BASE}/{EXPERIMENT_CASE}/cluster_personas.json
+        #   명시 지정 필요 시 아래 주석 해제
+        # - name: GCS_PERSONA_JSON
+        #   value: "gs://fraudecom/tree-search/tree_fraudecom/$(EXPERIMENT_CASE)/cluster_personas.json"
+        - name: GCS_TREE_BASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GCS_TREE_BASE
+
+        # ── Bulk Tuning ───────────────────────────────────────────
+        - name: BULK_CHUNK_SIZE
+          value: "1000"
+        - name: BULK_MAX_CHUNK_BYTES
+          value: "20971520"    # 20MB
+
+        volumeMounts:
+        - name: scripts
+          mountPath: /app/ingest_tree_pipeline.py
+          subPath: ingest_tree_pipeline.py
+        - name: scripts
+          mountPath: /app/percolate_query_builder.py
+          subPath: percolate_query_builder.py
+        - name: data
+          mountPath: /data
+
+        resources:
+          requests:
+            cpu: "0.5"
+            memory: "3Gi"
+          limits:
+            cpu: "0.5"
+            memory: "6Gi"   # 100% coreset: ~280MB npy (mmap) + parquet + 파이썬 오버헤드
+
+      volumes:
+      - name: scripts
+        configMap:
+          name: es-scripts
+          defaultMode: 0755
+      - name: data
+        emptyDir:
+          sizeLimit: 12Gi   # 임베딩 3개(~280MB×3) + parquet 3개 + persona JSON + 여유
+
+# ===========================
+# 실행 방법
+# ===========================
+#
+# [기본 실행]
+#   kubectl delete job ingest-tree-pipeline -n elastic --ignore-not-found
+#   kubectl apply -f 01-ingest-tree.yaml
+#   kubectl logs -n elastic -l app=ingest-tree-pipeline -f
+#
+# [experiment_case 변경]
+#   kubectl patch configmap anomaly-config -n elastic \
+#     --patch '{"data": {"EXPERIMENT_CASE": "pca_64_k200"}}'
+#   kubectl delete job ingest-tree-pipeline -n elastic --ignore-not-found
+#   kubectl apply -f 01-ingest-tree.yaml
+#
+# [percolate only (raw+vec 인덱스 재사용)]
+#   kubectl patch configmap anomaly-config -n elastic \
+#     --patch '{"data": {"SKIP_RAW_VEC": "true"}}'
+#   kubectl delete job ingest-tree-pipeline -n elastic --ignore-not-found
+#   kubectl apply -f 01-ingest-tree.yaml
+#   # 완료 후 복구:
+#   kubectl patch configmap anomaly-config -n elastic \
+#     --patch '{"data": {"SKIP_RAW_VEC": "false"}}'

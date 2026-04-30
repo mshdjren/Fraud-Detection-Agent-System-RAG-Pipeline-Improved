@@ -1,0 +1,560 @@
+"""
+retriever.py — Vector Search Retriever (V5)
+============================================
+
+변경사항:
+  ★ V5.1: /retrieve-batch 엔드포인트 추가
+      - batch_inference.py call_retriever_batch() 지원
+      - 입력: List[RetrieveRequest] (각 request 독립적으로 search() 호출)
+      - 출력: List[RetrieveResponse | BatchErrorResponse]
+      - 개별 실패는 error 필드로 표시, 전체 batch는 200 반환
+  ★ SKIP_ANALYZER=true 시 cluster_id terms filter 완전 제거
+      → 전체 인덱스 대상 순수 vec 검색 (bottleneck isolation)
+      → cluster_ids 파라미터가 비어있어도 검색 수행
+  ★ SEARCH_MODE: "script_score"(Exact NN) | "knn"(HNSW) 전환
+      - script_score: vec index=False 환경 (gaussian_aug 인덱스)
+      - knn:          vec index=True 환경 (HNSW 그래프 활성화 인덱스)
+  ★ gaussian_aug 인덱스명 규칙 지원:
+      fraud_ecom_aug_{mult}x_{pct}pct_{vec_type}_vec
+      (router가 vec_index를 동적으로 결정하여 전달)
+  ★ page fault 측정: /proc/vmstat pgmajfault delta → Prometheus Histogram
+  ★ ES node stats: fielddata / query_cache bytes Gauge (10 req마다 갱신)
+"""
+
+import os
+import time
+import numpy as np
+from fastapi import FastAPI, HTTPException, Response
+from pydantic import BaseModel
+from typing import Optional, List
+from elasticsearch import Elasticsearch
+import structlog
+import asyncio
+
+logger = structlog.get_logger()
+
+# ──────────────────────────────────────────────
+# Config
+# ──────────────────────────────────────────────
+ES_URL           = os.getenv("ES_URL")
+PASSWORD         = os.getenv("PASSWORD")
+SEARCH_MODE = os.getenv("SEARCH_MODE", "exact")   # "exact" | "hnsw"
+KNN_CANDIDATES   = int(os.getenv("KNN_NUM_CANDIDATES", "100"))
+TOP_K            = int(os.getenv("TOP_K", "5"))
+REQUEST_TIMEOUT  = int(os.getenv("ES_REQUEST_TIMEOUT", "30"))
+EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "baseline")  # Prometheus label / locust 연동용
+
+# ★ SKIP_ANALYZER=true: cluster_id filter 제거 → 전체 인덱스 순수 vec 검색
+SKIP_ANALYZER = os.getenv("SKIP_ANALYZER", "false").lower() == "true"
+
+client = Elasticsearch(
+    [ES_URL], verify_certs=False, ssl_show_warn=False,
+    basic_auth=("elastic", PASSWORD), request_timeout=REQUEST_TIMEOUT,
+)
+app = FastAPI(title="Vector Search Retriever V5")
+
+# ──────────────────────────────────────────────
+# Prometheus
+# ──────────────────────────────────────────────
+from prometheus_client import Counter, Histogram, Gauge, make_asgi_app
+
+search_latency = Histogram(
+    "retriever_search_latency_ms", "Search latency per request",
+    ["search_mode", "index_name", "experiment_label"],
+    buckets=[10, 50, 100, 200, 500, 1000, 2000, 5000]
+)
+page_fault_delta = Histogram(
+    "retriever_page_fault_delta", "Major page fault delta per request",
+    ["index_name"],
+    buckets=[0, 1, 2, 5, 10, 50, 100]
+)
+
+es_fielddata_bytes   = Gauge("retriever_es_fielddata_bytes",   "ES fielddata memory bytes")
+es_query_cache_bytes = Gauge("retriever_es_query_cache_bytes", "ES query cache memory bytes")
+
+es_jvm_heap_percent  = Gauge("retriever_es_jvm_heap_percent",  "ES JVM heap used percent (max across nodes)")
+
+top1_distance = Histogram(
+    "retriever_top1_distance", "Top-1 cosine distance distribution",
+    ["index_name", "experiment_label"],
+    buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
+)
+skip_analyzer_search_counter = Counter(
+    "retriever_skip_analyzer_total", "retriever_skip_analyzer_total_count",  ['index_name', 'experiment_label'] 
+)
+
+
+
+
+# ──────────────────────────────────────────────
+# Page Fault / ES Node Stats
+# ──────────────────────────────────────────────
+def read_pgmajfault() -> int:
+    """
+    /proc/vmstat에서 pgmajfault(major page fault 누적값) 읽기.
+    요청 전후 delta로 I/O 유발 메모리 압박 감지.
+    """
+    try:
+        with open("/proc/vmstat") as f:
+            for line in f:
+                if line.startswith("pgmajfault"):
+                    return int(line.split()[1])
+    except Exception:
+        pass
+    return 0
+
+_req_count = 0  # 10 req마다 node stats 갱신용
+
+def update_es_node_stats():
+    """
+    ES node stats에서 fielddata / query_cache 메모리 추적.
+    fielddata 폭증 → OOM 위험, query_cache 폭증 → GC pressure 시그널.
+    10 req마다 호출 (매 요청마다 호출 시 ES 부하 증가).
+    """
+    try:
+        stats = client.nodes.stats(metric="indices,jvm", index_metric="fielddata,query_cache")
+        total_fd = total_qc = 0
+        max_heap_pct = 0
+        for node in stats["nodes"].values():
+            total_fd += node["indices"]["fielddata"]["memory_size_in_bytes"]
+            total_qc += node["indices"]["query_cache"]["memory_size_in_bytes"]
+            # ★ coreset sweep: JVM heap percent (노드 중 최대값)
+            heap_pct = node.get("jvm", {}).get("mem", {}).get("heap_used_percent", 0)
+            max_heap_pct = max(max_heap_pct, heap_pct)
+        es_fielddata_bytes.set(total_fd)
+        es_query_cache_bytes.set(total_qc)
+        es_jvm_heap_percent.set(max_heap_pct)  # ★
+    except Exception:
+        pass
+
+# ──────────────────────────────────────────────
+# Models
+# ──────────────────────────────────────────────
+class RetrieveRequest(BaseModel):
+    embedding:   List[float]
+    cluster_ids: List[int]        # router에서 전달받은 cluster_id 목록
+                                  # SKIP_ANALYZER=true 시 빈 리스트([]) 허용 → 전체 검색
+    vec_index:   str              # router가 결정한 인덱스명
+    top_k:       int = 5
+
+
+class SearchResult(BaseModel):
+    es_doc_id:      str
+    original_index: int
+    cluster_id:     int
+    distance:       float
+    score:          float
+
+
+class RetrieveResponse(BaseModel):
+    results:         List[SearchResult]
+    top1_distance:   float
+    latency_ms:      float
+    search_mode:     str
+    page_fault_delta: int
+    skip_analyzer:   bool
+
+class BatchErrorResponse(BaseModel):
+    """
+    /retrieve-batch 단건 실패 시 반환.
+    batch_inference._parse_retriever_response()가 r.get("error")로 판단.
+    """
+    error:   bool = True
+    reason:  str  = ""
+    results: list = []   # 빈 리스트 — _parse_retriever_response 호환
+
+# ──────────────────────────────────────────────
+# Query Builders
+# ──────────────────────────────────────────────
+def _exact_knn_query(embedding: List[float], cluster_ids: List[int], k: int) -> dict:
+    """
+    Case 1 (gaussian aug): cluster filter + HNSW 탐색
+    Case 3: 일반 coreset — cluster filter 후 전수 l2norm 계산 (Exact KNN).
+    vec index=False 환경 전용.
+    """
+    if cluster_ids:
+        filter_query = {"terms": {"cluster_id": cluster_ids}}
+    else:
+        # SKIP_ANALYZER=true: 전체 문서 대상 순수 vec 검색
+        filter_query = {"match_all": {}}
+
+    return {
+        "size": k,
+        "query": {
+            "script_score": {
+                "query": filter_query,
+                "script": {
+                    # "source": "cosineSimilarity(params.query_vector, 'vec') + 1.0",
+                    "source": "1 / (1 + l2norm(params.query_vector, 'vec'))",
+                    "params": {"query_vector": embedding}
+                }
+            }
+        },
+        "_source": ["original_index", "cluster_id"],
+    }
+
+
+def _hnsw_query(embedding: List[float], cluster_ids: List[int], k: int) -> dict:
+    """
+    Case 1/2: HNSW Approximate KNN — vec index=True 환경.
+    Case 2 (SKIP_ANALYZER): filter 없이 전체 인덱스 HNSW 탐색 (baseline)
+    """
+    
+    body: dict = {
+        "size": k,
+        "knn": {
+            "field":           "vec",
+            "query_vector":    embedding,
+            "k":               k,
+            "num_candidates":  KNN_CANDIDATES,
+        },
+        "_source": ["original_index", "cluster_id"],
+    }
+
+    # cluster_ids 비면 filter key 자체 생략 → 전체 인덱스 HNSW 탐색
+
+    return body
+
+# ──────────────────────────────────────────────
+# Core Search
+# ──────────────────────────────────────────────
+def search(
+    embedding:   List[float],
+    cluster_ids: List[int],
+    vec_index:   str,
+    k:           int,
+) -> RetrieveResponse:
+    global _req_count
+
+    is_skip = SKIP_ANALYZER or not cluster_ids
+
+    pf_before = read_pgmajfault()
+    t0        = time.perf_counter()
+
+
+    # # ✅ 수정
+    # effective_cluster_ids = [] if SKIP_ANALYZER else cluster_ids
+    # if SEARCH_MODE == "knn":
+    #     body = _knn_query(embedding, effective_cluster_ids, k)
+    # else:
+    #     body = _script_score_query(embedding, effective_cluster_ids, k)
+
+    if SKIP_ANALYZER:
+        # Case 2: baseline 비교 — cluster filter 없이 전체 인덱스 HNSW
+        body = _hnsw_query(embedding, [], k)
+    else:
+        # Case 1 (gaussian aug) + Case 3 (일반 coreset) 동일
+        # cluster filter + Exact KNN
+        body = _exact_knn_query(embedding, cluster_ids, k)
+
+    # elif SEARCH_MODE == "hnsw":
+    #     # Case 1: gaussian aug — cluster filter + HNSW
+    #     body = _exact_knn_query(embedding, cluster_ids, k)
+    # else:
+    #     # Case 3: 일반 coreset — cluster filter + Exact KNN
+    #     body = _exact_knn_query(embedding, cluster_ids, k)
+
+    try:
+        res = client.search(index=vec_index, body=body)
+    except Exception as e:
+        logger.error("search_failed", error=str(e), index=vec_index,
+                     search_mode=SEARCH_MODE, skip_analyzer=is_skip)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    elapsed  = (time.perf_counter() - t0) * 1000
+    pf_delta = max(0, read_pgmajfault() - pf_before)
+
+    # ── 결과 파싱 ────────────────────────────────────────────────
+    results = []
+    for hit in res["hits"]["hits"]:
+        src   = hit["_source"]
+        score = hit["_score"]
+        # cosineSimilarity+1 → cosine distance (0=identical, 1=orthogonal, 2=opposite)
+        # dist  = 1.0 - (score - 1.0)
+
+        # 수정 (L2_NORM 기반 점수를 거리로 역산)
+        # ES l2_norm score = 1 / (1 + distance^2) 이므로
+        dist = np.sqrt((1.0 / score) - 1.0) if score > 0 else 1e6
+
+        results.append(SearchResult(
+            es_doc_id=      hit["_id"],
+            original_index= int(src.get("original_index", -1)),
+            cluster_id=     int(src.get("cluster_id", -1)),
+            distance=       dist,
+            score=          score,
+        ))
+
+    dist_top1 = results[0].distance if results else 1.0
+
+    # ── Prometheus ───────────────────────────────────────────────
+    search_latency.labels(
+        search_mode=SEARCH_MODE,
+        index_name=vec_index,
+        experiment_label=EXPERIMENT_LABEL,
+    ).observe(elapsed)
+
+    page_fault_delta.labels(index_name=vec_index).observe(pf_delta)
+
+    top1_distance.labels(
+        index_name=vec_index,
+        experiment_label=EXPERIMENT_LABEL,
+    ).observe(dist_top1)
+
+    if is_skip:
+        skip_analyzer_search_counter.labels(
+            index_name=vec_index,
+            experiment_label=EXPERIMENT_LABEL
+        ).inc()
+
+    # 10 req마다 ES node stats 갱신 (비용 절감)
+    _req_count += 1
+    if _req_count % 10 == 0:
+        update_es_node_stats()
+
+    if pf_delta > 0:
+        logger.warning("page_fault_detected",
+                       delta=pf_delta, latency_ms=elapsed, index=vec_index)
+
+    logger.info(
+        "search_done",
+        index=vec_index,
+        search_mode=SEARCH_MODE,
+        skip_analyzer=is_skip,
+        cluster_ids_count=len(cluster_ids),
+        results_count=len(results),
+        top1_distance=dist_top1,
+        latency_ms=elapsed,
+        page_fault_delta=pf_delta,
+    )
+
+    return RetrieveResponse(
+        results=         results,
+        top1_distance=   dist_top1,
+        latency_ms=      elapsed,
+        search_mode=     SEARCH_MODE,
+        page_fault_delta=pf_delta,
+        skip_analyzer=   is_skip,
+    )
+
+# ──────────────────────────────────────────────
+# Endpoints
+# ──────────────────────────────────────────────
+# @app.post("/retrieve", response_model=RetrieveResponse)
+# def retrieve(req: RetrieveRequest):
+#     """
+#     vec_index: router가 결정한 인덱스명
+#       - 원본 coreset: fraud_ecom_percentage_{pct}_cluster_tree_vec
+#       - gaussian aug: fraud_ecom_aug_{mult}x_{pct}pct_{vec_type}_vec
+
+#     cluster_ids: router top-k cluster ID 목록
+#       - SKIP_ANALYZER=true 시 [] 전달 → 전체 인덱스 검색
+#     """
+#     return search(
+#         embedding=   req.embedding,
+#         cluster_ids= req.cluster_ids,
+#         vec_index=   req.vec_index,
+#         k=           req.top_k,
+#     )
+
+@app.post("/retrieve", response_model=RetrieveResponse)
+async def retrieve(req: RetrieveRequest):    
+    """
+    vec_index: router가 결정한 인덱스명
+      - 원본 coreset: fraud_ecom_percentage_{pct}_cluster_tree_vec
+      - gaussian aug: fraud_ecom_aug_{mult}x_{pct}pct_{vec_type}_vec
+
+    cluster_ids: router top-k cluster ID 목록
+      - SKIP_ANALYZER=true 시 [] 전달 → 전체 인덱스 검색
+    """
+    return await asyncio.to_thread(
+        search,
+        req.embedding,
+        req.cluster_ids,
+        req.vec_index,
+        req.top_k,
+    )
+
+
+
+# @app.post("/retrieve-batch")
+# def retrieve_batch(reqs: List[RetrieveRequest]):
+#     """
+#     Batch 검색 엔드포인트 (batch_inference.py call_retriever_batch() 전용).
+
+#     입력: List[RetrieveRequest]  각 item = {embedding, cluster_ids, vec_index, top_k}
+#     출력: List[RetrieveResponse | BatchErrorResponse]
+#       - 단건 성공: RetrieveResponse dict
+#       - 단건 실패: {"error": true, "reason": "...", "results": []}
+
+#     batch_inference는 r.get("error") 로 실패 여부를 판단하므로
+#     전체 batch는 항상 HTTP 200을 반환하고 개별 실패를 error 필드로 표시.
+#     """
+#     results = []
+#     for req in reqs:
+#         try:
+#             resp = search(
+#                 embedding=   req.embedding,
+#                 cluster_ids= req.cluster_ids,
+#                 vec_index=   req.vec_index,
+#                 k=           req.top_k,
+#             )
+#             results.append(resp.dict())
+#         except HTTPException as e:
+#             logger.warning(
+#                 "retrieve_batch_item_failed",
+#                 vec_index=req.vec_index,
+#                 cluster_ids_count=len(req.cluster_ids),
+#                 status=e.status_code,
+#                 detail=e.detail,
+#             )
+#             results.append({"error": True, "reason": e.detail, "results": []})
+#         except Exception as e:
+#             logger.error(
+#                 "retrieve_batch_item_error",
+#                 vec_index=req.vec_index,
+#                 error=str(e),
+#             )
+#             results.append({"error": True, "reason": str(e), "results": []})
+#     return results
+
+@app.post("/retrieve-batch")
+async def retrieve_batch(reqs: List[RetrieveRequest]):
+    async def _run(req: RetrieveRequest):
+        try:
+            resp = await asyncio.to_thread(
+                search, req.embedding, req.cluster_ids, req.vec_index, req.top_k
+            )
+            return resp.model_dump()
+            # return resp.dict()
+        except HTTPException as e:
+            logger.warning(
+                "retrieve_batch_item_failed",
+                vec_index=req.vec_index,
+                cluster_ids_count=len(req.cluster_ids),
+                status=e.status_code,
+                detail=e.detail,
+            )
+            return {"error": True, "reason": e.detail, "results": []}
+        except Exception as e:
+            logger.error("retrieve_batch_item_error", vec_index=req.vec_index, error=str(e))
+            return {"error": True, "reason": str(e), "results": []}
+
+    return await asyncio.gather(*[_run(req) for req in reqs])
+
+@app.get("/health")
+def health():
+    return {
+        "status":          "healthy",
+        "service":         "retriever",
+        "search_mode":     SEARCH_MODE,
+        "skip_analyzer":   SKIP_ANALYZER,
+    }
+
+@app.get("/ready")
+async def ready():
+    try:
+        # Elasticsearch 클러스터 상태 확인 (router와 동일한 로직)
+        info = client.cluster.health(timeout="5s")
+        return {
+            "status":        "ready",
+            "elasticsearch": info.get("cluster_name"),
+            "configuration": {
+                "search_mode":   SEARCH_MODE,
+                "skip_analyzer": SKIP_ANALYZER,
+                "version":       "5.1.0"
+            }
+        }
+    except Exception as e:
+        logger.error("ready_check_failed", error=str(e))
+        # 503 Service Unavailable 반환
+        raise HTTPException(status_code=503, detail=str(e))
+
+@app.get("/metrics")
+async def metrics():
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+# ===========================
+# Startup / Shutdown
+# ===========================
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info(
+        "retriever_started",
+        version="5.1.0",
+        search_mode=SEARCH_MODE,
+        skip_analyzer=SKIP_ANALYZER
+    )
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    client.close()
+    logger.info("retriever_stopped")
+
+# 이 블록은 항상 파일의 가장 마지막에 위치해야 합니다.
+if __name__ == "__main__":
+    import uvicorn
+    # 여기 포트가 8000인지, 실제 서비스 포트와 맞는지 확인하세요.
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+
+# @app.get("/health")
+# def health():
+#     return {
+#         "status":          "healthy",
+#         "service":         "retriever",
+#         "search_mode":     SEARCH_MODE,
+#         "skip_analyzer":   SKIP_ANALYZER,
+#         "experiment_label": EXPERIMENT_LABEL,
+#         "knn_candidates":  KNN_CANDIDATES,
+#     }
+
+# @app.get("/ready")
+# async def ready():
+#     try:
+#         # Elasticsearch 클러스터 상태 확인
+#         info = client.cluster.health(timeout="5s")
+#         return {
+#             "status":        "ready",
+#             "elasticsearch": info.get("cluster_name"),
+#             "configuration": {
+#                 "search_mode":   SEARCH_MODE,
+#                 "skip_analyzer": SKIP_ANALYZER,
+#                 # "es_timeout":    ES_REQUEST_TIMEOUT,
+#             }
+#         }
+#     except Exception as e:
+#         logger.error("ready_check_failed", error=str(e))
+#         raise HTTPException(status_code=503, detail=str(e))
+    
+# @app.get("/metrics")
+# async def metrics():
+#     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+# # ===========================
+# # Startup / Shutdown
+# # ===========================
+
+# @app.on_event("startup")
+# async def startup_event():
+#     # retriever 고유의 시작 로그
+#     logger.info(
+#         "retriever_started",
+#         version="5.1.0",
+#         search_mode=SEARCH_MODE,
+#         skip_analyzer=SKIP_ANALYZER,
+#         es_url=ES_URL
+#     )
+
+# @app.on_event("shutdown")
+# async def shutdown_event():
+#     client.close()
+#     logger.info("retriever_stopped")
+
+# # uvicorn 실행 (메인 모듈로 실행 시)
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+# app.mount("/metrics", make_asgi_app())

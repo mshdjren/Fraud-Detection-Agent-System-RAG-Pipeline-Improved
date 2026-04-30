@@ -1,0 +1,403 @@
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterRules
+metadata:
+  name: anomaly-detection-alerts
+  namespace: elastic
+spec:
+  groups:
+  - name: fraud-detection.rules
+    interval: 30s
+    rules:
+    
+    # ===========================
+    # Service Health
+    # ===========================
+    
+    - alert: ServiceDown
+      expr: up{job=~"anomaly-(router|retriever|analyzer|orchestrator)"} == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Service {{ $labels.job }} is down"
+        description: "{{ $labels.job }} in namespace {{ $labels.namespace }} has been down for more than 2 minutes."
+    
+    - alert: HighErrorRate
+      expr: |
+        sum(rate(pipeline_requests_total{status="error"}[5m])) 
+        / 
+        sum(rate(pipeline_requests_total[5m])) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High error rate detected"
+        description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes."
+    
+    - alert: CircuitBreakerOpen
+      expr: circuit_breaker_state > 0
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Circuit breaker {{ $labels.service }} is open"
+        description: "Circuit breaker for {{ $labels.service }} has been open for more than 2 minutes."
+    
+    # ===========================
+    # Latency Alerts
+    # ===========================
+    
+    - alert: HighPipelineLatency
+      expr: |
+        histogram_quantile(0.95, 
+          sum by (le) (rate(pipeline_latency_seconds_bucket[5m]))
+        ) > 300
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High pipeline latency (P95 > 300s)"
+        description: "95th percentile latency is {{ $value }}s over the last 5 minutes."
+    
+    - alert: HighLLMLatency
+      expr: |
+        histogram_quantile(0.95, 
+          sum by (le) (rate(llm_inference_latency_seconds_bucket[5m]))
+        ) > 120
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High LLM inference latency (P95 > 120s)"
+        description: "95th percentile LLM latency is {{ $value }}s."
+    
+    - alert: AnalyzerTimeout
+      expr: |
+        histogram_quantile(0.95, 
+          sum by (le) (rate(llm_inference_latency_seconds_bucket[5m]))
+        ) > 240
+      for: 3m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Analyzer approaching 300s timeout limit"
+        description: "LLM latency is {{ $value }}s, approaching timeout."
+    
+    # ===========================
+    # Retry & Rate Limiting
+    # ===========================
+    
+    - alert: HighRetryRate
+      expr: sum(rate(retry_attempts_total[5m])) > 0.5
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High retry rate detected (> 0.5 req/sec)"
+        description: "Retry rate is {{ $value }} requests/sec."
+    
+    - alert: FrequentLLMRetries
+      expr: sum(rate(llm_retry_attempts_total[5m])) > 0.3
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Frequent LLM retries (Quota/Stability issues)"
+        description: "LLM retry rate is {{ $value }} requests/sec."
+    
+    - alert: RateLimitThrottling
+      expr: sum(rate(rate_limit_waits_total[5m])) > 0.1
+      for: 10m
+      labels:
+        severity: info
+      annotations:
+        summary: "Rate limiter is throttling requests"
+        description: "Rate limit wait rate: {{ $value }} requests/sec."
+    
+    - alert: QuotaExhaustion
+      expr: |
+        sum(rate(analysis_requests_total{status="error"}[5m])) > 0.5
+        and
+        sum(rate(llm_retry_attempts_total[5m])) > 0.5
+      for: 3m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Possible Vertex AI quota exhaustion"
+        description: "High error rate with frequent retries detected."
+    
+    # ===========================
+    # Resource Usage
+    # ===========================
+    
+    - alert: HighMemoryUsage
+      expr: |
+        container_memory_usage_bytes{pod=~"anomaly-.*", container!=""} 
+        / 
+        container_spec_memory_limit_bytes{pod=~"anomaly-.*", container!=""} > 0.9
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Memory usage > 90% in {{ $labels.pod }}"
+        description: "Pod {{ $labels.pod }} memory at {{ $value | humanizePercentage }}."
+    
+    - alert: HighCPUUsage
+      expr: |
+        sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~"anomaly-.*", container!=""}[5m])) 
+        / 
+        sum by (pod) (container_spec_cpu_quota{pod=~"anomaly-.*", container!=""} / 100000) > 0.9
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "CPU usage > 90% in {{ $labels.pod }}"
+        description: "Pod {{ $labels.pod }} CPU at {{ $value | humanizePercentage }}."
+    
+    # ===========================
+    # Cache Performance
+    # ===========================
+    
+    - alert: LowCacheHitRate
+      expr: |
+        sum(rate(cache_hits_total[5m])) 
+        / 
+        (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m]))) < 0.5
+      for: 10m
+      labels:
+        severity: info
+      annotations:
+        summary: "Low cache hit rate (< 50%)"
+        description: "Cache hit rate is {{ $value | humanizePercentage }}."
+    
+    # ===========================
+    # ✨ V3 Specific Alerts
+    # ===========================
+    
+    - alert: HighValidationErrorRate
+      expr: sum(rate(validation_errors_total[5m])) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High validation error rate"
+        description: "Validation errors at {{ $value }} req/sec. Check field: {{ $labels.field }}."
+    
+    - alert: CaseOverrideImbalance
+      expr: |
+        stddev(
+          sum by (case) (rate(case_override_used_total[5m]))
+        ) 
+        / 
+        avg(
+          sum by (case) (rate(case_override_used_total[5m]))
+        ) > 0.5
+      for: 10m
+      labels:
+        severity: info
+      annotations:
+        summary: "Imbalanced case override usage"
+        description: "Case override distribution is uneven. Check A/B test configuration."
+    
+    - alert: UnexpectedCaseUsage
+      expr: |
+        sum(rate(pipeline_requests_total{case!="default"}[5m])) 
+        / 
+        sum(rate(pipeline_requests_total[5m])) > 0.8
+      for: 10m
+      labels:
+        severity: info
+      annotations:
+        summary: "High case override usage (> 80%)"
+        description: "{{ $value | humanizePercentage }} of requests use case override."
+    
+    - alert: EmbeddingOverrideAnomaly
+      expr: |
+        abs(
+          sum(rate(embedding_override_used_total{use_knn="true"}[5m])) 
+          - 
+          sum(rate(embedding_override_used_total{use_knn="false"}[5m]))
+        ) 
+        / 
+        sum(rate(embedding_override_used_total[5m])) > 0.7
+      for: 10m
+      labels:
+        severity: info
+      annotations:
+        summary: "Embedding override usage imbalance"
+        description: "KNN vs Raw embedding usage is highly imbalanced."
+    
+    # ===========================
+    # Performance by Configuration
+    # ===========================
+    
+    - alert: CasePerformanceDegradation
+      expr: |
+        max(
+          histogram_quantile(0.95, 
+            sum by (le, case) (rate(pipeline_latency_seconds_bucket[5m]))
+          )
+        ) 
+        / 
+        min(
+          histogram_quantile(0.95, 
+            sum by (le, case) (rate(pipeline_latency_seconds_bucket[5m]))
+          )
+        ) > 2
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Significant latency difference between cases"
+        description: "Max case latency is >2x min case latency. Investigate case configuration."
+    
+    - alert: HighErrorRateByCase
+      expr: |
+        sum by (case) (rate(pipeline_requests_total{status="error"}[5m])) 
+        / 
+        sum by (case) (rate(pipeline_requests_total[5m])) > 0.15
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High error rate for case {{ $labels.case }}"
+        description: "Error rate is {{ $value | humanizePercentage }} for case {{ $labels.case }}."
+    
+    # ===========================
+    # Elasticsearch Health
+    # ===========================
+    
+    - alert: ElasticsearchClusterRed
+      expr: elasticsearch_cluster_health_status{color="red"} == 1
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Elasticsearch cluster status is RED"
+        description: "Cluster {{ $labels.cluster }} is in RED state."
+    
+    - alert: ElasticsearchClusterYellow
+      expr: elasticsearch_cluster_health_status{color="yellow"} == 1
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Elasticsearch cluster status is YELLOW"
+        description: "Cluster {{ $labels.cluster }} is in YELLOW state."
+    
+    - alert: HighElasticsearchDiskUsage
+      expr: |
+        (
+          elasticsearch_filesystem_data_size_bytes 
+          - 
+          elasticsearch_filesystem_data_free_bytes
+        ) 
+        / 
+        elasticsearch_filesystem_data_size_bytes > 0.85
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Elasticsearch disk usage > 85%"
+        description: "Node {{ $labels.node }} disk at {{ $value | humanizePercentage }}."
+    
+    # ===========================
+    # Readiness & Liveness
+    # ===========================
+    
+    - alert: AnalyzerNotReady
+      expr: |
+        up{job="anomaly-analyzer"} == 1
+        and
+        probe_success{job="anomaly-analyzer"} == 0
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Analyzer is up but readiness probe is failing"
+        description: "Analyzer pod is running but not ready to serve traffic."
+    
+    - alert: PodRestartingFrequently
+      expr: |
+        rate(kube_pod_container_status_restarts_total{
+          namespace="elastic",
+          pod=~"anomaly-.*"
+        }[15m]) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Pod {{ $labels.pod }} restarting frequently"
+        description: "Restart rate: {{ $value }} restarts/sec."
+
+# ===========================
+# Recording Rules (for dashboard optimization)
+# ===========================
+
+  - name: fraud-detection.recording-rules
+    interval: 30s
+    rules:
+    
+    # Pipeline request rate by case
+    - record: pipeline:requests:rate5m
+      expr: |
+        sum by (case, status, router_version) (
+          rate(pipeline_requests_total[5m])
+        )
+    
+    # Pipeline latency percentiles by case
+    - record: pipeline:latency:p95
+      expr: |
+        histogram_quantile(0.95, 
+          sum by (le, case) (rate(pipeline_latency_seconds_bucket[5m]))
+        )
+    
+    - record: pipeline:latency:p99
+      expr: |
+        histogram_quantile(0.99, 
+          sum by (le, case) (rate(pipeline_latency_seconds_bucket[5m]))
+        )
+    
+    # Service latency percentiles
+    - record: service:latency:p95
+      expr: |
+        histogram_quantile(0.95, 
+          sum by (le, service) (rate(service_latency_seconds_bucket[5m]))
+        )
+    
+    # Success rate by case
+    - record: pipeline:success_rate:5m
+      expr: |
+        sum by (case) (rate(pipeline_requests_total{status="success"}[5m])) 
+        / 
+        sum by (case) (rate(pipeline_requests_total[5m]))
+    
+    # Case override usage rate
+    - record: case_override:usage_rate:5m
+      expr: |
+        sum(rate(case_override_used_total[5m])) 
+        / 
+        sum(rate(pipeline_requests_total[5m]))
+    
+    # Embedding override usage rate
+    - record: embedding_override:usage_rate:5m
+      expr: |
+        sum(rate(embedding_override_used_total[5m])) 
+        / 
+        sum(rate(pipeline_requests_total[5m]))
+    
+    # Cache hit rate
+    - record: cache:hit_rate:5m
+      expr: |
+        sum(rate(cache_hits_total[5m])) 
+        / 
+        (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m])))
+    
+    # LLM retry rate
+    - record: llm:retry_rate:5m
+      expr: sum(rate(llm_retry_attempts_total[5m]))
+    
+    # Validation error rate by field
+    - record: validation:error_rate:5m
+      expr: |
+        sum by (field) (rate(validation_errors_total[5m]))

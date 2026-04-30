@@ -1,0 +1,93 @@
+{
+  "current_response_time_percentiles": {
+    "response_time_percentile_0.95": 4800.0
+  },
+  "errors": [
+    {
+      "error": "CatchResponseError(&#x27;HTTP 0&#x27;)",
+      "method": "POST",
+      "name": "/retrieve [rr]",
+      "occurrences": 8
+    }
+  ],
+  "fail_ratio": 0.0009321836401771149,
+  "state": "running",
+  "stats": [
+    {
+      "avg_content_length": 195.0,
+      "avg_response_time": 39.99607555925866,
+      "current_fail_per_sec": 0.0,
+      "current_rps": 4.3,
+      "max_response_time": 334.0,
+      "median_response_time": 27,
+      "method": "GET",
+      "min_response_time": 4.0,
+      "name": "/health [router-rr]",
+      "ninetieth_response_time": 77,
+      "ninety_ninth_response_time": 280.0,
+      "num_failures": 0,
+      "num_requests": 485,
+      "response_time_percentile_0.95": 130.0,
+      "response_time_percentile_0.99": 280.0,
+      "safe_name": "/health [router-rr]"
+    },
+    {
+      "avg_content_length": 687.9925871015568,
+      "avg_response_time": 52.63955727650019,
+      "current_fail_per_sec": 0.1,
+      "current_rps": 40.9,
+      "max_response_time": 661.0,
+      "median_response_time": 43,
+      "method": "POST",
+      "min_response_time": 6.0,
+      "name": "/retrieve [rr]",
+      "ninetieth_response_time": 95,
+      "ninety_ninth_response_time": 150.0,
+      "num_failures": 8,
+      "num_requests": 4047,
+      "response_time_percentile_0.95": 110.0,
+      "response_time_percentile_0.99": 150.0,
+      "safe_name": "/retrieve [rr]"
+    },
+    {
+      "avg_content_length": 2013.2182716049383,
+      "avg_response_time": 4012.8256538255987,
+      "current_fail_per_sec": 0.0,
+      "current_rps": 40.6,
+      "max_response_time": 5337.0,
+      "median_response_time": 4400.0,
+      "method": "POST",
+      "min_response_time": 50.0,
+      "name": "/route [rr]",
+      "ninetieth_response_time": 4900.0,
+      "ninety_ninth_response_time": 5300.0,
+      "num_failures": 0,
+      "num_requests": 4050,
+      "response_time_percentile_0.95": 5100.0,
+      "response_time_percentile_0.99": 5300.0,
+      "safe_name": "/route [rr]"
+    },
+    {
+      "avg_content_length": 1285.5295968305757,
+      "avg_response_time": 1920.808003138885,
+      "current_fail_per_sec": 0.1,
+      "current_rps": 85.8,
+      "max_response_time": 5337.0,
+      "median_response_time": 110.0,
+      "method": "",
+      "min_response_time": 4.0,
+      "name": "Aggregated",
+      "ninetieth_response_time": 4700.0,
+      "ninety_ninth_response_time": 5200.0,
+      "num_failures": 8,
+      "num_requests": 8582,
+      "response_time_percentile_0.95": 4900.0,
+      "response_time_percentile_0.99": 5200.0,
+      "safe_name": "Aggregated"
+    }
+  ],
+  "total_avg_response_time": 1920.808003138885,
+  "total_fail_per_sec": 0.1,
+  "total_rps": 85.8,
+  "user_count": 200
+}

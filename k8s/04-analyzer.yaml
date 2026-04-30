@@ -1,0 +1,303 @@
+# ===========================
+# Analyzer ConfigMap: LLM Settings
+# ===========================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anomaly-analyzer-config
+  namespace: elastic
+data:
+  # LLM Model Configuration
+  LLM_MODEL: "gemini-2.5-flash-lite"
+  LLM_TEMPERATURE: "0.1"
+  LLM_MAX_TOKENS: "1024"
+
+  # Retry Settings
+  MAX_RETRIES: "5"
+  RETRY_BACKOFF: "5"
+  REQUEST_TIMEOUT: "120"
+
+  # Rate Limiting
+  MAX_REQUESTS_PER_MINUTE: "30"
+
+  # JSON Mode (구조화 출력)
+  JSON_MODE_ENABLED: "true"
+
+  # ===========================
+  # ✨ 분석 컨텍스트 플래그
+  # ===========================
+  #
+  # [PERSONA_ENABLED] default: true
+  #   클러스터 통계 프로필을 프롬프트에 포함할지 여부.
+  #   포함 내용: 클러스터 요약, 수치 통계(mean/std/min/max), 카테고리 분포
+  #   → 원본 피처 공간의 의미있는 정보 → LLM 분석에 도움됨 (default ON)
+  PERSONA_ENABLED: "true"
+
+  # [TREE_RULES_ENABLED] default: false
+  #   Percolate 룰의 range 조건을 프롬프트에 포함할지 여부.
+  #   포함 내용: v1~v576 임베딩 공간 range 조건 (e.g., v1 <= 0.3, v42 >= -0.1)
+  #   → 임베딩 차원 번호는 LLM이 해석 불가 → 분석에 오히려 노이즈 (default OFF)
+  #   → 실험/디버깅 목적으로 활성화 가능
+  TREE_RULES_ENABLED: "false"
+
+---
+# ===========================
+# ServiceAccount (Workload Identity)
+# ===========================
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: anomaly-analyzer
+  namespace: elastic
+  annotations:
+    iam.gke.io/gcp-service-account: anomaly-analyzer@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+
+---
+# ===========================
+# Analyzer Deployment
+# ===========================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-analyzer
+  namespace: elastic
+  labels:
+    app: anomaly-analyzer
+    tier: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly-analyzer
+  template:
+    metadata:
+      labels:
+        app: anomaly-analyzer
+        tier: inference
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: anomaly-analyzer
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["app-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: anomaly-analyzer
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: analyzer
+        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/anomaly-analyzer:1.0
+        imagePullPolicy: Always
+
+        ports:
+        - containerPort: 8002
+          name: http
+          protocol: TCP
+
+        env:
+        # ── GCP / Vertex AI ─────────────────────────────────────
+        - name: GOOGLE_CLOUD_PROJECT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GOOGLE_CLOUD_PROJECT
+        - name: GOOGLE_CLOUD_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GOOGLE_CLOUD_REGION
+
+        # ── Experiment (Router/Retriever와 동기화) ───────────────
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+
+        # ── LLM ─────────────────────────────────────────────────
+        - name: LLM_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-analyzer-config
+              key: LLM_MODEL
+        - name: LLM_TEMPERATURE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-analyzer-config
+              key: LLM_TEMPERATURE
+        - name: LLM_MAX_TOKENS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-analyzer-config
+              key: LLM_MAX_TOKENS
+        - name: JSON_MODE_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-analyzer-config
+              key: JSON_MODE_ENABLED
+
+        # ── Retry / Rate Limit ───────────────────────────────────
+        - name: MAX_RETRIES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-analyzer-config
+              key: MAX_RETRIES
+        - name: RETRY_BACKOFF
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-analyzer-config
+              key: RETRY_BACKOFF
+        - name: REQUEST_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-analyzer-config
+              key: REQUEST_TIMEOUT
+        - name: MAX_REQUESTS_PER_MINUTE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-analyzer-config
+              key: MAX_REQUESTS_PER_MINUTE
+
+        # ── ✨ 분석 컨텍스트 플래그 ──────────────────────────────
+        # PERSONA_ENABLED: 클러스터 통계 프로필 포함 (default: true)
+        - name: PERSONA_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-analyzer-config
+              key: PERSONA_ENABLED
+
+        # TREE_RULES_ENABLED: v1~vN 임베딩 공간 range 조건 포함 (default: false)
+        - name: TREE_RULES_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-analyzer-config
+              key: TREE_RULES_ENABLED
+
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 30"]
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8002
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8002
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+
+        resources:
+          requests:
+            cpu: 10m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        # resources:
+        #   requests:
+        #     cpu: 1000m
+        #     memory: 256Mi
+        #   limits:
+        #     cpu: 1000m
+        #     memory: 1Gi
+
+        volumeMounts:
+        - name: code-volume
+          mountPath: /app/analyzer.py
+          subPath: analyzer.py
+
+      volumes:
+      - name: code-volume
+        configMap:
+          name: analyzer-code
+
+---
+# ===========================
+# Analyzer Service
+# ===========================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-analyzer
+  namespace: elastic
+  labels:
+    app: anomaly-analyzer
+    tier: inference
+spec:
+  type: ClusterIP
+  selector:
+    app: anomaly-analyzer
+    tier: inference
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8002
+    protocol: TCP
+
+# ===========================
+# 플래그 런타임 변경 방법
+# ===========================
+#
+# [Persona ON/OFF]
+#   kubectl patch configmap anomaly-analyzer-config -n elastic \
+#     --type merge -p '{"data":{"PERSONA_ENABLED":"false"}}'
+#   kubectl rollout restart deployment/anomaly-analyzer -n elastic
+#
+# [Tree Rules ON (디버깅/실험)]
+#   kubectl patch configmap anomaly-analyzer-config -n elastic \
+#     --type merge -p '{"data":{"TREE_RULES_ENABLED":"true"}}'
+#   kubectl rollout restart deployment/anomaly-analyzer -n elastic
+#
+# [단건 요청에서 헤더로 Override (ConfigMap 변경 없이)]
+#   curl -X POST http://localhost:8002/analyze \
+#     -H "X-Tree-Rules-Enabled: true" \
+#     -H "X-Persona-Enabled: false" \
+#     -d @request.json
+#
+# [현재 설정 확인]
+#   kubectl get configmap anomaly-analyzer-config -n elastic -o yaml
+#   curl http://localhost:8002/config
+#
+# ===========================
+# 배포 방법
+# ===========================
+#
+# 1. ConfigMap + Deployment 적용:
+#    kubectl apply -f 04-analyzer.yaml
+#
+# 2. 코드 ConfigMap 갱신:
+#    kubectl create configmap analyzer-code \
+#      --from-file=analyzer.py=apps/analyzer.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# 3. 롤링 재시작:
+#    kubectl rollout restart deployment/anomaly-analyzer -n elastic
+#
+# 4. 확인:
+#    kubectl rollout status deployment/anomaly-analyzer -n elastic
+#    kubectl logs -n elastic -l app=anomaly-analyzer --tail=50

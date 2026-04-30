@@ -1,0 +1,394 @@
+# ===========================
+# Ingest Gaussian Aug Job
+# ===========================
+#
+# 역할: ingest_gaussian_aug.py 실행
+#   - GCS에서 Gaussian augmentation 임베딩 (.npy) 다운로드
+#   - 각 multiplier × percentage 조합으로 ES aug vec 인덱스에 bulk 적재
+#     인덱스명: fraud_ecom_aug_{mult}x_{pct}pct_{vec_type}_vec
+#   - ★ persona 코드 완전 제거 (aug 인덱스는 raw vec 전용)
+#   - ★ percolate query 없음 (router가 percolator 인덱스를 직접 사용)
+#
+# 선행 조건:
+#   - 01-ingest-tree.yaml 완료 (percolator 인덱스 생성 필요)
+#   - GCS에 gaussian aug .npy 파일 존재
+#
+# es-scripts ConfigMap 등록 (최초 1회):
+#   kubectl create configmap es-scripts \
+#     --from-file=ingest_tree_pipeline.py \
+#     --from-file=ingest_gaussian_aug.py \
+#     --from-file=percolate_query_builder.py \
+#     -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# ===========================
+# GCS 파일 구조 (gaussian aug)
+# ===========================
+#
+# gs://fraudecom/tree-search/gaussian_aug/   ← 모든 파일 동일 폴더
+#
+# [npy — embedding]
+#   non-chunk: {EMB_FILENAME_MIDDLE}_percentage_{PCT}_mult{MULT}.npy
+#   chunk:     {EMB_FILENAME_MIDDLE}_percentage_{PCT}_mult{MULT}_chunk_{N}.npy
+#
+#   예) anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_100_mult10.npy
+#       anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_100_mult20_chunk_1.npy
+#
+# [parquet — coreset metadata (original_index 등)]
+#   non-chunk: raw_plus_cluster_tree_percentage_{PCT}_mult{MULT}.parquet
+#   chunk:     raw_plus_cluster_tree_percentage_{PCT}_mult{MULT}_chunk_{N}.parquet
+#
+#   예) raw_plus_cluster_tree_percentage_10_mult30.parquet
+#       raw_plus_cluster_tree_percentage_100_mult20_chunk_3.parquet
+#
+# ES 인덱스명 규칙:
+#   float32: fraud_ecom_aug_{mult}x_{pct}pct_float32_vec
+#   int8:    fraud_ecom_aug_{mult}x_{pct}pct_int8_vec
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingest-gaussian-aug-mult30-pct100
+  namespace: elastic
+  labels:
+    app: ingest-gaussian-aug-mult30-pct100
+    version: v2.1
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: ingest-gaussian-aug-mult30-pct100
+        version: v2.1
+    spec:
+      # serviceAccountName: ingest-sa
+      # restartPolicy: Never
+      serviceAccountName: ingest-sa
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: anomaly-orchestrator
+              topologyKey: kubernetes.io/hostname
+      restartPolicy: Never
+
+      # ===========================
+      # Init Container: GCS → /data/gaussian_aug 다운로드
+      # ===========================
+      #
+      # GAUSSIAN_AUG_MULTIPLIERS × CORESET_PERCENTAGES 조합의
+      # .npy 파일을 GAUSSIAN_AUG_DATA_DIR에 다운로드.
+      #
+      # USE_CHUNK=true 시: chunk 분할 파일 ({fname}_chunk_{i}.npy) 다운로드
+      # USE_CHUNK=false 시: 단일 merged 파일 다운로드
+      #
+      # 대용량(20x/30x) 주의:
+      #   multiplier가 클수록 파일 크기가 매우 커짐 (30x × 100% ≈ 수십 GB)
+      #   USE_CHUNK=true + N_CHUNKS 분할 권장
+      # ===========================
+      initContainers:
+      - name: download-artifacts
+        image: google/cloud-sdk:slim
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: GAUSSIAN_AUG_DATA_DIR
+          value: "/data/gaussian_aug"
+        - name: GCS_GAUSSIAN_AUG_BASE
+          value: "gs://fraudecom/tree-search/gaussian_aug"
+        - name: GAUSSIAN_AUG_MULTIPLIERS
+          # value: "2,5,10"    # 필요한 multiplier 조합 (20,30은 USE_CHUNK=true 권장)
+          value: "30"    # 필요한 multiplier 조합 (20,30은 USE_CHUNK=true 권장)
+        - name: CORESET_PERCENTAGES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_PERCENTAGES
+        - name: EMB_FILENAME_MIDDLE
+          value: "anollm_lr5e-05_standard_smolLM_train_embeddings"
+        - name: VEC_ELEMENT_TYPE
+          value: "float"     # float | byte
+
+        # 이건 바꿔야돼
+        - name: USE_CHUNK
+          value: "true"
+
+        # 이건 안바꿔도 돼 (고정)
+        - name: N_CHUNKS
+          value: "5"
+        - name: CHUNK_THRESHOLD_MULT
+          value: "20"
+        - name: CHUNK_ONLY_PCT
+          value: "100"
+
+        command: ["bash", "-lc"]
+        args:
+          - |
+            set -euo pipefail
+
+            echo "[init] =================================================="
+            echo "[init] ingest-gaussian-aug V2.2 — GCS Download"
+            echo "[init] GCS_GAUSSIAN_AUG_BASE    : ${GCS_GAUSSIAN_AUG_BASE}"
+            echo "[init] GAUSSIAN_AUG_MULTIPLIERS : ${GAUSSIAN_AUG_MULTIPLIERS}"
+            echo "[init] CORESET_PERCENTAGES      : ${CORESET_PERCENTAGES}"
+            echo "[init] VEC_ELEMENT_TYPE         : ${VEC_ELEMENT_TYPE}"
+            echo "[init] USE_CHUNK                : ${USE_CHUNK}"
+            echo "[init] N_CHUNKS                 : ${N_CHUNKS}"
+            echo "[init] =================================================="
+            echo "[init] 파일명 규칙:"
+            echo "[init]   npy:     {EMB_FILENAME_MIDDLE}_percentage_{PCT}_mult{MULT}[_chunk_{N}].npy"
+            echo "[init]   parquet: raw_plus_cluster_tree_percentage_{PCT}_mult{MULT}[_chunk_{N}].parquet"
+            echo "[init] =================================================="
+
+            mkdir -p "${GAUSSIAN_AUG_DATA_DIR}"
+
+            if [ "${USE_CHUNK}" = "true" ]; then
+              echo "[init] Chunk mode detected. Skipping pre-download to save disk/memory."
+              echo "[init] Main container will handle 'Download -> Ingest -> Delete' per chunk."
+              exit 0
+            fi
+
+
+            IFS=',' read -ra MULTS <<< "${GAUSSIAN_AUG_MULTIPLIERS}"
+            IFS=',' read -ra PCTS  <<< "${CORESET_PERCENTAGES}"
+
+            total=$(( ${#MULTS[@]} * ${#PCTS[@]} ))
+            idx=0
+
+            for mult in "${MULTS[@]}"; do
+              mult=$(echo "$mult" | tr -d ' ')
+              for pct in "${PCTS[@]}"; do
+                pct=$(echo "$pct" | tr -d ' ')
+                idx=$((idx + 1))
+                echo ""
+                echo "[init] (${idx}/${total}) mult=${mult}  pct=${pct}%"
+
+                # ── 단일 merged 파일 다운로드 ─────────────────────────
+                NPY_FNAME="${EMB_FILENAME_MIDDLE}_percentage_${pct}_mult${mult}.npy"
+                NPY_GCS="${GCS_GAUSSIAN_AUG_BASE}/${NPY_FNAME}"
+                NPY_LOCAL="${GAUSSIAN_AUG_DATA_DIR}/${NPY_FNAME}"
+
+                PQ_FNAME="raw_plus_cluster_tree_percentage_${pct}_mult${mult}.parquet"
+                PQ_GCS="${GCS_GAUSSIAN_AUG_BASE}/${PQ_FNAME}"
+                PQ_LOCAL="${GAUSSIAN_AUG_DATA_DIR}/${PQ_FNAME}"
+
+                # npy 다운로드
+                if gsutil -q stat "${NPY_GCS}" 2>/dev/null; then
+                  echo "[init]   npy:     ${NPY_GCS}"
+                  gsutil -m cp "${NPY_GCS}" "${NPY_LOCAL}"
+                  echo "[init]   ✅ npy     $(du -sh ${NPY_LOCAL} | cut -f1)"
+                else
+                  echo "[init]   ⚠️  npy NOT FOUND: ${NPY_GCS}"
+                fi
+
+                # parquet 다운로드
+                if gsutil -q stat "${PQ_GCS}" 2>/dev/null; then
+                  echo "[init]   parquet: ${PQ_GCS}"
+                  gsutil -m cp "${PQ_GCS}" "${PQ_LOCAL}"
+                  echo "[init]   ✅ parquet $(du -sh ${PQ_LOCAL} | cut -f1)"
+                else
+                  echo "[init]   ⚠️  parquet NOT FOUND: ${PQ_GCS}"
+                fi
+              done
+            done
+
+            echo ""
+            echo "[init] =================================================="
+            echo "[init] Download Complete"
+            echo "[init]   npy 파일 수     : $(ls ${GAUSSIAN_AUG_DATA_DIR}/*.npy 2>/dev/null | wc -l)"
+            echo "[init]   parquet 파일 수 : $(ls ${GAUSSIAN_AUG_DATA_DIR}/*.parquet 2>/dev/null | wc -l)"
+            echo "[init]   총 용량         : $(du -sh ${GAUSSIAN_AUG_DATA_DIR}/ | cut -f1)"
+            ls -lh "${GAUSSIAN_AUG_DATA_DIR}/"
+            echo "[init] =================================================="
+
+        volumeMounts:
+        - name: data
+          mountPath: /data
+
+      # ===========================
+      # Main Container: ingest_gaussian_aug.py
+      # ===========================
+      containers:
+      - name: ingest
+        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/es-tree-ingest:3.0
+        imagePullPolicy: Always
+
+        command: ["bash", "-lc"]
+        args:
+          - |
+            echo "========================================="
+            echo " ingest_gaussian_aug.py V2.2"
+            echo "  GAUSSIAN_AUG_MULTIPLIERS : ${GAUSSIAN_AUG_MULTIPLIERS}"
+            echo "  CORESET_PERCENTAGES      : ${CORESET_PERCENTAGES}"
+            echo "  VEC_ELEMENT_TYPE         : ${VEC_ELEMENT_TYPE}"
+            echo "  USE_CHUNK                : ${USE_CHUNK}"
+            echo "  N_CHUNKS                 : ${N_CHUNKS}"
+            echo "========================================="
+
+            echo "[verify] Gaussian aug files:"
+            ls -lh "${GAUSSIAN_AUG_DATA_DIR}/" || echo "  (empty)"
+            echo "  npy 수    : $(ls ${GAUSSIAN_AUG_DATA_DIR}/*.npy 2>/dev/null | wc -l)"
+            echo "  parquet 수: $(ls ${GAUSSIAN_AUG_DATA_DIR}/*.parquet 2>/dev/null | wc -l)"
+
+            echo ""
+            echo "[run] Starting ingest_gaussian_aug.py ..."
+            python /app/ingest_gaussian_aug.py
+
+            echo ""
+            echo "========================================="
+            echo " ingest_gaussian_aug.py Complete!"
+            echo "========================================="
+
+        env:
+        # ── Elasticsearch ─────────────────────────────────────────
+        - name: ES_URL
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_URL
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-ha-es-elastic-user
+              key: elastic
+        - name: ES_REQUEST_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_REQUEST_TIMEOUT
+
+        # ── Gaussian Aug 설정 ─────────────────────────────────────
+        - name: GAUSSIAN_AUG_DATA_DIR
+          value: "/data/gaussian_aug"
+        - name: GCS_GAUSSIAN_AUG_BASE
+          value: "gs://fraudecom/tree-search/gaussian_aug"
+
+        # 적재할 multiplier 목록 (쉼표 구분)
+        # 주의: 20x/30x는 USE_CHUNK=true + N_CHUNKS 설정 권장
+        - name: GAUSSIAN_AUG_MULTIPLIERS
+          value: "30"
+
+        # ── Coreset ───────────────────────────────────────────────
+        - name: CORESET_PERCENTAGES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_PERCENTAGES
+
+        # ── 벡터 설정 ─────────────────────────────────────────────
+        # VEC_ELEMENT_TYPE: float(float32 인덱스) | byte(int8 인덱스)
+        - name: VEC_ELEMENT_TYPE
+          value: "float"
+        - name: VEC_DIMS
+          value: "576"
+
+        # ── 청크 처리 (20x/30x 대용량용) ─────────────────────────
+        - name: USE_CHUNK
+          value: "true"
+        - name: N_CHUNKS
+          value: "5"
+
+        # ── 임베딩 파일명 prefix ──────────────────────────────────
+        # 실제 GCS: {EMB_FILENAME_MIDDLE}_percentage_{PCT}_mult{MULT}[_chunk_{N}].npy
+        - name: EMB_FILENAME_MIDDLE
+          value: "anollm_lr5e-05_standard_smolLM_train_embeddings"
+
+        # ── Bulk Tuning ───────────────────────────────────────────
+        - name: BULK_CHUNK_SIZE
+          value: "1000"
+        - name: BULK_MAX_CHUNK_BYTES
+          value: "20971520"    # 20MB
+
+        # ── HNSW 유무 ───────────────────────────────────────────────
+        - name: INGEST_SEARCH_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: INGEST_SEARCH_MODE
+
+      # 정상 aug vec docs 분할 저장
+        - name: AUG_SHARD_DISTRIBUTION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: AUG_SHARD_DISTRIBUTION
+        - name: ATTR_DOCS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ATTR_DOCS
+        - name: N_SHARDS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: N_SHARDS
+        - name: N_REPLICAS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: N_REPLICAS
+
+        volumeMounts:
+        - name: scripts
+          mountPath: /app/ingest_gaussian_aug.py
+          subPath: ingest_gaussian_aug.py
+        - name: data
+          mountPath: /data
+
+        resources:
+          requests:
+            cpu: "0.5"
+            memory: "2Gi"
+          limits:
+            cpu: "1"
+            memory: "4Gi"   # 10x × 100% ≈ 1.4GB npy × mmap + 오버헤드
+
+      volumes:
+      - name: scripts
+        configMap:
+          name: es-scripts
+          defaultMode: 0755
+      - name: data
+        emptyDir:
+          sizeLimit: 5Gi   # 대용량 multiplier 파일 고려 (10x × 100% ≈ 1.4GB)
+
+# ===========================
+# 실행 방법
+# ===========================
+#
+# [기본 실행 (2x/5x/10x, float32, non-chunk)]
+#   kubectl delete job ingest-gaussian-aug -n elastic --ignore-not-found
+#   kubectl apply -f 01-ingest-gaussian-aug.yaml
+#   kubectl logs -n elastic -l app=ingest-gaussian-aug -f
+#
+# [int8 (byte) 인덱스 생성]
+#   initContainers 및 main container의 VEC_ELEMENT_TYPE을 "byte"로 변경
+#
+# [20x/30x 대용량 (청크 모드)]
+#   GAUSSIAN_AUG_MULTIPLIERS: "20,30"
+#   USE_CHUNK: "true"
+#   N_CHUNKS:  "5"
+#   volumes.data.sizeLimit: 100Gi 로 조정 필요
+#
+# [특정 multiplier만]
+#   GAUSSIAN_AUG_MULTIPLIERS: "10"
+#
+# GCS 파일명 확인 예시:
+#   gsutil ls gs://fraudecom/tree-search/gaussian_aug/
+#   gsutil ls gs://fraudecom/tree-search/gaussian_aug/*mult10*
+#
+# [ConfigMap 코드 갱신]
+#   kubectl create configmap es-scripts \
+#     --from-file=ingest_tree_pipeline.py \
+#     --from-file=ingest_gaussian_aug.py \
+#     --from-file=percolate_query_builder.py \
+#     -n elastic --dry-run=client -o yaml | kubectl apply -f -

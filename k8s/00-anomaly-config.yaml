@@ -1,0 +1,223 @@
+# ===========================
+# Main ConfigMap: Shared Elasticsearch & Service Configuration
+# ===========================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anomaly-config
+  namespace: elastic
+data:
+  # ✅ Elasticsearch Configuration
+  ES_URL: "https://elasticsearch-ha-es-http:9200"
+  ES_REQUEST_TIMEOUT: "120"
+
+  # ✅ Service URLs (for Orchestrator)
+  ROUTER_URL: "http://anomaly-router"
+  RETRIEVER_URL: "http://anomaly-retriever"
+  ANALYZER_URL: "http://anomaly-analyzer"
+
+  # ✅ GCP Configuration (for Analyzer)
+  GOOGLE_CLOUD_PROJECT: "project-fcd52ffc-8b8b-4557-858"
+  GOOGLE_CLOUD_REGION: "us-central1"
+
+  # ===========================
+  # ✨ Experiment Control
+  # ===========================
+
+  # Experiment Case (임베딩 타입 + 클러스터 수 선택)
+  # - "emb_vectors" : PCA 없음, 원본 576-dim
+  # - "pca_32"      : PCA 32-dim
+  # - "pca_64"      : PCA 64-dim  [DEFAULT]
+  # - "pca_128"     : PCA 128-dim
+  # - "pca_256"     : PCA 256-dim
+  # - "k50"         : K=50  클러스터, 원본 dim
+  # - "k100"        : K=100 클러스터, 원본 dim
+  # - "k200"        : K=200 클러스터, 원본 dim
+  # - "pca_64_k100" : PCA 64-dim + K=100
+  # - "pca_64_k200" : PCA 64-dim + K=200
+  EXPERIMENT_CASE: "pca_64_k100"
+
+  # Percolate Query Version (Query 빌더 선택)
+  # 쉼표 구분으로 여러 버전 동시 ingestion 가능
+  # - "v1": Strict AND  (filter, 모든 조건 필수)
+  # - "v2": Flexible    (should + minimum_should_match) [DEFAULT]
+  # - "v3": Top-K Must  (상위 K 조건 must + 나머지 should)
+  # - "v4": Progressive (tier별 relaxation, boost 차등)
+  # - "v5": Importance Weighted (threshold 절대값 기반 boost)
+
+  # VERSIONS: "v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13", v14 -- v11만 ingest
+  #ingest랑 아래 PERCOLATE_QUERY_VERSION, router랑 달라!"
+  VERSIONS: "v1,v11,v14"
+
+  # Flexible Matching Threshold (v2, v3에서 사용)
+  # - 빈 문자열: experiment_case별 자동 계산 (권장)
+  PERCOLATE_MIN_SHOULD_MATCH: ""
+
+  # VERSIONS: "v,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13, v11a, v11b, v11c, v14"
+  # Router가 실시간 percolate에 사용할 단일 버전
+  PERCOLATE_QUERY_VERSION: "v14"
+
+  # Persona Feature (Analyzer 전달 여부)
+  PERSONA_ENABLED: "true"
+
+  # ★ v5: SKIP_ANALYZER — percolate 완전 스킵, 순수 vec 검색 성능 측정용
+  #   true  → router가 cluster_id 할당 없이 전체 cluster 목록 반환
+  #           retriever가 cluster_id filter 없이 전체 인덱스 vec 검색
+  #   false → 정상 percolate + centroid fallback 흐름 (기본값)
+  SKIP_ANALYZER: "true"
+
+  # ===========================
+  # ✨ Coreset Sampling
+  # ===========================
+  #
+  # [Ingest용] CORESET_PERCENTAGES
+  #   Ingest 시 생성할 coreset percentage 목록 (쉼표 구분)
+  #   각 값마다 별도 raw+vec 인덱스 생성:
+  #
+  #     100 → fraud_ecom_{case}_percentage_100_cluster_tree_vec  (~122K docs)
+  #     10  → fraud_ecom_{case}_percentage_10_cluster_tree_vec   (~12K  docs)
+  #     1   → fraud_ecom_{case}_percentage_1_cluster_tree_vec    (~1.2K docs)
+  #
+  #   단일 percentage만 실행:  CORESET_PERCENTAGES: "100"
+  # CORESET_PERCENTAGES: "100,10,1"
+  CORESET_PERCENTAGES: "100,10,1"
+  # ★ v5: Retriever 검색 모드
+  #   script_score : Exact NN  (vec index=False 환경, gaussian_aug 인덱스 기본)
+  #   knn          : HNSW      (vec index=True 환경, 원본 coreset 인덱스)
+  INGEST_SEARCH_MODE: "hnsw"
+
+  # ★ raw+vec 인덱스 bulk skip 여부 (multi experiment-case 실행 시 활용)
+  #   false → raw+vec + percolate 모두 실행 (기본값, 첫 번째 케이스)
+  #   true  → percolate query만 실행        (두 번째 이후 케이스, 시간 절약)
+  #   auto  → ES 인덱스 이미 존재 시 자동 스킵
+  SKIP_RAW_VEC: "false"
+
+  # ===========================
+  # ✨ Node Pinning (coreset 비율별 ES 노드 분리 실험용)
+  # ===========================
+  #
+  # NODE_PINNING=true 시 각 coreset % 인덱스를 지정 노드에 고정 적재
+  # false(기본값) → 기존 ES 자동 배치 동작 유지
+  #
+  # 노드 이름 확인:
+  #   kubectl exec -n elastic elasticsearch-ha-es-main-0 -- \
+  #     curl -s "localhost:9200/_cat/nodes?v&h=name" --insecure -k
+  NODE_PINNING: "false"
+  NODE_100PCT:  "elasticsearch-ha-es-vec-100pct-0"
+  NODE_10PCT:   "elasticsearch-ha-es-vec-10pct-0"
+  NODE_1PCT:    "elasticsearch-ha-es-vec-1pct-0"
+  NODE_PERCOLATOR: "elasticsearch-ha-es-perc-0"
+
+  # percolate query 분할 저장 / 정상 docs는 한곳에 저장
+  PERCOLATOR_SHARD_DISTRIBUTION: "true"
+  ATTR_PERCOLATOR: "percolator"  # percolate-distributed 노드셋의 box_type
+  ATTR_DOCS: "docs"              # docs-datastore 노드셋의 box_type
+  N_SHARDS: "3"
+  N_REPLICAS: "0"
+
+  # Bucketization depth 비율
+  ENABLE_BUCKETIZATION: "true"
+  BUCKET_DEPTH_PCT: "15"
+
+  # [Retriever용] RETRIEVER_CORESET_PERCENTAGE >>> 더이상 활용 x
+  #   실시간 kNN 조회에 사용할 percentage (단일 값)
+  #   Ingest 후 평가 결과에 따라 best percentage로 업데이트
+  # RETRIEVER_CORESET_PERCENTAGE: "100"
+
+  # Hot Cluster Percentile (Router에서 동적 계산)
+  # 상위 N% 누적 빈도 cluster를 hot으로 분류
+  CORESET_HOT_PERCENTILE: "70"
+
+  # ★ v5: Router vec_index 동적 결정 파라미터
+  #   router가 이 값들로 retriever에 전달할 ES 인덱스명을 결정.
+  #
+  #   VEC_INDEX_CORESET_PCT: 원본 coreset 인덱스의 percentage (100 | 10 | 1)
+  #     → fraud_ecom_{experiment_case}_percentage_{pct}_cluster_tree_vec
+  VEC_INDEX_CORESET_PCT: "100"
+  #
+  #   AUG_MULTIPLIER: gaussian aug 인덱스 사용 시 배수 ("" = 원본 coreset 사용)
+  #     "" | "2" | "5" | "10" | "20" | "30"
+  #     → fraud_ecom_aug_{mult}x_{pct}pct_{vec_type}_vec
+  AUG_MULTIPLIER: "" # mult
+  AUG_PCT: "100" #pct
+  VEC_TYPE: "float32" #vec_type
+
+  # index_aug용 SHARD 분산
+  AUG_SHARD_DISTRIBUTION: "true"
+  # ★ v5: Retriever 검색 모드
+  #   exact : Exact NN  (vec index=False 환경, gaussian_aug 인덱스 기본)
+  #   hnsw          : HNSW      (vec index=True 환경, 원본 coreset 인덱스)
+  SEARCH_MODE: "hnsw"
+  # # 일반 coreset 실험 시 (값 자체는 무의미하나 명시)
+  # KNN_NUM_CANDIDATES: "200"
+
+  # # Baseline HNSW 실험 시
+  # KNN_NUM_CANDIDATES: "200"
+
+  # # Gaussian aug 실험 시
+  # KNN_NUM_CANDIDATES: "3000"
+  KNN_NUM_CANDIDATES: "200"
+
+  # ===========================
+  # GCS Paths
+  # ===========================
+
+  # 임베딩 파일이 저장된 GCS 폴더 (파일명 제외)
+  GCS_EMB_BASE: "gs://fraudecom/tree-search/embeddings_fraudecom"
+
+  # 임베딩 파일명 prefix
+  # 실제 파일명: {prefix}_{percentage}_merged.npy
+  #   percentage=100 → anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_100_merged.npy
+  #   percentage=10  → anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_10_merged.npy
+  #   percentage=1   → anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_1_merged.npy
+  GCS_EMB_FILENAME_PREFIX: "anollm_lr5e-05_standard_smolLM_train_embeddings_percentage"
+
+  # 컨테이너 내 임베딩 디렉토리 (initContainer가 이 경로에 다운로드)
+  EMB_DATA_DIR: "/data/embeddings"
+
+  # 임베딩 파일명 prefix (컨테이너 내, ingest_tree_pipeline.py가 참조)
+  EMB_FILENAME_PREFIX: "anollm_lr5e-05_standard_smolLM_train_embeddings_percentage"
+
+  # 케이스별 아티팩트 GCS 기본 경로
+  GCS_TREE_BASE: "gs://fraudecom/tree-search/tree_fraudecom"
+
+  # ★ v5.1: centroid fallback 용 클러스터 수 K
+  #   GCS 경로: {GCS_TREE_BASE}/k{N_CLUSTERS}/cluster_centroids.npy  shape=(K, D)
+  #   EXPERIMENT_CASE의 k{N} suffix에서 router가 자동 파싱 (pca_64_k100 → 100).
+  #   suffix 없는 케이스(pca_64, emb_vectors)는 이 값을 명시 사용.
+  N_CLUSTERS: "100"
+
+  # ingest local container corest 저장 경로
+  CORESET_PARQUET_DIR: "/data/coreset_parquets"
+
+# ===========================
+# Index Name Convention (참고용)
+# ===========================
+#
+#   Raw+Vec   : fraud_ecom_{EXPERIMENT_CASE}_percentage_{PCT}_cluster_tree_vec
+#   Percolator: fraud_ecom_{EXPERIMENT_CASE}_{VERSION}_tree_rules_percolator
+#
+# 예시 (EXPERIMENT_CASE=pca_64, CORESET_PERCENTAGES=100,10,1):
+#   fraud_ecom_pca_64_percentage_100_cluster_tree_vec   ← 전체 정상 임베딩
+#   fraud_ecom_pca_64_percentage_10_cluster_tree_vec    ← 10% coreset
+#   fraud_ecom_pca_64_percentage_1_cluster_tree_vec     ← 1%  coreset
+#   fraud_ecom_pca_64_v2_tree_rules_percolator          ← 룰 (percentage 무관)
+#
+# ===========================
+# Usage Notes
+# ===========================
+#
+# ConfigMap 사용 서비스:
+# - Router      (ES_URL, EXPERIMENT_CASE, PERCOLATE_QUERY_VERSION, PERSONA_ENABLED)
+# - Retriever   (ES_URL, EXPERIMENT_CASE, RETRIEVER_CORESET_PERCENTAGE, CORESET_HOT_PERCENTILE)
+# - Analyzer    (GOOGLE_CLOUD_PROJECT, PERSONA_ENABLED)
+# - Orchestrator (Service URLs)
+# - Ingest Job  (EXPERIMENT_CASE, VERSIONS, CORESET_PERCENTAGES, GCS_EMB_BASE, ...)
+#
+# Experiment Workflow:
+# 1. Colab: Generate tree_rules → Upload to GCS
+# 2. Update EXPERIMENT_CASE, CORESET_PERCENTAGES as needed
+# 3. kubectl apply -f 00-anomaly-config.yaml
+# 4. kubectl apply -f 01-ingest-tree.yaml
+# 5. Evaluate → update RETRIEVER_CORESET_PERCENTAGE to best result

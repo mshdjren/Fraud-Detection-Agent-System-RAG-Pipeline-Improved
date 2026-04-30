@@ -1,0 +1,581 @@
+"""
+Locust Load Test — Fraud Detection Pipeline V5.2
+=================================================
+
+V5.1 → V5.2 변경사항:
+  ★ page fault 유발 실험에 최적화
+      - 모든 Stage: /route [single] + /retrieve [rr] 단건 호출 유지
+        → /route-batch 미사용 (page fault 측정 왜곡 방지)
+      - wait_time 세분화: 각 Stage 목적에 맞게 조정
+      - SPAWN_RATE / TARGET_USERS env var 추가 (headless 자동화용)
+  ★ coreset 검증 실험 구조
+      - Stage 1: percolate 알고리즘 순수 성능 baseline
+      - Stage 2: HNSW page fault 유발 (coreset % 비교 핵심)
+      - Stage 3: end-to-end latency
+      - Stage 4: page fault 임계점 탐색 (aggressive, wait_time=0)
+  ★ on_stop 리포트: page_fault_delta Prometheus에서 읽는 방법 안내
+
+서버 사전 조건 (router.py / retriever.py):
+  asyncio.to_thread 적용 완료 필수 →
+  미적용 시 locust users를 늘려도 서버가 직렬 처리 → page fault 미발생
+
+page fault 실험 절차:
+  1. coreset 100%로 baseline 측정 (Stage 2, users=50)
+  2. coreset 10%로 동일 측정 → P99 및 page fault delta 비교
+  3. Stage 4로 임계점 탐색 (users 점진적 증가, wait_time=0)
+
+환경변수:
+  ROUTER_URL        http://anomaly-router:80
+  RETRIEVER_URL     http://anomaly-retriever:80
+  ORCHESTRATOR_URL  http://anomaly-orchestrator:80
+  ACTIVE_STAGE      "1" | "2" | "3" | "4" | "all"
+
+실행 예시:
+  # Stage 2 page fault 실험 (headless)
+  ACTIVE_STAGE=2 locust -f locustfile.py \\
+    --headless --users 50 --spawn-rate 5 --run-time 3m \\
+    --csv=results/stage2_coreset100
+
+  # Stage 4 임계점 탐색 (users 점진적 증가)
+  ACTIVE_STAGE=4 locust -f locustfile.py \\
+    --headless --users 100 --spawn-rate 10 --run-time 5m \\
+    --csv=results/stage4_pagefault
+"""
+
+import os
+import random
+import math
+import json
+import time as _time
+from locust import HttpUser, task, between, constant, events
+from locust.clients import HttpSession
+
+# ─────────────────────────────────────────────
+# Service URLs
+# ─────────────────────────────────────────────
+ROUTER_URL       = os.getenv("ROUTER_URL",       "http://anomaly-router:80")
+RETRIEVER_URL    = os.getenv("RETRIEVER_URL",     "http://anomaly-retriever:80")
+ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL",  "http://anomaly-orchestrator:80")
+
+ACTIVE_STAGE = os.getenv("ACTIVE_STAGE", "all")
+# ★ coreset sweep: 현재 실험 비율 라벨 (결과 JSON에 기록)
+CORESET_PCT  = os.getenv("CORESET_PCT",  "100")
+
+# ─────────────────────────────────────────────
+# Constants
+# ─────────────────────────────────────────────
+EMBEDDING_DIM = 576
+
+CATEGORICAL = {
+    "sex":              ["M", "F"],
+    "source":           ["Direct", "Ads", "SEO"],
+    "browser":          ["Chrome", "FireFox", "Safari", "IE"],
+    "weekday_purchase": ["Monday", "Tuesday", "Wednesday", "Thursday",
+                         "Friday", "Saturday", "Sunday"],
+    "month_purchase":   ["January", "February", "March", "April",
+                         "May", "June", "July", "August",
+                         "September", "October", "November", "December"],
+    "IP_country":       ["US", "CA", "UK", "DE", "FR", "KR", "JP"],
+}
+
+# ─────────────────────────────────────────────
+# Generators
+# ─────────────────────────────────────────────
+def generate_embedding() -> list:
+    result = []
+    for _ in range(EMBEDDING_DIM // 2):
+        u1 = random.random() or 1e-10
+        u2 = random.random()
+        mag = 0.3 * math.sqrt(-2.0 * math.log(u1))
+        result.append(mag * math.cos(2 * math.pi * u2))
+        result.append(mag * math.sin(2 * math.pi * u2))
+    if EMBEDDING_DIM % 2:
+        u1 = random.random() or 1e-10
+        u2 = random.random()
+        result.append(0.3 * math.sqrt(-2.0 * math.log(u1)) * math.cos(2 * math.pi * u2))
+    return result
+
+
+def generate_router_request() -> dict:
+    return {"embedding": generate_embedding()}
+
+
+def generate_transaction() -> dict:
+    return {
+        "purchase_value":   round(random.uniform(-2.5, 2.5), 4),
+        "age":              round(random.uniform(-2.0, 2.0), 4),
+        "sex":              random.choice(CATEGORICAL["sex"]),
+        "source":           random.choice(CATEGORICAL["source"]),
+        "browser":          random.choice(CATEGORICAL["browser"]),
+        "weekday_purchase": random.choice(CATEGORICAL["weekday_purchase"]),
+        "month_purchase":   random.choice(CATEGORICAL["month_purchase"]),
+        "IP_country":       random.choice(CATEGORICAL["IP_country"]),
+        "embedding":        generate_embedding(),
+    }
+
+
+# ─────────────────────────────────────────────
+# Stage 1: Router Only
+#
+# 목적: percolate + decision-tree 알고리즘 순수 성능 baseline.
+#       HNSW 없음 → page fault 발생 안 함.
+#       이 수치가 Stage 2/4에서 차감되는 Router 기여분.
+#
+# wait_time: between(0.1, 0.5) — 적당한 부하 (baseline 안정 측정)
+# ─────────────────────────────────────────────
+class RouterOnlyUser(HttpUser):
+    host      = ORCHESTRATOR_URL
+    wait_time = between(0.1, 0.5)
+    weight    = 1 if ACTIVE_STAGE in ("1", "all") else 0
+
+    def on_start(self):
+        self.router_client = HttpSession(
+            base_url=ROUTER_URL,
+            request_event=self.environment.events.request,
+            user=self,
+        )
+
+    @task(9)
+    def route_single(self):
+        """
+        /route [single] — 단건 percolate 호출.
+        Router asyncio.to_thread 적용 후:
+          users 50 → 50 threads 동시 ES percolate → 알고리즘 비교 기준값
+        """
+        with self.router_client.post(
+            "/route",
+            json=generate_router_request(),
+            headers={"Content-Type": "application/json"},
+            catch_response=True,
+            name="/route [single]",
+        ) as resp:
+            _validate_router_response(resp)
+
+    @task(1)
+    def health_check(self):
+        with self.router_client.get(
+            "/health",
+            name="/health [router]",
+            catch_response=True,
+        ) as resp:
+            if resp.status_code != 200:
+                resp.failure(f"HTTP {resp.status_code}")
+            else:
+                resp.success()
+
+
+# ─────────────────────────────────────────────
+# Stage 2: Router + Retriever
+#
+# 목적: HNSW page fault 유발 핵심 Stage.
+#       Router → Retriever 순차 단건 호출.
+#       coreset 100% vs 10% 비교 실험의 메인 Stage.
+#
+# wait_time: between(0.05, 0.2) — 더 aggressive (page fault 유발)
+#
+# 실험 방법:
+#   1) coreset=100%로 측정 (baseline)
+#   2) kubectl patch anomaly-config RETRIEVER_CORESET_PERCENTAGE=10
+#   3) 동일 users/spawn-rate로 재측정 → P99 및 /proc/vmstat 비교
+# ─────────────────────────────────────────────
+class RouterRetrieverUser(HttpUser):
+    host      = ORCHESTRATOR_URL
+    wait_time = between(0.05, 0.2)
+    weight    = 1 if ACTIVE_STAGE in ("2", "all") else 0
+
+    def on_start(self):
+        self.router_client = HttpSession(
+            base_url=ROUTER_URL,
+            request_event=self.environment.events.request,
+            user=self,
+        )
+        self.retriever_client = HttpSession(
+            base_url=RETRIEVER_URL,
+            request_event=self.environment.events.request,
+            user=self,
+        )
+
+    @task(9)
+    def router_then_retrieve(self):
+        """
+        /route [rr] → /retrieve [rr] 단건 순차.
+
+        병렬 처리 흐름 (asyncio.to_thread 적용 후):
+          locust 50 users
+          → 50개 /route 요청 동시 도달 → router 50 threads 병렬 ES percolate
+          → 각 user가 독립적으로 /retrieve 호출
+          → retriever 50 threads 병렬 HNSW 탐색
+          → 서로 다른 shard/segment 접근 → page fault 발생
+
+        측정값:
+          /retrieve [rr] P99 - /route [rr] P99 = HNSW 순수 latency
+          Prometheus: retriever_page_fault_delta (coreset% 별 비교)
+        """
+        emb = generate_embedding()
+
+        with self.router_client.post(
+            "/route",
+            json={"embedding": emb},
+            headers={"Content-Type": "application/json"},
+            catch_response=True,
+            name="/route [rr]",
+        ) as r_resp:
+            if r_resp.status_code != 200:
+                r_resp.failure(f"HTTP {r_resp.status_code}")
+                return
+            try:
+                router_data = r_resp.json()
+                if "primary_cluster_id" not in router_data:
+                    r_resp.failure("Missing primary_cluster_id")
+                    return
+                r_resp.success()
+            except Exception as e:
+                r_resp.failure(f"JSON parse: {e}")
+                return
+
+        cluster_ids = [c["cluster_id"] for c in router_data.get("top_k_clusters", [])]
+        vec_index   = router_data.get("vec_index", "")
+
+        with self.retriever_client.post(
+            "/retrieve",
+            json={
+                "embedding":   emb,
+                "cluster_ids": cluster_ids,
+                "vec_index":   vec_index,
+                "top_k":       5,
+            },
+            headers={"Content-Type": "application/json"},
+            catch_response=True,
+            name="/retrieve [rr]",
+        ) as ret_resp:
+            _validate_retriever_response(ret_resp)
+
+    @task(1)
+    def health_check(self):
+        with self.router_client.get(
+            "/health",
+            name="/health [router-rr]",
+            catch_response=True,
+        ) as resp:
+            if resp.status_code != 200:
+                resp.failure(f"HTTP {resp.status_code}")
+            else:
+                resp.success()
+
+
+# ─────────────────────────────────────────────
+# Stage 3: Full Pipeline
+#
+# 목적: end-to-end latency 측정 (Analyzer 포함).
+#       Analyzer 기여 = Stage 3 P99 − Stage 2 합산 P99
+#
+# wait_time: between(0.3, 1.0) — Analyzer 처리 고려
+# ─────────────────────────────────────────────
+class FullPipelineUser(HttpUser):
+    host      = ORCHESTRATOR_URL
+    wait_time = between(0.3, 1.0)
+    weight    = 1 if ACTIVE_STAGE in ("3", "all") else 0
+
+    @task(9)
+    def detect(self):
+        with self.client.post(
+            "/detect",
+            json=generate_transaction(),
+            catch_response=True,
+            name="/detect [full]",
+        ) as resp:
+            _validate_detect_response(resp)
+
+    @task(1)
+    def health_check(self):
+        with self.client.get(
+            "/health",
+            name="/health [orchestrator]",
+            catch_response=True,
+        ) as resp:
+            if resp.status_code != 200:
+                resp.failure(f"HTTP {resp.status_code}")
+            else:
+                resp.success()
+
+# ─────────────────────────────────────────────
+# Stage 4: Page Fault 임계점 탐색
+#
+# 목적: wait_time=0으로 최대 부하 인가.
+#       users를 점진적으로 늘려 page fault가 급증하는 임계점 탐색.
+#       coreset sampling 효과 검증 핵심 실험.
+#
+# 사용 방법:
+#   users=20  → page fault 없거나 적음 (warm 상태)
+#   users=50  → page fault 시작 여부 확인
+#   users=100 → 확실한 page fault 유발 (cold 상태)
+#
+# wait_time: constant(0) — 요청 간 대기 없음, 최대 압박
+# ─────────────────────────────────────────────
+class PageFaultProbeUser(HttpUser):
+    """
+    Stage 4 — HNSW page fault 임계점 탐색.
+
+    Router → Retriever 단건 순차 호출 (Stage 2와 동일 흐름).
+    차이점: wait_time=0 → 각 user가 응답 즉시 다음 요청 발사.
+            → ES HNSW graph segment 접근 최대 동시화.
+            → /proc/vmstat pgmajfault delta 급증 구간 탐색.
+
+    실험 절차:
+      ACTIVE_STAGE=4 --users 20  → pgmajfault delta 기록
+      ACTIVE_STAGE=4 --users 50  → delta 증가 여부 확인
+      ACTIVE_STAGE=4 --users 100 → 임계점 이후 P99 열화 확인
+    """
+    host      = ORCHESTRATOR_URL
+    wait_time = constant(0)
+    weight    = 1 if ACTIVE_STAGE in ("4", "all") else 0
+
+    def on_start(self):
+        self.router_client = HttpSession(
+            base_url=ROUTER_URL,
+            request_event=self.environment.events.request,
+            user=self,
+        )
+        self.retriever_client = HttpSession(
+            base_url=RETRIEVER_URL,
+            request_event=self.environment.events.request,
+            user=self,
+        )
+
+    @task(1)
+    def probe_pagefault(self):
+        """
+        /route [probe] → /retrieve [probe] 최대 부하 단건 호출.
+        name을 별도로 분리해 Stage 2 통계와 구분.
+        """
+        emb = generate_embedding()
+
+        with self.router_client.post(
+            "/route",
+            json={"embedding": emb},
+            headers={"Content-Type": "application/json"},
+            catch_response=True,
+            name="/route [probe]",
+        ) as r_resp:
+            if r_resp.status_code != 200:
+                r_resp.failure(f"HTTP {r_resp.status_code}")
+                return
+            try:
+                router_data = r_resp.json()
+                if "primary_cluster_id" not in router_data:
+                    r_resp.failure("Missing primary_cluster_id")
+                    return
+                r_resp.success()
+            except Exception as e:
+                r_resp.failure(f"JSON parse: {e}")
+                return
+
+        cluster_ids = [c["cluster_id"] for c in router_data.get("top_k_clusters", [])]
+        vec_index   = router_data.get("vec_index", "")
+
+        with self.retriever_client.post(
+            "/retrieve",
+            json={
+                "embedding":   emb,
+                "cluster_ids": cluster_ids,
+                "vec_index":   vec_index,
+                "top_k":       5,
+            },
+            headers={"Content-Type": "application/json"},
+            catch_response=True,
+            name="/retrieve [probe]",
+        ) as ret_resp:
+            _validate_retriever_response(ret_resp)
+
+
+# ─────────────────────────────────────────────
+# Response Validators
+# ─────────────────────────────────────────────
+
+def _validate_router_response(resp):
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+            if "primary_cluster_id" not in data:
+                resp.failure("Missing primary_cluster_id")
+            elif data.get("primary_cluster_id") is None:
+                resp.failure("primary_cluster_id is None")
+            else:
+                resp.success()
+        except Exception as e:
+            resp.failure(f"JSON parse error: {e}")
+    elif resp.status_code == 422:
+        resp.failure(f"Validation error: {resp.text[:200]}")
+    else:
+        resp.failure(f"HTTP {resp.status_code}")
+
+
+def _validate_retriever_response(resp):
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+            if "results" not in data:
+                resp.failure("Missing results field")
+            elif "top1_distance" not in data:
+                resp.failure("Missing top1_distance field")
+            else:
+                resp.success()
+        except Exception as e:
+            resp.failure(f"JSON parse error: {e}")
+    elif resp.status_code == 422:
+        resp.failure(f"Validation error: {resp.text[:200]}")
+    else:
+        resp.failure(f"HTTP {resp.status_code}")
+
+
+def _validate_detect_response(resp):
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+            required = ["classification", "confidence", "primary_cluster_id",
+                        "top_1_distance", "latency_ms"]
+            missing = [f for f in required if f not in data]
+            if missing:
+                resp.failure(f"Missing fields: {missing}")
+            elif data.get("classification") not in ("NORMAL", "ABNORMAL"):
+                resp.failure(f"Invalid classification: {data.get('classification')}")
+            else:
+                resp.success()
+        except Exception as e:
+            resp.failure(f"JSON parse error: {e}")
+    elif resp.status_code == 422:
+        resp.failure(f"Validation error: {resp.text[:200]}")
+    else:
+        resp.failure(f"HTTP {resp.status_code}")
+
+
+# ─────────────────────────────────────────────
+# Event Listeners
+# ─────────────────────────────────────────────
+
+# ─────────────────────────────────────────────
+# Result JSON Dump  (coreset sweep 자동화용)
+# ─────────────────────────────────────────────
+def _dump_result_json(stats, total):
+    """
+    on_test_stop 시 /tmp/locust_result_coreset{PCT}.json 에 요약 저장.
+    run_coreset_sweep.sh 가 kubectl cp 로 수집.
+    """
+    endpoints = {}
+    for (method, name), s in stats.entries.items():
+        if s.num_requests == 0:
+            continue
+        endpoints[name] = {
+            "rps":     round(s.total_rps, 3),
+            "p50_ms":  s.median_response_time,
+            "p95_ms":  s.get_response_time_percentile(0.95),
+            "p99_ms":  s.get_response_time_percentile(0.99),
+            "fail":    s.num_failures,
+        }
+
+    result = {
+        "coreset_pct":     CORESET_PCT,
+        "active_stage":    ACTIVE_STAGE,
+        "timestamp":       _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "total_requests":  total.num_requests,
+        "fail_ratio":      round(total.fail_ratio, 4),
+        "rps":             round(total.total_rps, 3),
+        "p50_ms":          total.median_response_time,
+        "p95_ms":          total.get_response_time_percentile(0.95),
+        "p99_ms":          total.get_response_time_percentile(0.99),
+        "endpoints":       endpoints,
+    }
+    out_path = f"/tmp/locust_result_coreset{CORESET_PCT}.json"
+    try:
+        with open(out_path, "w") as f:
+            json.dump(result, f, indent=2)
+        print(f" ★ Result saved → {out_path}")
+    except Exception as e:
+        print(f" ✗ Result dump failed: {e}")
+
+
+@events.test_start.add_listener
+def on_test_start(environment, **kwargs):
+    print("\n" + "=" * 70)
+    print(" Fraud Detection V5.2 - Page Fault / Latency Isolation Load Test")
+    print("=" * 70)
+    print(f" Router       : {ROUTER_URL}")
+    print(f" Retriever    : {RETRIEVER_URL}")
+    print(f" Orchestrator : {ORCHESTRATOR_URL}")
+    print()
+
+    stage_map = {
+        "1": "Stage 1 — RouterOnlyUser      (/route [single])            percolate baseline",
+        "2": "Stage 2 — RouterRetrieverUser (/route [rr] + /retrieve [rr]) page fault 실험",
+        "3": "Stage 3 — FullPipelineUser    (/detect [full])             end-to-end",
+        "4": "Stage 4 — PageFaultProbeUser  (/route [probe] + /retrieve [probe]) 임계점 탐색",
+        "all": "All Stages (UI mode)",
+    }
+    print(f" ▶ ACTIVE_STAGE = {ACTIVE_STAGE}  →  {stage_map.get(ACTIVE_STAGE, ACTIVE_STAGE)}")
+    print()
+    print(" 레이턴시 분해 공식:")
+    print("   HNSW 순수 latency = /retrieve [rr] P99  −  /route [rr] P99")
+    print("   Analyzer 기여     = /detect [full] P99  −  Stage2 합산 P99")
+    print()
+    print(" page fault 실험 절차:")
+    print("   1) ACTIVE_STAGE=2, coreset=100%  baseline 측정")
+    print("   2) kubectl patch anomaly-config RETRIEVER_CORESET_PERCENTAGE=10")
+    print("   3) kubectl rollout restart deployment anomaly-retriever -n elastic")
+    print("   4) 동일 users/spawn-rate 재측정 → P99 및 page_fault_delta 비교")
+    print("   5) ACTIVE_STAGE=4 로 임계점 users 탐색")
+    print()
+    print(" 사전 확인사항 (anomaly-config):")
+    print("   router.py  : asyncio.to_thread 적용 완료")
+    print("   retriever  : asyncio.to_thread 적용 완료")
+    print("=" * 70 + "\n")
+
+
+@events.test_stop.add_listener
+def on_test_stop(environment, **kwargs):
+    stats = environment.stats
+    total = stats.total
+    # ★ coreset sweep: 결과를 JSON으로 저장 (sweep 스크립트가 수집)
+    _dump_result_json(stats, total)
+
+    print("\n" + "=" * 70)
+    print(" Load Test Complete — Summary")
+    print("=" * 70)
+    print(f" Total Requests : {total.num_requests:,}")
+    print(f" Failures       : {total.num_failures:,} ({total.fail_ratio * 100:.1f}%)")
+    print(f" Median RT      : {total.median_response_time:.0f} ms")
+    print(f" P95 RT         : {total.get_response_time_percentile(0.95):.0f} ms")
+    print(f" P99 RT         : {total.get_response_time_percentile(0.99):.0f} ms")
+    print(f" Avg RPS        : {total.total_rps:.2f}")
+    print()
+    print(" Endpoint Breakdown:")
+    print(" " + "-" * 65)
+    for name, s in sorted(stats.entries.items(), key=lambda x: x[0]):
+        if s.num_requests == 0:
+            continue
+        p95 = s.get_response_time_percentile(0.95)
+        p99 = s.get_response_time_percentile(0.99)
+        print(f"  {name[1]}")  # (method, name) tuple → name만
+        print(f"    reqs={s.num_requests:,}  fail={s.num_failures:,}"
+              f"  med={s.median_response_time:.0f}ms"
+              f"  p95={p95:.0f}ms  p99={p99:.0f}ms  rps={s.total_rps:.1f}")
+    print()
+
+    p99_total = total.get_response_time_percentile(0.99)
+    goals = {
+        "P99 Latency < 1000 ms": p99_total < 1000,
+        "Failure Rate < 5%":     total.fail_ratio < 0.05,
+        "RPS > 10":              total.total_rps > 10,
+    }
+    print(" Goal Validation:")
+    for desc, passed in goals.items():
+        print(f"  {'✅' if passed else '❌'} {desc}")
+    print()
+    print(" page_fault_delta 확인:")
+    print("   kubectl exec -n elastic <retriever-pod> -- cat /proc/vmstat | grep pgmajfault")
+    print("   또는 Prometheus: retriever_page_fault_delta_bucket")
+    print()
+    print(" Coreset 변경:")
+    print("   kubectl patch configmap anomaly-config -n elastic \\")
+    print('     --patch \'{"data": {"RETRIEVER_CORESET_PERCENTAGE": "10"}}\'')
+    print("   kubectl rollout restart deployment anomaly-retriever -n elastic")
+    print("=" * 70 + "\n")

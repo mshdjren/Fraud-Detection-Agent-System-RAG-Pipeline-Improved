@@ -1,0 +1,525 @@
+"""
+Gaussian Augmented Data Ingestion - V2.2
+===================================
+
+[V2.2 변경사항]
+  ★ GCS 파일 명명 규칙 수정 (실제 경로 기준)
+    - GCS_GAUSSIAN_AUG_BASE: gaussian_aug_v5 → gaussian_aug
+    - npy 파일명:
+        non-chunk: {EMB_FILENAME_MIDDLE}_percentage_{pct}_mult{mult}.npy
+        chunk:     {EMB_FILENAME_MIDDLE}_percentage_{pct}_mult{mult}_chunk_{N}.npy
+    - parquet 파일명:
+        non-chunk: raw_plus_cluster_tree_percentage_{pct}_mult{mult}.parquet
+        chunk:     raw_plus_cluster_tree_percentage_{pct}_mult{mult}_chunk_{N}.parquet
+
+[V2.1 변경사항]
+  ★ persona 관련 코드 완전 제거
+      - aug 인덱스는 raw vec 데이터 전용, persona는 percolator 인덱스 전용
+      - persona 계산/저장은 ingest_tree_pipeline.py에서만 수행
+
+[V2.0 변경사항]
+  ① original_index → 매핑에 명시적 추가 (index=False, doc_values=False)
+      - aug parquet의 original_index 값을 _source에 저장
+      - 원본 row와의 연결 추적용 (GT 매핑, 디버깅)
+  ② ES doc _id: es_doc_id 사용 (유지 — aug 고유 ID)
+  ③ tree_id: 매핑 및 _source에서 완전 제거
+
+[설계 원칙 - V1 유지]
+  ★ 인덱스명: fraud_ecom_aug_{mult}x_{pct}pct_{vec_type}_vec
+  ★ row_pos 기반 embedding 참조 (parquet 행 위치)
+  ★ vec: index=False (Exact KNN / script_score)
+  ★ USE_CHUNK 모드: 대용량(20x/30x) chunk 순차 처리
+
+Usage:
+    GAUSSIAN_AUG_MULTIPLIERS=2,5,10 CORESET_PERCENTAGES=100,10,1 \\
+        python ingest_gaussian_aug.py
+
+    VEC_ELEMENT_TYPE=byte GAUSSIAN_AUG_MULTIPLIERS=5,10 \\
+        python ingest_gaussian_aug.py
+
+    USE_CHUNK=true GAUSSIAN_AUG_MULTIPLIERS=20,30 CORESET_PERCENTAGES=100 \\
+        N_CHUNKS=5 python ingest_gaussian_aug.py
+"""
+
+import os
+import time
+import json
+import numpy as np
+import pandas as pd
+from elasticsearch import Elasticsearch
+from elasticsearch.helpers import streaming_bulk
+
+# ===========================
+# Configuration
+# ===========================
+
+ES_URL   = os.getenv("ES_URL")
+PASSWORD = os.getenv("PASSWORD")
+
+GAUSSIAN_AUG_DATA_DIR = os.getenv("GAUSSIAN_AUG_DATA_DIR", "/data/gaussian_aug")
+GCS_GAUSSIAN_AUG_BASE = os.getenv("GCS_GAUSSIAN_AUG_BASE",
+                                   "gs://fraudecom/tree-search/gaussian_aug")
+
+GAUSSIAN_AUG_MULTIPLIERS = [
+    int(m.strip())
+    for m in os.getenv("GAUSSIAN_AUG_MULTIPLIERS", "2,5,10,20,30").split(",")
+    if m.strip()
+]
+CORESET_PERCENTAGES = [
+    int(p.strip())
+    for p in os.getenv("CORESET_PERCENTAGES", "100,10,1").split(",")
+    if p.strip()
+]
+
+# 변경 후: pct==100이고 mult>=20일 때만 chunk, 나머지는 single
+CHUNK_THRESHOLD_MULT = int(os.getenv("CHUNK_THRESHOLD_MULT", "20"))  # Configuration 섹션에 추가
+CHUNK_ONLY_PCT       = int(os.getenv("CHUNK_ONLY_PCT", "100"))       # chunk 대상 pct
+
+
+VEC_ELEMENT_TYPE = os.getenv("VEC_ELEMENT_TYPE", "float").strip().lower()
+assert VEC_ELEMENT_TYPE in ("float", "byte"), \
+    f"VEC_ELEMENT_TYPE must be 'float' or 'byte', got '{VEC_ELEMENT_TYPE}'"
+
+VEC_DIMS = int(os.getenv("VEC_DIMS", "576"))
+
+USE_CHUNK = os.getenv("USE_CHUNK", "false").strip().lower() == "true"
+N_CHUNKS  = int(os.getenv("N_CHUNKS", "5"))
+
+EMB_FILENAME_MIDDLE = os.getenv(
+    "EMB_FILENAME_MIDDLE",
+    "anollm_lr5e-05_standard_smolLM_train_embeddings_percentage"
+)
+
+CHUNK_SIZE      = int(os.getenv("BULK_CHUNK_SIZE",      "1000"))
+MAX_CHUNK_BYTES = int(os.getenv("BULK_MAX_CHUNK_BYTES",  str(20 * 1024 * 1024)))
+REQUEST_TIMEOUT = int(os.getenv("ES_REQUEST_TIMEOUT",    "120"))
+
+VEC_TYPE_LABEL = "int8" if VEC_ELEMENT_TYPE == "byte" else "float32"
+
+# ★ V2.1: persona 관련 env/코드 완전 제거
+#   aug 인덱스는 raw vec 데이터만 저장 (persona는 percolator 인덱스 전용).
+#   persona 계산/저장/업로드는 ingest_tree_pipeline.py에서만 수행.
+
+print(f"\n{'='*80}")
+print(f"GAUSSIAN AUG INGESTION V2.1")
+print(f"{'='*80}")
+print(f"Multipliers     : {GAUSSIAN_AUG_MULTIPLIERS}")
+print(f"Coreset pcts    : {CORESET_PERCENTAGES}")
+print(f"Vec type        : {VEC_ELEMENT_TYPE} ({VEC_TYPE_LABEL})")
+print(f"Vec dims        : {VEC_DIMS}")
+print(f"USE_CHUNK       : {USE_CHUNK}  (N_CHUNKS={N_CHUNKS})")
+print(f"Data dir        : {GAUSSIAN_AUG_DATA_DIR}")
+print()
+
+# ===========================
+# Elasticsearch Client
+# ===========================
+
+client = Elasticsearch(
+    [ES_URL],
+    verify_certs=False,
+    ssl_show_warn=False,
+    basic_auth=("elastic", PASSWORD),
+    request_timeout=REQUEST_TIMEOUT,
+)
+print(f"[es] Connected: {client.info()['cluster_name']}")
+
+# ===========================
+# Path Helpers
+# ===========================
+
+def local_parquet_path(mult: int, pct: int, chunk: int = None) -> str:
+    # GCS 파일명과 동일하게 로컬 저장
+    # non-chunk: raw_plus_cluster_tree_percentage_{pct}_mult{mult}.parquet
+    # chunk:     raw_plus_cluster_tree_percentage_{pct}_mult{mult}_chunk_{N}.parquet
+    if chunk is None:
+        fname = f"raw_plus_cluster_tree_percentage_{pct}_mult{mult}.parquet"
+    else:
+        fname = f"raw_plus_cluster_tree_percentage_{pct}_mult{mult}_chunk_{chunk}.parquet"
+    return os.path.join(GAUSSIAN_AUG_DATA_DIR, fname)
+
+
+def local_emb_path(mult: int, pct: int, chunk: int = None) -> str:
+    # GCS 파일명과 동일하게 로컬 저장
+    # non-chunk: {EMB_FILENAME_MIDDLE}_percentage_{pct}_mult{mult}.npy
+    # chunk:     {EMB_FILENAME_MIDDLE}_percentage_{pct}_mult{mult}_chunk_{N}.npy
+    if chunk is None:
+        fname = f"{EMB_FILENAME_MIDDLE}_percentage_{pct}_mult{mult}.npy"
+    else:
+        fname = f"{EMB_FILENAME_MIDDLE}_percentage_{pct}_mult{mult}_chunk_{chunk}.npy"
+    return os.path.join(GAUSSIAN_AUG_DATA_DIR, fname)
+
+
+def index_name(mult: int, pct: int) -> str:
+    return f"fraud_ecom_aug_{mult}x_{pct}pct_{VEC_TYPE_LABEL}_vec"
+
+
+def gcs_download(gcs_path: str, local_path: str):
+    """gsutil 대신 google-cloud-storage Python 클라이언트 사용."""
+    from google.cloud import storage
+
+    if os.path.exists(local_path):
+        print(f"  [skip] already exists: {local_path}")
+        return
+
+    print(f"  [gcs] download: {gcs_path} → {local_path}")
+
+    # gs://bucket/path/to/file 파싱
+    assert gcs_path.startswith("gs://"), f"Invalid GCS path: {gcs_path}"
+    without_prefix = gcs_path[len("gs://"):]
+    bucket_name, blob_name = without_prefix.split("/", 1)
+
+    client  = storage.Client()
+    bucket  = client.bucket(bucket_name)
+    blob    = bucket.blob(blob_name)
+    blob.download_to_filename(local_path)
+    print(f"  [gcs] ✅  {local_path}  ({os.path.getsize(local_path):,} bytes)")
+
+
+def gcs_parquet_path(mult: int, pct: int, chunk: int = None) -> str:
+    # GCS 실제 경로: gs://fraudecom/tree-search/gaussian_aug/
+    # non-chunk: raw_plus_cluster_tree_percentage_{pct}_mult{mult}.parquet
+    # chunk:     raw_plus_cluster_tree_percentage_{pct}_mult{mult}_chunk_{N}.parquet
+    if chunk is None:
+        fname = f"raw_plus_cluster_tree_percentage_{pct}_mult{mult}.parquet"
+    else:
+        fname = f"raw_plus_cluster_tree_percentage_{pct}_mult{mult}_chunk_{chunk}.parquet"
+    return f"{GCS_GAUSSIAN_AUG_BASE}/{fname}"
+
+
+def gcs_emb_path(mult: int, pct: int, chunk: int = None) -> str:
+    # GCS 실제 경로: gs://fraudecom/tree-search/gaussian_aug/
+    # non-chunk: {EMB_FILENAME_MIDDLE}_percentage_{pct}_mult{mult}.npy
+    # chunk:     {EMB_FILENAME_MIDDLE}_percentage_{pct}_mult{mult}_chunk_{N}.npy
+    if chunk is None:
+        fname = f"{EMB_FILENAME_MIDDLE}_percentage_{pct}_mult{mult}.npy"
+    else:
+        fname = f"{EMB_FILENAME_MIDDLE}_percentage_{pct}_mult{mult}_chunk_{chunk}.npy"
+    return f"{GCS_GAUSSIAN_AUG_BASE}/{fname}"
+
+# ===========================
+# Index Mapping
+# ===========================
+
+def gen_mapping(df_sample: pd.DataFrame) -> dict:
+    """
+    ★ V2.0 변경:
+      - tree_id: 매핑에서 완전 제거
+      - original_index: index=False, doc_values=False (저장 전용)
+        es_doc_id가 _id이므로 original_index는 추적용으로만 저장
+    """
+    props = {}
+    exclude_cols = {"tree_id"}           # ★ 완전 제거
+    no_search_cols = {"label", "original_index", "es_doc_id"}  # 저장 전용
+
+    for col in df_sample.columns:
+        if col in exclude_cols:
+            continue  # ★ tree_id: 매핑 자체에서 제외
+
+        if col == "cluster_id":
+            # retriever terms filter 필요 → index/doc_values 유지
+            props[col] = {"type": "integer"}
+
+        elif col == "leaf_id":
+            # 조회용, 집계 미사용
+            props[col] = {"type": "integer", "doc_values": False}
+
+        elif col in no_search_cols:
+            # 저장만, 검색/집계 미사용
+            props[col] = {"type": "integer", "index": False, "doc_values": False}
+
+        elif np.issubdtype(df_sample[col].dtype, np.integer):
+            props[col] = {"type": "integer", "index": False, "doc_values": False}
+
+        elif np.issubdtype(df_sample[col].dtype, np.floating):
+            props[col] = {"type": "float", "index": False, "doc_values": False}
+
+        else:
+            props[col] = {"type": "keyword", "index": False, "doc_values": False}
+
+    # vec 필드
+    # props["vec"] = {
+    #     "type":         "dense_vector",
+    #     "dims":         VEC_DIMS,
+    #     "index":        False,
+    #     "element_type": VEC_ELEMENT_TYPE,
+    # }
+
+    props["vec"] = {
+            "type": "dense_vector", 
+            "dims": VEC_DIMS,
+            "index": True, 
+            "similarity": "l2_norm",  # ★ 'cosine'에서 'l2_norm'으로 변경 필요
+            "element_type": VEC_ELEMENT_TYPE,
+        }
+
+    # return {"mappings": {"properties": props}}
+    return {"mappings": {"_source": {"excludes":["vec"]}, "properties": props}}
+
+# ===========================
+# int8 양자화
+# ===========================
+
+def to_int8(vec: np.ndarray) -> list:
+    norm = np.linalg.norm(vec)
+    if norm > 0:
+        vec = vec / norm
+    return np.clip(np.round(vec * 127), -127, 127).astype(int).tolist()
+
+# ===========================
+# Bulk Action Generator
+# ===========================
+
+# def gen_actions(df: pd.DataFrame, emb: np.ndarray, idx_name: str):
+def gen_actions(df: pd.DataFrame, emb: np.ndarray, idx_name: str, id_offset: int = 0):
+    """
+    ★ V2.0 변경:
+      - tree_id: _source에서 완전 제거
+      - original_index: _source에 유지 (int 변환)
+      - ES _id: es_doc_id (유지)
+      - 임베딩: row_pos 기반 (변경 없음)
+    """
+    use_int8  = (VEC_ELEMENT_TYPE == "byte")
+    skip_cols = {"tree_id"}   # ★ tree_id 제거
+    col_names = list(df.columns)
+
+    for row_pos, row in enumerate(df.itertuples(index=False, name=None)):
+        rec = dict(zip(col_names, row))
+
+        # ★ tree_id 제거
+        for col in skip_cols:
+            rec.pop(col, None)
+
+        # ES _id: es_doc_id (aug 고유 ID)
+        # doc_id = str(int(rec["es_doc_id"]))
+        doc_id = str(int(rec["es_doc_id"]) + id_offset)  # ← offset 가산
+
+        # 정수형 보장
+        for col in ("cluster_id", "leaf_id", "label", "original_index", "es_doc_id"):
+            if col in rec and rec[col] is not None:
+                try:
+                    rec[col] = int(rec[col])
+                except (ValueError, TypeError):
+                    pass
+
+        # row_pos 기반 embedding 참조
+        if row_pos >= len(emb):
+            print(f"[warn] row_pos={row_pos} >= emb size={len(emb)}, skip")
+            continue
+
+        raw_vec = emb[row_pos].astype(np.float32, copy=False)
+        rec["vec"] = to_int8(raw_vec) if use_int8 else raw_vec.tolist()
+
+        yield {
+            "_op_type": "index",
+            "_index":   idx_name,
+            "_id":      doc_id,
+            "_source":  rec,
+        }
+
+# ===========================
+# Bulk Ingestion
+# ===========================
+
+def bulk_ingest(actions, description: str) -> tuple:
+    t0 = time.perf_counter()
+    ok_count, fail_count, first_errors = 0, 0, []
+    for ok, item in streaming_bulk(
+        client, actions,
+        chunk_size=CHUNK_SIZE, max_chunk_bytes=MAX_CHUNK_BYTES,
+        raise_on_error=False, raise_on_exception=False,
+    ):
+        if ok:
+            ok_count += 1
+            if ok_count % 10000 == 0:
+                print(f"    Progress: {ok_count:,} indexed...")
+        else:
+            fail_count += 1
+            if len(first_errors) < 3:
+                first_errors.append(item)
+    elapsed = time.perf_counter() - t0
+    print(f"  {description}: ok={ok_count:,}, fail={fail_count}, time={elapsed:.2f}s")
+    if first_errors:
+        for e in first_errors[:2]:
+            print(f"    Error sample: {e}")
+    return ok_count, fail_count
+
+
+def log_index_stats(idx_name: str):
+    try:
+        client.indices.refresh(index=idx_name)
+        stats = client.cat.indices(index=idx_name, format="json")
+        if stats:
+            docs = stats[0].get("docs.count", "?")
+            size = stats[0].get("store.size", "?")
+            print(f"  [stats] docs={docs}, size={size}")
+    except Exception as e:
+        print(f"  [stats] error: {e}")
+
+# ===========================
+# Single File Processing
+# ===========================
+
+def process_single(mult: int, pct: int):
+    pq_path  = local_parquet_path(mult, pct)
+    emb_path = local_emb_path(mult, pct)
+
+    if not os.path.exists(pq_path):
+        raise FileNotFoundError(f"Parquet not found: {pq_path}")
+    if not os.path.exists(emb_path):
+        raise FileNotFoundError(f"Embedding not found: {emb_path}")
+
+    print(f"\n[parquet] Loading: {pq_path}")
+    df = pd.read_parquet(pq_path)
+    print(f"  Shape: {df.shape}")
+
+    print(f"[emb] Loading: {emb_path}")
+    emb = np.load(emb_path, mmap_mode='r')
+    print(f"  Shape: {emb.shape}")
+
+    if len(df) != len(emb):
+        raise ValueError(f"Row count mismatch: parquet={len(df):,}, emb={len(emb):,}")
+
+    idx = index_name(mult, pct)
+    print(f"\n[es] Creating index: {idx}")
+
+    mapping = gen_mapping(df)
+    client.options(ignore_status=[400, 404]).indices.delete(index=idx)
+    client.indices.create(index=idx, body=mapping)
+    print(f"  ✅ Created — vec_type={VEC_ELEMENT_TYPE}, dims={VEC_DIMS}, "
+          f"expected_docs={len(df):,}")
+
+    bulk_ingest(gen_actions(df, emb, idx), f"{mult}x_{pct}pct_{VEC_TYPE_LABEL}")
+    log_index_stats(idx)
+    del emb, df
+
+# ===========================
+# Chunk Processing
+# ===========================
+
+def process_chunks(mult: int, pct: int):
+    """
+    ★ V2.3 스트리밍 모드:
+      chunk N 다운로드 → bulk → npy + parquet 즉시 삭제 → chunk N+1
+      디스크 점유: 항상 1개 chunk 분량만 유지
+    """
+    idx = index_name(mult, pct)
+    print(f"\n[chunk] {idx}  n_chunks={N_CHUNKS}  mode=streaming(download→bulk→delete)")
+
+    # ── 1. chunk 0 parquet으로 매핑 생성 → 즉시 삭제 ─────────────
+    pq0 = local_parquet_path(mult, pct, chunk=0)
+    gcs_download(gcs_parquet_path(mult, pct, chunk=0), pq0)
+    df0 = pd.read_parquet(pq0)
+    mapping = gen_mapping(df0)
+    del df0
+    os.remove(pq0)  # ★ 매핑 완료 즉시 삭제 (루프에서 재다운로드)
+    print(f"  [mapping] chunk0 parquet deleted → loop에서 재다운로드")
+
+    client.options(ignore_status=[400, 404]).indices.delete(index=idx)
+    client.indices.create(index=idx, body=mapping)
+    print(f"  ✅ Created — vec_type={VEC_ELEMENT_TYPE}, dims={VEC_DIMS}")
+
+    id_offset = 0   # ★ 추가: 초기화
+
+    # ── 2. 청크별 스트리밍: 다운로드 → bulk → 즉시 삭제 ──────────
+    for chunk_i in range(N_CHUNKS):
+        pq_path  = local_parquet_path(mult, pct, chunk=chunk_i)
+        emb_path = local_emb_path(mult, pct, chunk=chunk_i)
+
+        # ★ 항상 다운로드 (이전 청크 처리 후 삭제됐으므로 파일 없음)
+        print(f"\n  [chunk {chunk_i}/{N_CHUNKS-1}] downloading...")
+        gcs_download(gcs_parquet_path(mult, pct, chunk=chunk_i), pq_path)
+        gcs_download(gcs_emb_path(mult, pct, chunk=chunk_i), emb_path)
+
+        print(f"  [chunk {chunk_i}/{N_CHUNKS-1}] loading...")
+        df  = pd.read_parquet(pq_path)
+        emb = np.load(emb_path)
+
+        print(f"    parquet: {df.shape}, emb: {emb.shape}")
+        if len(df) != len(emb):
+            raise ValueError(
+                f"Chunk {chunk_i} row mismatch: parquet={len(df):,}, emb={len(emb):,}"
+            )
+
+        # bulk_ingest(gen_actions(df, emb, idx),
+        #             f"chunk {chunk_i}/{N_CHUNKS-1} ({mult}x_{pct}pct)")
+        bulk_ingest(
+            gen_actions(df, emb, idx, id_offset=id_offset),  # ★ 수정: id_offset 전달
+            f"chunk {chunk_i}/{N_CHUNKS-1} ({mult}x_{pct}pct)"
+        )
+        id_offset += len(df)
+        del emb, df
+
+        # ★ bulk 완료 즉시 두 파일 모두 삭제
+        os.remove(emb_path)
+        os.remove(pq_path)
+        free_gb = os.statvfs(GAUSSIAN_AUG_DATA_DIR).f_bavail \
+                  * os.statvfs(GAUSSIAN_AUG_DATA_DIR).f_frsize / 1024**3
+        print(f"  🗑  deleted chunk {chunk_i}  |  disk free: {free_gb:.1f} GB")
+
+    log_index_stats(idx)
+
+# ===========================
+# Main
+# ===========================
+
+def main():
+    start = time.perf_counter()
+
+    combos = [(mult, pct)
+              for mult in GAUSSIAN_AUG_MULTIPLIERS
+              for pct  in CORESET_PERCENTAGES]
+
+    print(f"\nTotal combinations: {len(combos)}")
+    for mult, pct in combos:
+        print(f"  {index_name(mult, pct)}")
+
+    # for mult, pct in combos:
+    #     print(f"\n{'='*80}")
+    #     print(f"PROCESSING: {mult}x, {pct}%  →  {index_name(mult, pct)}")
+    #     print(f"{'='*80}")
+    #     try:
+    #         if USE_CHUNK:
+    #             process_chunks(mult, pct)
+    #         else:
+    #             process_single(mult, pct)
+    #     except Exception as e:
+    #         print(f"  ❌ Error ({mult}x_{pct}pct): {e}")
+    #         import traceback; traceback.print_exc()
+
+    for mult, pct in combos:
+        try:
+            use_chunk_for_this = (
+                USE_CHUNK
+                and pct == CHUNK_ONLY_PCT     # 100%만 chunk
+                and mult >= CHUNK_THRESHOLD_MULT  # 20x/30x만 chunk
+            )
+            if use_chunk_for_this:
+                process_chunks(mult, pct)
+            else:
+                process_single(mult, pct)
+        except Exception as e:
+            print(f"  ❌ Error ({mult}x_{pct}pct): {e}")
+            import traceback; traceback.print_exc()
+
+    elapsed = time.perf_counter() - start
+
+    print(f"\n{'='*80}")
+    print(f"✅ ALL DONE (V2.0)")
+    print(f"{'='*80}")
+    print(f"Multipliers     : {GAUSSIAN_AUG_MULTIPLIERS}")
+    print(f"Coreset pcts    : {CORESET_PERCENTAGES}")
+    print(f"Vec type        : {VEC_ELEMENT_TYPE} ({VEC_TYPE_LABEL})")
+    print(f"Total time      : {elapsed:.2f}s")
+
+    print(f"\n[verify] Final indices:")
+    client.indices.refresh(index="fraud_ecom_aug_*")
+    indices = client.cat.indices(index="fraud_ecom_aug_*", format="json")
+    for idx in sorted(indices, key=lambda x: x['index']):
+        docs = idx.get('docs.count', '0')
+        size = idx.get('store.size', '?')
+        print(f"  {idx['index']}: {docs} docs  ({size})")
+
+
+if __name__ == "__main__":
+    main()

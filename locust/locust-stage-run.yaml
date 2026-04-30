@@ -1,0 +1,260 @@
+# =====================================================================
+# Locust Stage Jobs — V5.0
+# =====================================================================
+#
+# 구조:
+#   Job [1] locust-stage1  → RouterOnlyUser       (percolate baseline)
+#   Job [2] locust-stage2  → RouterRetrieverUser   (HNSW 격리)
+#   Job [3] locust-stage3  → FullPipelineUser      (end-to-end)
+#
+# 핵심 변경:
+#   - --worker / --master-host 제거 → standalone 모드로 실행
+#   - ACTIVE_STAGE env var → locustfile의 weight 로직으로 클래스 선택
+#   - --user-classes 플래그 불필요 (weight=0 으로 자동 제외)
+#
+# 실행 순서:
+#   kubectl apply -f locust-stage-jobs.yaml
+#
+# 개별 실행:
+#   kubectl apply -f locust-stage-jobs.yaml --selector job-name=locust-stage1
+#
+# 결과 확인:
+#   kubectl logs -n elastic job/locust-stage1
+#   kubectl logs -n elastic job/locust-stage2
+#   kubectl logs -n elastic job/locust-stage3
+#
+# 재실행 (동일 이름으로):
+#   kubectl delete job locust-stage1 locust-stage2 locust-stage3 -n elastic
+#   kubectl apply -f locust-stage-jobs.yaml
+# =====================================================================
+
+---
+# =====================================================================
+# Job [1] — Stage 1: RouterOnlyUser (percolate baseline)
+# =====================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: locust-stage1
+  namespace: elastic
+  labels:
+    app: locust
+    stage: "1"
+spec:
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: locust
+        stage: "1"
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: locust-runner
+        image: locustio/locust:2.24.0
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "=================================================="
+          echo " Stage 1: RouterOnlyUser"
+          echo " ACTIVE_STAGE    : ${ACTIVE_STAGE}"
+          echo " ROUTER_URL      : ${ROUTER_URL}"
+          echo " ORCHESTRATOR_URL: ${ORCHESTRATOR_URL}"
+          echo "=================================================="
+
+          locust \
+            --locustfile=/home/locust/locustfile.py \
+            --headless \
+            --users 10 \
+            --spawn-rate 2 \
+            --run-time 2m \
+            --host=${ORCHESTRATOR_URL} \
+            --exit-code-on-error 0
+
+          echo "=================================================="
+          echo " Stage 1 Done."
+          echo "=================================================="
+
+        env:
+        - name: ACTIVE_STAGE
+          value: "1"                          # RouterOnlyUser 만 활성화
+        - name: ROUTER_URL
+          value: "http://anomaly-router:80"
+        - name: RETRIEVER_URL
+          value: "http://anomaly-retriever:80"
+        - name: ORCHESTRATOR_URL
+          value: "http://anomaly-orchestrator:80"
+
+        volumeMounts:
+        - name: locust-script
+          mountPath: /home/locust
+
+        resources:
+          requests:
+            cpu: 300m
+            memory: 256Mi
+          limits:
+            cpu: 800m
+            memory: 512Mi
+
+      volumes:
+      - name: locust-script
+        configMap:
+          name: locust-script
+
+---
+# =====================================================================
+# Job [2] — Stage 2: RouterRetrieverUser (HNSW 격리)
+# =====================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: locust-stage2
+  namespace: elastic
+  labels:
+    app: locust
+    stage: "2"
+spec:
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: locust
+        stage: "2"
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: locust-runner
+        image: locustio/locust:2.24.0
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "=================================================="
+          echo " Stage 2: RouterRetrieverUser"
+          echo " ACTIVE_STAGE    : ${ACTIVE_STAGE}"
+          echo " ROUTER_URL      : ${ROUTER_URL}"
+          echo " RETRIEVER_URL   : ${RETRIEVER_URL}"
+          echo " ORCHESTRATOR_URL: ${ORCHESTRATOR_URL}"
+          echo "=================================================="
+
+          locust \
+            --locustfile=/home/locust/locustfile.py \
+            --headless \
+            --users 10 \
+            --spawn-rate 2 \
+            --run-time 2m \
+            --host=${ORCHESTRATOR_URL} \
+            --exit-code-on-error 0
+
+          echo "=================================================="
+          echo " Stage 2 Done."
+          echo "=================================================="
+
+        env:
+        - name: ACTIVE_STAGE
+          value: "2"                          # RouterRetrieverUser 만 활성화
+        - name: ROUTER_URL
+          value: "http://anomaly-router:80"
+        - name: RETRIEVER_URL
+          value: "http://anomaly-retriever:80"
+        - name: ORCHESTRATOR_URL
+          value: "http://anomaly-orchestrator:80"
+
+        volumeMounts:
+        - name: locust-script
+          mountPath: /home/locust
+
+        resources:
+          requests:
+            cpu: 300m
+            memory: 256Mi
+          limits:
+            cpu: 800m
+            memory: 512Mi
+
+      volumes:
+      - name: locust-script
+        configMap:
+          name: locust-script
+
+---
+# =====================================================================
+# Job [3] — Stage 3: FullPipelineUser (end-to-end)
+# =====================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: locust-stage3
+  namespace: elastic
+  labels:
+    app: locust
+    stage: "3"
+spec:
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: locust
+        stage: "3"
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: locust-runner
+        image: locustio/locust:2.24.0
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "=================================================="
+          echo " Stage 3: FullPipelineUser"
+          echo " ACTIVE_STAGE    : ${ACTIVE_STAGE}"
+          echo " ORCHESTRATOR_URL: ${ORCHESTRATOR_URL}"
+          echo "=================================================="
+
+          locust \
+            --locustfile=/home/locust/locustfile.py \
+            --headless \
+            --users 10 \
+            --spawn-rate 2 \
+            --run-time 2m \
+            --host=${ORCHESTRATOR_URL} \
+            --exit-code-on-error 0
+
+          echo "=================================================="
+          echo " Stage 3 Done."
+          echo "=================================================="
+
+        env:
+        - name: ACTIVE_STAGE
+          value: "3"                          # FullPipelineUser 만 활성화
+        - name: ROUTER_URL
+          value: "http://anomaly-router:80"
+        - name: RETRIEVER_URL
+          value: "http://anomaly-retriever:80"
+        - name: ORCHESTRATOR_URL
+          value: "http://anomaly-orchestrator:80"
+
+        volumeMounts:
+        - name: locust-script
+          mountPath: /home/locust
+
+        resources:
+          requests:
+            cpu: 300m
+            memory: 256Mi
+          limits:
+            cpu: 800m
+            memory: 512Mi
+
+      volumes:
+      - name: locust-script
+        configMap:
+          name: locust-script

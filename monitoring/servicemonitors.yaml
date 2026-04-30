@@ -1,0 +1,222 @@
+# ===========================
+# GKE Managed Prometheus PodMonitoring
+# Updated for V3 Pipeline
+# ===========================
+
+# Elasticsearch PodMonitoring
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: elasticsearch
+  namespace: elastic
+spec:
+  selector:
+    matchLabels:
+      app.stateful/component: elasticsearch
+      elasticsearch.k8s.elastic.co/cluster-name: elasticsearch-ha
+  endpoints:
+  - port: 9114
+    interval: 30s
+    path: /metrics
+
+# ===========================
+# Fraud Detection Services
+# ===========================
+
+# 1. Router PodMonitoring
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: anomaly-router-monitoring
+  namespace: elastic
+  labels:
+    app: anomaly-router
+    tier: routing
+spec:
+  selector:
+    matchLabels:
+      app: anomaly-router
+  endpoints:
+  - port: http  # Named port from service definition
+    interval: 30s
+    path: /metrics
+    # V3 metrics to collect:
+    # - router_requests_total
+    # - percolate_query_latency_seconds
+    # - fallback_strategy_used_total
+    # - partial_match_score_distribution
+
+# 2. Retriever PodMonitoring
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: anomaly-retriever-monitoring
+  namespace: elastic
+  labels:
+    app: anomaly-retriever
+    tier: search
+spec:
+  selector:
+    matchLabels:
+      app: anomaly-retriever
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+    # V3 metrics to collect:
+    # - retriever_requests_total
+    # - vector_search_latency_seconds
+    # - coreset_enabled_requests_total
+    # - top_k_results_distribution
+
+# 3. Analyzer PodMonitoring
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: anomaly-analyzer-monitoring
+  namespace: elastic
+  labels:
+    app: anomaly-analyzer
+    tier: analysis
+spec:
+  selector:
+    matchLabels:
+      app: anomaly-analyzer
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+    # V3 metrics to collect:
+    # - analysis_requests_total
+    # - llm_inference_latency_seconds
+    # - llm_retry_attempts_total
+    # - rate_limit_waits_total
+    # - persona_enabled_requests_total
+
+# 4. Orchestrator PodMonitoring
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: anomaly-orchestrator-monitoring
+  namespace: elastic
+  labels:
+    app: anomaly-orchestrator
+    tier: api
+spec:
+  selector:
+    matchLabels:
+      app: anomaly-orchestrator
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+    # V3 metrics to collect:
+    # - pipeline_requests_total (with case label)
+    # - pipeline_latency_seconds
+    # - service_latency_seconds
+    # - circuit_breaker_state
+    # - cache_hits_total / cache_misses_total
+    # - retry_attempts_total
+    # - case_override_used_total (V3)
+    # - embedding_override_used_total (V3)
+    # - validation_errors_total (V3)
+
+# 5. Locust PodMonitoring (optional - for load testing metrics)
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: locust-monitoring
+  namespace: elastic
+  labels:
+    app: locust
+    tier: testing
+spec:
+  selector:
+    matchLabels:
+      app: locust
+      role: master
+  endpoints:
+  - port: 8089
+    interval: 30s
+    path: /stats/requests  # Locust stats endpoint
+    # Locust metrics:
+    # - locust_users
+    # - locust_requests
+    # - locust_failures
+    # - locust_response_time_percentiles
+
+# ===========================
+# ClusterPodMonitoring (cross-namespace)
+# ===========================
+
+# For monitoring pods across all namespaces
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: ClusterPodMonitoring
+metadata:
+  name: anomaly-detection-cluster-monitoring
+spec:
+  selector:
+    matchLabels:
+      tier: fraud-detection
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+
+# ===========================
+# Deployment Instructions
+# ===========================
+#
+# Apply all PodMonitoring resources:
+# kubectl apply -f servicemonitors-v3.yaml
+#
+# Verify deployment:
+# kubectl get podmonitoring -n elastic
+# kubectl describe podmonitoring anomaly-orchestrator-monitoring -n elastic
+#
+# Check metrics collection:
+# kubectl port-forward -n elastic svc/anomaly-orchestrator 8080:80 &
+# curl http://localhost:8080/metrics
+#
+# Query in Cloud Monitoring (Prometheus):
+# # V3 metrics
+# pipeline_requests_total{case="case1"}
+# case_override_used_total
+# embedding_override_used_total
+# validation_errors_total
+#
+# # Performance by case
+# histogram_quantile(0.95, 
+#   sum by (le, case) (rate(pipeline_latency_seconds_bucket[5m]))
+# )
+#
+# # Cache performance
+# sum(rate(cache_hits_total[5m])) 
+# / 
+# (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m])))
+#
+# Troubleshooting:
+# # Check if metrics are being scraped
+# kubectl logs -n gmp-system -l app.kubernetes.io/name=collector
+#
+# # Verify PodMonitoring targets
+# kubectl get podmonitoring -n elastic -o yaml
+#
+# # Test metrics endpoint manually
+# kubectl exec -it <pod-name> -n elastic -- curl localhost:8080/metrics
+#
+# Notes:
+# - Interval: 30s (default for GKE Managed Prometheus)
+# - Port: Use named port "http" from service definition
+# - Path: /metrics (Prometheus standard)
+# - Labels: Added tier labels for better organization
+# - V3 metrics are automatically collected from /metrics endpoint
+# - Recording rules in prometheus-rules-v3.yaml optimize dashboard queries
+# - Cloud Monitoring retention: 24 months for Prometheus metrics

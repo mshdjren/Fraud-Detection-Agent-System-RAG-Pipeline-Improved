@@ -1,0 +1,114 @@
+# ===========================
+# ServiceAccount (처음 한 번만 apply, 이후 생략 가능)
+# ===========================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evaluation-sa
+  namespace: elastic
+  annotations:
+    iam.gke.io/gcp-service-account: evaluation-sa@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+
+# evaluation-code ConfigMap 등록:
+# kubectl create configmap evaluation-code \
+#   --from-file=batch_inference.py \
+#   --from-file=gt_loader.py \
+#   --from-file=evaluation_metrics.py \
+#   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+
+---
+# ===========================
+# [1] Router Only
+#     용도: 클러스터 할당 품질 빠른 평가
+#     ★ V5: /route-batch (enable-internal-batch), Recall@5 미측정
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: evaluation-router-only
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: v5.0
+    pipeline: router-only
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        pipeline: router-only
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+      containers:
+      - name: evaluator
+        image: python:3.10-slim
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        - name: SKIP_ANALYZER
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_ANALYZER
+        - name: N_SAMPLES
+          value: "1000"
+        - name: BATCH_SIZE
+          value: "20"
+        - name: TIMEOUT
+          value: "300"
+        - name: CORESET_PERCENTAGE
+          value: "100"
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Evaluation V5.0 - Router Only"
+          echo "  experiment_case   : ${EXPERIMENT_CASE}"
+          echo "  percolate_version : ${PERCOLATE_QUERY_VERSION}"
+          echo "  skip_analyzer     : ${SKIP_ANALYZER}"
+          echo "================================================"
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx tqdm structlog scikit-learn google-cloud-storage
+          cd /app
+          python batch_inference.py \
+            --pipeline-mode         router_only \
+            --enable-internal-batch \
+            --experiment-case       ${EXPERIMENT_CASE} \
+            --percolate-version     ${PERCOLATE_QUERY_VERSION} \
+            --coreset-percentage    ${CORESET_PERCENTAGE} \
+            --n-samples             ${N_SAMPLES} \
+            --batch-size            ${BATCH_SIZE} \
+            --timeout               ${TIMEOUT} \
+            --output-dir            /results
+          [ -f /results/summary.txt ] && cat /results/summary.txt
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            cpu: 1000m
+            memory: 4Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code

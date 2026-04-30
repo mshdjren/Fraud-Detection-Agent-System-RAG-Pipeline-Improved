@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# =====================================================================
+# run_coreset_sweep.sh — Coreset 비율별 Locust 3-run 자동화 (v2.0)
+# =====================================================================
+
+set -euo pipefail
+
+NS="elastic"
+LOCUST_DEPLOY="locust-master"
+LOCUST_SVC="locust"
+LOCUST_PORT=8089
+ACTIVE_STAGE="${ACTIVE_STAGE:-2}"
+
+# ★ 실험 파라미터
+USERS_LIST=(10 20 50 100 200)
+SPAWN_RATE=10
+RUN_DURATION=90
+COOLDOWN=15
+
+mkdir -p results
+
+# ─────────────────────────────────────────────
+# 헬퍼 함수
+# ─────────────────────────────────────────────
+
+# 스크립트 종료 시(에러 포함) 포트포워딩 정리
+cleanup() {
+    echo "  🧹 Cleaning up port-forwarding..."
+    pkill -f "port-forward.*$LOCUST_PORT" 2>/dev/null || true
+    # Windows 환경을 고려한 taskkill 시도
+    if command -v taskkill &> /dev/null; then
+        taskkill //F //IM kubectl.exe //T 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
+wait_rollout() {
+    local deploy=$1
+    echo "  ⏳ rollout wait: $deploy"
+    kubectl rollout status deployment/"$deploy" -n "$NS" --timeout=180s
+    sleep 5 # 엔드포인트 안정화 대기
+}
+
+locust_api() {
+    curl -sf --retry 3 --retry-delay 2 "$@"
+}
+
+start_portforward() {
+    echo "  🔍 Checking port $LOCUST_PORT..."
+    
+    # 1. 기존 포트 점유 프로세스 강제 종료 (pkill + taskkill 조합)
+    pkill -f "port-forward.*$LOCUST_PORT" 2>/dev/null || true
+    sleep 2
+
+    # 2. 포트포워드 시작 (stderr 로그 무시)
+    echo "  📡 Starting new port-forward to $LOCUST_SVC..."
+    kubectl port-forward -n "$NS" svc/"$LOCUST_SVC" "${LOCUST_PORT}:${LOCUST_PORT}" > /dev/null 2>&1 &
+    PF_PID=$!
+    
+    # 3. 연결 확인 대기 루프 (최대 10초)
+    echo -n "  ⏳ Waiting for port-forward readiness..."
+    for i in {1..10}; do
+        if curl -sf "http://localhost:${LOCUST_PORT}/stats/requests" &>/dev/null; then
+            echo " [OK]"
+            return 0
+        fi
+        echo -n "."
+        sleep 2
+    done
+    echo " [FAIL] Could not connect to Locust API"
+    return 1
+}
+
+# ─────────────────────────────────────────────
+# 메인 루프
+# ─────────────────────────────────────────────
+for PCT in 10 1; do
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  [Coreset ${PCT}%]  VEC_INDEX_CORESET_PCT=${PCT}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # 1. ConfigMap 패치
+    echo "  🔧 Updating config..."
+    kubectl patch configmap anomaly-config -n "$NS" \
+      --patch "{\"data\": {\"VEC_INDEX_CORESET_PCT\": \"${PCT}\"}}"
+
+    # 2. 서비스 재시작 및 대기
+    kubectl rollout restart deployment/anomaly-router deployment/anomaly-retriever -n "$NS"
+    wait_rollout anomaly-router
+    wait_rollout anomaly-retriever
+    echo "  ✅ router + retriever ready"
+
+    # 3. Locust 재설정 (환경변수 주입)
+    kubectl set env deployment/"$LOCUST_DEPLOY" \
+      ACTIVE_STAGE="$ACTIVE_STAGE" CORESET_PCT="$PCT" -n "$NS"
+    wait_rollout "$LOCUST_DEPLOY"
+    echo "  ✅ locust ready (CORESET_PCT=$PCT)"
+
+    # 4. Port-forward (안정성 강화 버전)
+    start_portforward
+
+    # 5. users 단계별 실행
+    for USERS in "${USERS_LIST[@]}"; do
+        echo ""
+        echo "  ▶ users=${USERS}  spawn_rate=${SPAWN_RATE}  duration=${RUN_DURATION}s"
+
+        # 테스트 시작
+        locust_api -X POST "http://localhost:${LOCUST_PORT}/swarm" \
+          -d "user_count=${USERS}&spawn_rate=${SPAWN_RATE}" > /dev/null
+
+        echo "    ⏱  running ${RUN_DURATION}s ..."
+        ELAPSED=0
+        POLL_INTERVAL=15
+        while [[ $ELAPSED -lt $RUN_DURATION ]]; do
+            sleep "$POLL_INTERVAL"
+            ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
+
+            LIVE=$(curl -sf --max-time 5 "http://localhost:${LOCUST_PORT}/stats/requests" 2>/dev/null)
+            if [[ -n "$LIVE" ]]; then
+                STAT=$(echo "$LIVE" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin).get('stats_total', {})
+    rps  = round(d.get('current_rps', d.get('total_rps', 0)), 1)
+    p99  = int(d.get('response_time_percentile_99', 0))
+    fail = d.get('num_failures', 0)
+    print(f'{rps} {p99} {fail}')
+except:
+    print('0 0 0')
+" 2>/dev/null || echo "0 0 0")
+                read RPS P99 FAIL <<< "$STAT"
+                printf "    [%3ds/%ds]  rps=%-6s  p99=%-6s ms  fail=%s\n" \
+                    "$ELAPSED" "$RUN_DURATION" "$RPS" "$P99" "$FAIL"
+            fi
+        done
+
+        # 통계 수집
+        OUT="results/coreset${PCT}_users${USERS}.json"
+        locust_api "http://localhost:${LOCUST_PORT}/stats/requests" > "$OUT"
+        echo "    💾 saved → ${OUT}"
+
+        # 테스트 중지
+        locust_api "http://localhost:${LOCUST_PORT}/stop" > /dev/null
+        echo "    ⏸  cooldown ${COOLDOWN}s ..."
+        sleep "$COOLDOWN"
+    done
+
+    # 6. JSON 덤프 수집
+    LOCUST_POD=$(kubectl get pod -n "$NS" -l app=locust,role=master \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    if [[ -n "$LOCUST_POD" ]]; then
+        DUMP_FILE="results/coreset${PCT}_result.json"
+        kubectl cp "${NS}/${LOCUST_POD}:/tmp/locust_result_coreset${PCT}.json" \
+          "$DUMP_FILE" 2>/dev/null && echo "  💾 dump saved → ${DUMP_FILE}" \
+          || echo "  ⚠️  dump not found"
+    fi
+
+    # 다음 PCT를 위해 포트포워드 종료
+    cleanup
+done
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  All runs complete. Results are in the 'results/' folder."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

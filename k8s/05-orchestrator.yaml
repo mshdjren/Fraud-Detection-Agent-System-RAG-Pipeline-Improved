@@ -1,0 +1,207 @@
+# ServiceAccount (최소 권한)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: anomaly-orchestrator
+  namespace: elastic
+  labels:
+    app: anomaly-orchestrator
+    tier: api
+
+---
+# ConfigMap (환경 변수용)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anomaly-orchestrator-config
+  namespace: elastic
+  labels:
+    app: anomaly-orchestrator
+data:
+  # ROUTER_TIMEOUT: "5"
+  ROUTER_TIMEOUT: "15"
+  # RETRIEVER_TIMEOUT: "10"
+  RETRIEVER_TIMEOUT: "15"
+  # ANALYZER_TIMEOUT: "300"
+  ANALYZER_TIMEOUT: "1200"
+  TOTAL_TIMEOUT: "1200"
+  # CB_FAILURE_THRESHOLD: "10"
+  CB_FAILURE_THRESHOLD: "9999"
+  # CB_RECOVERY_TIMEOUT: "60"
+  CB_RECOVERY_TIMEOUT: "5"
+  # MAX_RETRIES: "5"
+  MAX_RETRIES: "1"
+  # RETRY_BACKOFF_FACTOR: "4"
+  RETRY_BACKOFF_FACTOR: "1"
+  # RETRY_INITIAL_WAIT: "2"
+  RETRY_INITIAL_WAIT: "1"
+  ENABLE_CACHE: "false"
+  # ENABLE_CACHE: "true"
+  CACHE_TTL: "600"
+
+---
+# Deployment (Orchestrator)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-orchestrator
+  namespace: elastic
+  labels:
+    app: anomaly-orchestrator
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly-orchestrator
+  template:
+    metadata:
+      labels:
+        app: anomaly-orchestrator
+        tier: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: anomaly-orchestrator
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["app-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: anomaly-orchestrator
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: orchestrator
+        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/anomaly-orchestrator:1.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: ROUTER_URL
+          value: "http://anomaly-router:80"
+        - name: RETRIEVER_URL
+          value: "http://anomaly-retriever:80"
+        - name: ANALYZER_URL
+          #api: gemini flash lite 2.5 
+          # value: "http://anomaly-analyzer:80"
+          #local analyzer
+          value: "http://local-analyzer:80"
+        # ... (기존 env 설정들 동일) ...
+        - name: ROUTER_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: ROUTER_TIMEOUT
+        - name: RETRIEVER_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: RETRIEVER_TIMEOUT
+        - name: ANALYZER_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: ANALYZER_TIMEOUT
+        - name: TOTAL_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: TOTAL_TIMEOUT
+        - name: CB_FAILURE_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: CB_FAILURE_THRESHOLD
+        - name: CB_RECOVERY_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: CB_RECOVERY_TIMEOUT
+        - name: MAX_RETRIES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: MAX_RETRIES
+        - name: RETRY_BACKOFF_FACTOR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: RETRY_BACKOFF_FACTOR
+        - name: RETRY_INITIAL_WAIT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: RETRY_INITIAL_WAIT
+        - name: ENABLE_CACHE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: ENABLE_CACHE
+        - name: CACHE_TTL
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: CACHE_TTL
+        
+        # ✅ Volume Mount 추가
+        volumeMounts:
+        - name: code-volume
+          mountPath: /app/orchestrator.py
+          subPath: orchestrator.py
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+
+      # ✅ Volume 선언 추가
+      volumes:
+      - name: code-volume
+        configMap:
+          name: orchestrator-code
+
+---
+# Service (LoadBalancer)
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-orchestrator
+  namespace: elastic
+  labels:
+    app: anomaly-orchestrator
+spec:
+  type: LoadBalancer
+  selector:
+    app: anomaly-orchestrator
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP

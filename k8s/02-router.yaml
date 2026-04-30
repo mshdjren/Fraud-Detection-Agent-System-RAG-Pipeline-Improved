@@ -1,0 +1,389 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-router
+  namespace: elastic
+  labels:
+    app: anomaly-router
+    tier: routing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly-router
+  template:
+    metadata:
+      labels:
+        app: anomaly-router
+        tier: routing
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: ingest-sa
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["serving-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: anomaly-router
+              topologyKey: kubernetes.io/hostname
+
+      # ===========================
+      # Init Container: GCS 아티팩트 다운로드
+      # ===========================
+      #
+      # ① PCA 모델 (pca_* 케이스만 존재)
+      #     GCS: {GCS_TREE_BASE}/{EXPERIMENT_CASE}/pca_model.joblib
+      #     gsutil stat으로 존재 여부 확인 후 다운로드 (비-PCA 케이스는 skip)
+      #
+      # ② Centroid 행렬 (모든 케이스, centroid fallback 필수)
+      #     GCS: {GCS_TREE_BASE}/k{N_CLUSTERS}/cluster_centroids.npy
+      #     shape=(K, D)  K=N_CLUSTERS, D=experiment_case vector_dim
+      #     ★ v5.1: experiment_case embedding 공간(PCA 후)에서 정의됨
+      #       pca_64_k100 → (100, 64),  k150(emb_vectors) → (150, 576)
+      initContainers:
+      - name: download-artifacts
+        image: google/cloud-sdk:slim
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: GCS_TREE_BASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GCS_TREE_BASE
+        - name: N_CLUSTERS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: N_CLUSTERS
+
+        command: ["bash", "-lc"]
+        args:
+          - |
+            set -euo pipefail
+
+            echo "[init] Experiment case : ${EXPERIMENT_CASE}"
+            echo "[init] GCS_TREE_BASE   : ${GCS_TREE_BASE}"
+            echo "[init] N_CLUSTERS      : ${N_CLUSTERS}"
+
+            # ── ① PCA 모델 ──────────────────────────────────────────
+            GCS_PCA="${GCS_TREE_BASE}/${EXPERIMENT_CASE}/pca_model.joblib"
+            DEST_PCA="/data/pca_model.joblib"
+            echo "[init] PCA GCS: ${GCS_PCA}"
+
+            if gsutil -q stat "${GCS_PCA}" 2>/dev/null; then
+              echo "[init] Downloading pca_model.joblib ..."
+              gsutil cp "${GCS_PCA}" "${DEST_PCA}"
+              echo "[init] OK pca_model $(du -sh ${DEST_PCA} | cut -f1)"
+            else
+              echo "[init] pca_model not found → non-PCA case, skipping."
+            fi
+
+            # ── ② Centroid 행렬 ─────────────────────────────────────
+            # ★ v5.1: {GCS_TREE_BASE}/{EXPERIMENT_CASE}/cluster_centroids.npy
+            #         shape=(K, D)  D = experiment_case vector_dim (PCA 후)
+            if [ -z "${N_CLUSTERS}" ]; then
+              echo "[init] WARNING: N_CLUSTERS 미설정 — centroid fallback 불가"
+              echo "[init] 00-anomaly-config.yaml의 N_CLUSTERS를 설정하세요."
+            else
+              GCS_CENTROID="${GCS_TREE_BASE}/${EXPERIMENT_CASE}/cluster_centroids.npy"
+              DEST_CENTROID="/data/cluster_centroids.npy"
+              echo "[init] Centroid GCS: ${GCS_CENTROID}"
+
+              if gsutil -q stat "${GCS_CENTROID}" 2>/dev/null; then
+                echo "[init] Downloading cluster_centroids.npy ..."
+                gsutil cp "${GCS_CENTROID}" "${DEST_CENTROID}"
+                echo "[init] OK centroids $(du -sh ${DEST_CENTROID} | cut -f1)"
+              else
+                echo "[init] WARNING: cluster_centroids.npy not found at ${GCS_CENTROID}"
+                echo "[init] centroid fallback 불가 — percolate 실패 시 500 반환됨"
+              fi
+            fi
+
+        volumeMounts:
+        - name: model-data
+          mountPath: /data
+
+      # ===========================
+      # Main Container
+      # ===========================
+      containers:
+      - name: router
+        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/anomaly-router:2.0
+        imagePullPolicy: Always
+
+        ports:
+        - containerPort: 8000
+          name: http
+
+        env:
+        # ── Elasticsearch ──────────────────────────────────
+        - name: ES_URL
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_URL
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-ha-es-elastic-user
+              key: elastic
+        - name: ES_REQUEST_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_REQUEST_TIMEOUT
+
+        # ── Experiment ────────────────────────────────────
+        # EXPERIMENT_CASE: 어떤 percolator 인덱스를 쓸지 + PCA 전처리 여부 결정
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+
+        # PERCOLATE_QUERY_VERSION: 라우터가 사용할 query 버전 (단일)
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+
+        # PCA 모델 로컬 경로 (initContainer가 /data에 다운로드)
+        - name: PCA_MODEL_PATH
+          value: "/data/pca_model.joblib"
+
+        # ★ v5.1: Centroid 행렬 경로 (initContainer가 다운로드)
+        #   GCS: {GCS_TREE_BASE}/k{N_CLUSTERS}/cluster_centroids.npy
+        #   shape=(K, D)  D = experiment_case vector_dim (PCA 후)
+        - name: CENTROID_PATH
+          value: "/data/cluster_centroids.npy"
+
+        # N_CLUSTERS: centroid GCS 경로 결정용 K값
+        #   EXPERIMENT_CASE suffix(k100 등)에서 자동 파싱, 없으면 이 값 사용
+        - name: N_CLUSTERS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: N_CLUSTERS
+
+        # GCS_TREE_BASE: centroid / pca 파일 GCS 기본 경로
+        - name: GCS_TREE_BASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GCS_TREE_BASE
+
+        # ★ v5: SKIP_ANALYZER — percolate 스킵, 순수 vec 성능 측정
+        - name: SKIP_ANALYZER
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_ANALYZER
+
+        # ★ v5: vec_index 동적 결정 파라미터
+        #   router가 이 값들로 retriever에 전달할 ES 인덱스명 결정
+        #   VEC_INDEX_CORESET_PCT: 원본 coreset percentage (100 | 10 | 1)
+        - name: VEC_INDEX_CORESET_PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VEC_INDEX_CORESET_PCT
+        #   AUG_MULTIPLIER: "" = 원본 coreset, "10" = 10x aug 인덱스 사용
+        - name: AUG_MULTIPLIER
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: AUG_MULTIPLIER
+        - name: AUG_PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: AUG_PCT
+        - name: VEC_TYPE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VEC_TYPE
+
+        # ── Feature Control ───────────────────────────────
+        - name: PERSONA_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERSONA_ENABLED
+
+        - name: CORESET_HOT_PERCENTILE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_HOT_PERCENTILE
+
+        #Bucketization 변수
+        - name: ENABLE_BUCKETIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ENABLE_BUCKETIZATION
+        - name: BUCKET_DEPTH_PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: BUCKET_DEPTH_PCT
+
+        # ── Cache ────────────────────────────────────────
+        - name: CACHE_TTL_HOT
+          value: "3600"
+        - name: CACHE_TTL_COLD
+          value: "300"
+
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+
+        # resources:
+        #   requests:
+        #     cpu: 250m
+        #     memory: 512Mi
+        #   limits:
+        #     cpu: 1000m
+        #     memory: 1Gi
+
+        # for page-fault
+        resources:
+          requests:
+            cpu: "500m"      # 0.5코어 보장 (동시 접속 처리용)
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+
+        volumeMounts:
+        - name: code-volume
+          mountPath: /app/router.py
+          subPath: router.py
+        - name: model-data
+          mountPath: /data
+
+      volumes:
+      - name: code-volume
+        configMap:
+          name: router-code
+      - name: model-data
+        emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-router
+  namespace: elastic
+  labels:
+    app: anomaly-router
+spec:
+  type: ClusterIP
+  selector:
+    app: anomaly-router
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000
+
+---
+# ===========================
+# Router-Specific ConfigMap
+# ===========================
+# ★ v5.1: partial score fallback 제거 → PARTIAL_FALLBACK_MIN_SCORE / EARLY_STOP_THRESHOLD 삭제
+# vec_index / centroid 관련 설정은 anomaly-config에서 공유 관리
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anomaly-router-config
+  namespace: elastic
+data: {}
+
+# ===========================
+# 00-anomaly-config.yaml 필요 키 (참고)
+# ===========================
+#
+# 아래 키들이 anomaly-config에 존재해야 함:
+#
+#   EXPERIMENT_CASE:         "pca_64_k100"
+#   PERCOLATE_QUERY_VERSION: "v2"
+#   GCS_TREE_BASE:           "gs://fraudecom/tree-search/tree_fraudecom"
+#   N_CLUSTERS:              "100"          ← centroid GCS 경로 k{K}
+#   PERSONA_ENABLED:         "true"
+#   CORESET_HOT_PERCENTILE:  "70"
+#   SKIP_ANALYZER:           "false"
+#   VEC_INDEX_CORESET_PCT:   "100"
+#   AUG_MULTIPLIER:          ""
+#   AUG_PCT:                 "100"
+#   VEC_TYPE:                "float32"
+#
+# ===========================
+# Experiment Case 교체 방법
+# ===========================
+#
+# 1. 00-anomaly-config.yaml의 EXPERIMENT_CASE 변경
+#    예) pca_64 → k100
+# 2. kubectl apply -f 00-anomaly-config.yaml
+# 3. kubectl rollout restart deployment/anomaly-router -n elastic
+#    → initContainer가 새 케이스의 pca_model.joblib 재다운로드 시도
+#      (k100은 파일 없으므로 skip → main container에서 pca_model=None으로 기동)
+#
+# ===========================
+# Deploy Instructions
+# ===========================
+#
+# 1. ConfigMap 적용:
+#    kubectl apply -f 00-anomaly-config.yaml
+#    kubectl apply -f 02-router.yaml
+#
+# 2. router-code ConfigMap 생성:
+#    kubectl create configmap router-code \
+#      --from-file=router.py=apps/router.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# 3. 확인:
+#    kubectl get pods -n elastic -l app=anomaly-router
+#    kubectl logs -n elastic -l app=anomaly-router --tail=50
+#
+# 4. 테스트 (embedding 포함):
+  #  curl -X POST http://localhost:8000/route ^
+  #    -H "Content-Type: application/json" ^
+  #    -d '{"embedding": [0.12, -0.45, ...576개...]}'

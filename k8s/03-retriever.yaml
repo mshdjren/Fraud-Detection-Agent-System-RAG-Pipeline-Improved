@@ -1,0 +1,250 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anomaly-retriever-config
+  namespace: elastic
+data:
+  TOP_K: "5"
+  # ★ v5: EXPERIMENT_LABEL — Prometheus 레이블 / locust 연동용
+  #   실험 케이스 구분을 위해 배포 시 override 권장
+  EXPERIMENT_LABEL: "baseline"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-retriever
+  namespace: elastic
+  labels:
+    app: anomaly-retriever
+    tier: search
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly-retriever
+  template:
+    metadata:
+      labels:
+        app: anomaly-retriever
+        tier: search
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: ingest-sa
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["serving-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: anomaly-retriever
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: retriever
+        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/anomaly-retriever:2.0
+        imagePullPolicy: Always
+
+        ports:
+        - containerPort: 8001
+          name: http
+
+        env:
+        # ── Elasticsearch ──────────────────────────────────────
+        - name: ES_URL
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_URL
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-ha-es-elastic-user
+              key: elastic
+        - name: ES_REQUEST_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_REQUEST_TIMEOUT
+
+        # ── Experiment ────────────────────────────────────────
+        # ★ v5: vec_index는 router가 동적으로 결정해 각 요청에 포함.
+        #   RETRIEVER_CORESET_PERCENTAGE 제거 (더 이상 직접 인덱스 결정 안 함)
+        - name: EXPERIMENT_LABEL
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-retriever-config
+              key: EXPERIMENT_LABEL
+
+        # ── Search ───────────────────────────────────────────
+        - name: TOP_K
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-retriever-config
+              key: TOP_K
+
+        # SEARCH_MODE: exact(Exact NN) | hnsw(HNSW)
+        #   exact: vec index=False 환경 (원본 coreset 인덱스)
+        #   hnsw:          vec index=True 환경  (gaussian_aug 인덱스 + 기본 baseline)
+        - name: SEARCH_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SEARCH_MODE
+
+        # KNN_NUM_CANDIDATES: knn 모드에서 HNSW 후보 수 (정확도/속도 trade-off)
+        - name: KNN_NUM_CANDIDATES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: KNN_NUM_CANDIDATES
+
+        # ★ v5: SKIP_ANALYZER — cluster_id filter 제거 → 전체 인덱스 순수 vec 검색
+        - name: SKIP_ANALYZER
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_ANALYZER
+
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+
+        # resources:
+        #   requests:
+        #     cpu: 200m
+        #     memory: 512Mi
+        #   limits:
+        #     cpu: 1000m
+        #     memory: 1Gi
+
+        # for page fault
+        resources:
+          requests:
+            cpu: "500m"      # 0.5코어 보장 (동시 접속 처리용)
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+
+        volumeMounts:
+        - name: code-volume
+          mountPath: /app/retriever.py
+          subPath: retriever.py
+
+      volumes:
+      - name: code-volume
+        configMap:
+          name: retriever-code
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-retriever
+  namespace: elastic
+  labels:
+    app: anomaly-retriever
+spec:
+  type: ClusterIP
+  selector:
+    app: anomaly-retriever
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8001
+
+# ---
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: anomaly-retriever-hpa
+#   namespace: elastic
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: anomaly-retriever
+#   minReplicas: 1
+#   maxReplicas: 3
+#   metrics:
+#   - type: Resource
+#     resource:
+#       name: cpu
+#       target:
+#         type: Utilization
+#         averageUtilization: 70
+#   - type: Resource
+#     resource:
+#       name: memory
+#       target:
+#         type: Utilization
+#         averageUtilization: 75
+
+# ===========================
+# retriever-code ConfigMap 생성
+# ===========================
+#
+# coreset_sampler.py 의존성 제거 → retriever.py만 등록
+#
+# kubectl create configmap retriever-code \
+#   --from-file=retriever.py=apps/retriever.py \
+#   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# ===========================
+# 테스트
+# ===========================
+#
+# kubectl port-forward -n elastic svc/anomaly-retriever 8001:80
+#
+# ★ v5: 엔드포인트 /search → /retrieve 변경
+# curl -X POST http://localhost:8001/retrieve \
+#   -H "Content-Type: application/json" \
+#   -d '{
+#     "embedding":   [0.12, -0.45, ...576개...],
+#     "cluster_ids": [42, 128, 203, 310, 89],
+#     "vec_index":   "fraud_ecom_percentage_100_cluster_tree_vec",
+#     "top_k": 5
+#   }'
+#
+# Response 필드 (RetrieveResponse):
+#   results[*]: {es_doc_id, original_index, cluster_id, distance, score}
+#   top1_distance, latency_ms, search_mode, page_fault_delta, skip_analyzer
+#
+# ★ v5.1: Batch 엔드포인트 추가 (batch_inference.py 전용)
+# curl -X POST http://localhost:8001/retrieve-batch \
+#   -H "Content-Type: application/json" \
+#   -d '[
+#     {"embedding": [...], "cluster_ids": [42, 128], "vec_index": "...", "top_k": 5},
+#     {"embedding": [...], "cluster_ids": [7,  203], "vec_index": "...", "top_k": 5}
+#   ]'

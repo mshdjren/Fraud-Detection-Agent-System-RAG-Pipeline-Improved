@@ -1,0 +1,231 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manage-indices
+  namespace: elastic
+  labels: &labels
+    app: manage-indices
+    version: v5.0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: manage-indices
+  template:
+    metadata:
+      labels:
+        app: manage-indices
+        version: v5.0
+    spec:
+      serviceAccountName: ingest-sa
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: manage-indices
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: manager
+        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/es-tree-ingest:2.0
+        imagePullPolicy: Always
+
+        command: ["bash", "-lc"]
+        args:
+          - |
+            echo "======================================================="
+            echo " ES INDEX MANAGER V5.0"
+            echo "  인덱스 종류:"
+            echo "    ① Tree Raw+Vec  : fraud_ecom_{EXPERIMENT_CASE}_percentage_{PCT}_cluster_tree_vec"
+            echo "    ② Percolator    : fraud_ecom_{CASE}_{VER}_tree_rules_percolator"
+            echo "    ③ Aug Vec       : fraud_ecom_aug_{MULT}x_{PCT}pct_{TYPE}_vec"
+            echo ""
+            echo "  EXPERIMENT_CASE = ${EXPERIMENT_CASE}"
+            echo "======================================================="
+            echo ""
+            echo "── List & Inspect ────────────────────────────────────────────"
+            echo ""
+            echo "  # 전체 인덱스 목록 (tree vec / percolator / aug vec)"
+            echo "  python /app/manage_indices.py list"
+            echo ""
+            echo "  # aug 인덱스만 필터"
+            echo "  python /app/manage_indices.py list --pattern 'fraud_ecom_aug_*'"
+            echo ""
+            echo "  # percolator만 필터"
+            echo "  python /app/manage_indices.py list --pattern 'fraud_ecom_*_tree_rules_percolator'"
+            echo ""
+            echo "  # 인덱스 상세 (매핑/통계/샘플)"
+            echo "  python /app/manage_indices.py inspect \\"
+            echo "    --index fraud_ecom_${EXPERIMENT_CASE}_v2_tree_rules_percolator"
+            echo "  python /app/manage_indices.py inspect \\"
+            echo "    --index fraud_ecom_aug_10x_100pct_float32_vec"
+            echo ""
+            echo "── Percolate Testing ─────────────────────────────────────────"
+            echo ""
+            echo "  # percolate 테스트 (percentage_100 raw+vec 자동 사용)"
+            echo "  python /app/manage_indices.py test \\"
+            echo "    --index fraud_ecom_${EXPERIMENT_CASE}_v2_tree_rules_percolator \\"
+            echo "    --samples 10"
+            echo ""
+            echo "  # raw+vec 인덱스 직접 지정"
+            echo "  python /app/manage_indices.py test \\"
+            echo "    --index fraud_ecom_${EXPERIMENT_CASE}_v2_tree_rules_percolator \\"
+            echo "    --raw-index fraud_ecom_{EXPERIMENT_CASE}_percentage_100_cluster_tree_vec \\"
+            echo "    --samples 10"
+            echo ""
+            echo "── Version Comparison ────────────────────────────────────────"
+            echo ""
+            echo "  # 동일 experiment_case에서 v1~v5 Top-1 정확도 비교"
+            echo "  python /app/manage_indices.py compare-versions \\"
+            echo "    --case ${EXPERIMENT_CASE} --samples 20"
+            echo ""
+            echo "── Overview ──────────────────────────────────────────────────"
+            echo ""
+            echo "  # 전체 현황: percolator 매트릭스 + tree vec + aug vec"
+            echo "  python /app/manage_indices.py compare"
+            echo ""
+            echo "── Delete ────────────────────────────────────────────────────"
+            echo ""
+            echo "  # [Aug Vec 삭제] ★ 신규"
+            echo "  python /app/manage_indices.py delete-aug --dry-run    # 전체 dry-run"
+            echo "  python /app/manage_indices.py delete-aug --mult 10    # 10x만"
+            echo "  python /app/manage_indices.py delete-aug --mult 10 --pct 100"
+            echo "  python /app/manage_indices.py delete-aug --vec-type int8"
+            echo ""
+            echo "  # [Percolator 삭제]"
+            echo "  python /app/manage_indices.py delete-percolator --dry-run"
+            echo "  python /app/manage_indices.py delete-percolator --case ${EXPERIMENT_CASE}"
+            echo "  python /app/manage_indices.py delete-percolator --case ${EXPERIMENT_CASE} --version v4"
+            echo "  python /app/manage_indices.py delete-percolator --version v4   # 전 케이스 v4"
+            echo ""
+            echo "  # [Tree Raw+Vec 삭제]  ⚠️  모든 experiment_case 영향"
+            echo "  python /app/manage_indices.py delete-vec --dry-run"
+            echo ""
+            echo "  # [전체 삭제]  ⚠️  tree vec + percolator + aug vec 모두"
+            echo "  python /app/manage_indices.py delete-all --dry-run"
+            echo ""
+            echo "  # [신규] 샤드 분산 현황 확인 (Distributed Mode 검증)"
+            echo "    kubectl exec -it deploy/manage-indices -n elastic -- \\"
+            echo "      python /app/manage_indices.py --check-shards --pattern 'fraud_ecom_percolator*'"
+            echo "======================================================="
+            echo " Ready.  'kubectl exec'으로 명령 실행"
+            echo "  kubectl exec -it deploy/manage-indices -n elastic -- \\"
+            echo "    python /app/manage_indices.py list"
+            echo "======================================================="
+            sleep infinity
+
+        env:
+        # ── Elasticsearch ─────────────────────────────────────────
+        - name: ES_URL
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_URL
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-ha-es-elastic-user
+              key: elastic
+        - name: ES_REQUEST_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_REQUEST_TIMEOUT
+
+        # ── Experiment ────────────────────────────────────────────
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+
+        # ── PCA 모델 (compare-versions / test 에서 build_percolate_doc 사용) ──
+        # PCA 케이스(pca_*)에서 vec→percolate_doc 변환 시 필요.
+        # 파일이 없으면 raw 576-dim 그대로 사용 (경고 출력)
+        - name: PCA_MODEL_PATH
+          value: "/data/pca_model.joblib"
+
+        volumeMounts:
+        - name: scripts
+          mountPath: /app/manage_indices.py
+          subPath: manage_indices.py
+        - name: scripts
+          mountPath: /app/percolate_query_builder.py
+          subPath: percolate_query_builder.py
+
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+
+      volumes:
+      - name: scripts
+        configMap:
+          name: es-scripts
+          defaultMode: 0755
+
+# ===========================
+# es-scripts ConfigMap 업데이트
+# ===========================
+#
+# ★ V5.0: manage_indices.py 포함 (aug 인덱스 관리 추가)
+#
+# kubectl create configmap es-scripts \
+#   --from-file=ingest_tree_pipeline.py \
+#   --from-file=ingest_gaussian_aug.py \
+#   --from-file=percolate_query_builder.py \
+#   --from-file=manage_indices.py \
+#   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# ===========================
+# 주요 kubectl exec 사용 예시
+# ===========================
+#
+# 1. 전체 인덱스 현황:
+#    kubectl exec -it deploy/manage-indices -n elastic -- \
+#      python /app/manage_indices.py list
+#
+# 2. Aug vec 현황만:
+#    kubectl exec -it deploy/manage-indices -n elastic -- \
+#      python /app/manage_indices.py list --pattern 'fraud_ecom_aug_*'
+#
+# 3. percolator 상세:
+#    kubectl exec -it deploy/manage-indices -n elastic -- \
+#      python /app/manage_indices.py inspect \
+#        --index fraud_ecom_pca_64_k100_v2_tree_rules_percolator
+#
+# 4. aug vec 상세:
+#    kubectl exec -it deploy/manage-indices -n elastic -- \
+#      python /app/manage_indices.py inspect \
+#        --index fraud_ecom_aug_10x_100pct_float32_vec
+#
+# 5. v1~v5 정확도 비교:
+#    kubectl exec -it deploy/manage-indices -n elastic -- \
+#      python /app/manage_indices.py compare-versions \
+#        --case pca_64_k100 --samples 50
+#
+# 6. 전체 현황 매트릭스 (percolator + aug):
+#    kubectl exec -it deploy/manage-indices -n elastic -- \
+#      python /app/manage_indices.py compare
+#
+# 7. Aug 10x 전체 삭제 (dry-run):
+#    kubectl exec -it deploy/manage-indices -n elastic -- \
+#      python /app/manage_indices.py delete-aug --mult 10 --dry-run
+#
+# 8. pca_64_k100 v4 percolator 삭제:
+#    kubectl exec -it deploy/manage-indices -n elastic -- \
+#      python /app/manage_indices.py delete-percolator \
+#        --case pca_64_k100 --version v4 --dry-run

@@ -1,0 +1,9 @@
+# ===========================
+# Streamlit UI Requirements
+# Python 3.12 / 경량 이미지
+# ===========================
+# local_analyzer와 달리 PyTorch 없음 → 이미지 크기 ~200MB 수준
+
+streamlit==1.40.0
+requests==2.32.3
+pyyaml==6.0.2

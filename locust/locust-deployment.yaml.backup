@@ -1,0 +1,117 @@
+# =====================================================================
+# Locust Deployment — V5.2 (Standalone + UI)
+# =====================================================================
+#
+# V5.1 → V5.2 변경사항:
+#   ★ Stage 4 (PageFaultProbeUser) 추가 — wait_time=0 임계점 탐색
+#   ★ ACTIVE_STAGE env: "1" | "2" | "3" | "4" | "all"
+#   ★ resources 조정: CPU 2000m (Stage 4 고부하 대응)
+#
+# page fault 실험 절차:
+#   kubectl set env deployment/locust-master ACTIVE_STAGE=2 -n elastic
+#   kubectl set env deployment/locust-master ACTIVE_STAGE=4 -n elastic
+#
+# UI 접속:
+#   kubectl port-forward -n elastic svc/locust 8089:8089
+#
+# ConfigMap 업데이트:
+#   kubectl create configmap locust-script \
+#     --from-file=locustfile.py \
+#     -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl rollout restart deployment/locust-master -n elastic
+# =====================================================================
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust-master
+  namespace: elastic
+  labels:
+    app: locust
+    role: master
+    version: "5.2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: locust
+      role: master
+  template:
+    metadata:
+      labels:
+        app: locust
+        role: master
+        version: "5.2"
+    spec:
+      containers:
+      - name: locust
+        image: locustio/locust:2.24.0
+        ports:
+        - name: web
+          containerPort: 8089
+          protocol: TCP
+
+        command:
+        - locust
+        - --host=$(ORCHESTRATOR_URL)
+        - --locustfile=/home/locust/locustfile.py
+        - --loglevel=INFO
+
+        env:
+        - name: ACTIVE_STAGE
+          value: "2"          # 기본값: page fault 실험 Stage
+        - name: ROUTER_URL
+          value: "http://anomaly-router:80"
+        - name: RETRIEVER_URL
+          value: "http://anomaly-retriever:80"
+        - name: ORCHESTRATOR_URL
+          value: "http://anomaly-orchestrator:80"
+
+        volumeMounts:
+        - name: locust-script
+          mountPath: /home/locust
+
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 2000m        # Stage 4 고부하 대응
+            memory: 1Gi
+
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8089
+          initialDelaySeconds: 15
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8089
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+      volumes:
+      - name: locust-script
+        configMap:
+          name: locust-script
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: locust
+  namespace: elastic
+  labels:
+    app: locust
+spec:
+  type: ClusterIP
+  selector:
+    app: locust
+    role: master
+  ports:
+  - name: web
+    port: 8089
+    targetPort: 8089

@@ -1,0 +1,285 @@
+{
+  "bindings": [
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-vertex-nb.iam.gserviceaccount.com"
+      ],
+      "role": "roles/aiplatform.colabServiceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-aiplatform-vm.iam.gserviceaccount.com"
+      ],
+      "role": "roles/aiplatform.notebookServiceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-aiplatform.iam.gserviceaccount.com"
+      ],
+      "role": "roles/aiplatform.serviceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:anomaly-analyzer@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:elasticsearch-anomaly@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:elasticsearch-bucket-access@kakao-485211.iam.gserviceaccount.com"
+      ],
+      "role": "roles/aiplatform.user"
+    },
+    {
+      "members": [
+        "serviceAccount:837620564740-compute@developer.gserviceaccount.com"
+      ],
+      "role": "roles/artifactregistry.admin"
+    },
+    {
+      "members": [
+        "serviceAccount:tf-gke-elasticsearch-c-1nak@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-7kt3@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-sadr@kakao-485211.iam.gserviceaccount.com"
+      ],
+      "role": "roles/artifactregistry.reader"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-artifactregistry.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-sadr@kakao-485211.iam.gserviceaccount.com"
+      ],
+      "role": "roles/artifactregistry.serviceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:837620564740@cloudbuild.gserviceaccount.com"
+      ],
+      "role": "roles/cloudbuild.builds.builder"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-cloudbuild.iam.gserviceaccount.com"
+      ],
+      "role": "roles/cloudbuild.serviceAgent"
+    },
+    {
+      "members": [
+        "user:moongh0726@gmail.com"
+      ],
+      "role": "roles/compute.admin"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@compute-system.iam.gserviceaccount.com"
+      ],
+      "role": "roles/compute.serviceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-eventarc.iam.gserviceaccount.com"
+      ],
+      "role": "roles/compute.viewer"
+    },
+    {
+      "members": [
+        "serviceAccount:elasticsearch-eventarc-access@kakao-485211.iam.gserviceaccount.com",
+        "user:moongh0726@gmail.com"
+      ],
+      "role": "roles/container.admin"
+    },
+    {
+      "members": [
+        "serviceAccount:tf-gke-elasticsearch-c-1nak@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-7kt3@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-sadr@kakao-485211.iam.gserviceaccount.com"
+      ],
+      "role": "roles/container.defaultNodeServiceAccount"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-gkenode.iam.gserviceaccount.com"
+      ],
+      "role": "roles/container.defaultNodeServiceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-eventarc.iam.gserviceaccount.com"
+      ],
+      "role": "roles/container.developer"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@container-engine-robot.iam.gserviceaccount.com"
+      ],
+      "role": "roles/container.serviceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@container-analysis.iam.gserviceaccount.com"
+      ],
+      "role": "roles/containeranalysis.ServiceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@containerregistry.iam.gserviceaccount.com"
+      ],
+      "role": "roles/containerregistry.ServiceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-containerscanning.iam.gserviceaccount.com"
+      ],
+      "role": "roles/containerscanning.ServiceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-dataform.iam.gserviceaccount.com"
+      ],
+      "role": "roles/dataform.serviceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:837620564740-compute@developer.gserviceaccount.com",
+        "serviceAccount:837620564740@cloudservices.gserviceaccount.com"
+      ],
+      "role": "roles/editor"
+    },
+    {
+      "members": [
+        "serviceAccount:elasticsearch-eventarc-access@kakao-485211.iam.gserviceaccount.com",
+        "user:moongh0726@gmail.com"
+      ],
+      "role": "roles/eventarc.admin"
+    },
+    {
+      "members": [
+        "serviceAccount:elasticsearch-eventarc-access@kakao-485211.iam.gserviceaccount.com"
+      ],
+      "role": "roles/eventarc.eventReceiver"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-eventarc.iam.gserviceaccount.com"
+      ],
+      "role": "roles/eventarc.serviceAgent"
+    },
+    {
+      "members": [
+        "user:moongh0726@gmail.com"
+      ],
+      "role": "roles/gkebackup.admin"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-gkebackup.iam.gserviceaccount.com"
+      ],
+      "role": "roles/gkebackup.serviceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-gkehub.iam.gserviceaccount.com"
+      ],
+      "role": "roles/gkehub.serviceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-eventarc.iam.gserviceaccount.com",
+        "user:moongh0726@gmail.com"
+      ],
+      "role": "roles/iam.serviceAccountAdmin"
+    },
+    {
+      "members": [
+        "serviceAccount:elasticsearch-eventarc-access@kakao-485211.iam.gserviceaccount.com"
+      ],
+      "role": "roles/iam.serviceAccountUser"
+    },
+    {
+      "members": [
+        "serviceAccount:kakao-485211.svc.id.goog[elastic/embed-docs-sa]"
+      ],
+      "role": "roles/iam.workloadIdentityUser"
+    },
+    {
+      "members": [
+        "serviceAccount:elasticsearch-eventarc-access@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-1nak@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-7kt3@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-sadr@kakao-485211.iam.gserviceaccount.com"
+      ],
+      "role": "roles/monitoring.metricWriter"
+    },
+    {
+      "members": [
+        "user:moongh0726@gmail.com"
+      ],
+      "role": "roles/monitoring.viewer"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-networkconnectivity.iam.gserviceaccount.com"
+      ],
+      "role": "roles/networkconnectivity.serviceAgent"
+    },
+    {
+      "members": [
+        "user:moongh0726@gmail.com"
+      ],
+      "role": "roles/owner"
+    },
+    {
+      "members": [
+        "serviceAccount:elasticsearch-eventarc-access@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:service-837620564740@gs-project-accounts.iam.gserviceaccount.com"
+      ],
+      "role": "roles/pubsub.publisher"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@gcp-sa-pubsub.iam.gserviceaccount.com"
+      ],
+      "role": "roles/pubsub.serviceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:elasticsearch-eventarc-access@kakao-485211.iam.gserviceaccount.com"
+      ],
+      "role": "roles/pubsub.subscriber"
+    },
+    {
+      "members": [
+        "serviceAccount:service-837620564740@serverless-robot-prod.iam.gserviceaccount.com"
+      ],
+      "role": "roles/run.serviceAgent"
+    },
+    {
+      "members": [
+        "serviceAccount:tf-gke-elasticsearch-c-1nak@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-7kt3@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-sadr@kakao-485211.iam.gserviceaccount.com"
+      ],
+      "role": "roles/stackdriver.resourceMetadata.writer"
+    },
+    {
+      "members": [
+        "user:moonsh1031@gmail.com"
+      ],
+      "role": "roles/storage.admin"
+    },
+    {
+      "members": [
+        "serviceAccount:837620564740-compute@developer.gserviceaccount.com"
+      ],
+      "role": "roles/storage.objectAdmin"
+    },
+    {
+      "members": [
+        "serviceAccount:evaluation-sa@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-1nak@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-7kt3@kakao-485211.iam.gserviceaccount.com",
+        "serviceAccount:tf-gke-elasticsearch-c-sadr@kakao-485211.iam.gserviceaccount.com",
+        "user:moongh0726@gmail.com"
+      ],
+      "role": "roles/storage.objectViewer"
+    }
+  ],
+  "etag": "BwZMVMX31co=",
+  "version": 1
+}

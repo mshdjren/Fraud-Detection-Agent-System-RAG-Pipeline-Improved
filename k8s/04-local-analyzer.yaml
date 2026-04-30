@@ -1,0 +1,280 @@
+# ===========================
+# Local Analyzer ConfigMap
+# ===========================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-analyzer-config
+  namespace: elastic
+  labels:
+    app: local-analyzer
+    tier: inference
+data:
+  # ── 실험 설정 ──────────────────────────────────────────────────
+  EXPERIMENT_CASE:  "pca_64_k100"
+  TEACHER_PROVIDER: "hf"
+  ADAPTER_TYPE:     "mined"        # mined | distance
+
+  # ── GCS 설정 ───────────────────────────────────────────────────
+  GCS_BUCKET:  "fraudecom"
+  GCS_FT_BASE: "tree-search/analyzer_ft"
+
+  # ── 로컬 저장 경로 (init → main container 공유) ────────────────
+  ADAPTER_LOCAL_DIR: "/data/adapter"
+
+  # ── Base 모델 ──────────────────────────────────────────────────
+  BASE_MODEL_ID: "Qwen/Qwen2.5-0.5B-Instruct"
+
+  # ── 추론 설정 ──────────────────────────────────────────────────
+  MAX_NEW_TOKENS:  "1536"
+  DEVICE:          "cpu"
+  # TORCH_DTYPE:     "float32"
+  # OMP_NUM_THREADS: "2"
+  TORCH_DTYPE:     "bfloat16"
+  OMP_NUM_THREADS: "4"
+
+  # ── Distance 분포 (colab Section 5 실측값: pca_64_k100) ────────
+  DIST_P25: "1.264"
+  DIST_P50: "1.448"
+  DIST_P75: "1.651"
+  DIST_IQR: "0.387"
+
+  # ── 분석 컨텍스트 플래그 ────────────────────────────────────────
+  PERSONA_ENABLED:    "true"
+  TREE_RULES_ENABLED: "false"
+
+---
+# ===========================
+# ServiceAccount (Workload Identity)
+# ===========================
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: local-analyzer
+  namespace: elastic
+  labels:
+    app: local-analyzer
+  annotations:
+    iam.gke.io/gcp-service-account: anomaly-analyzer@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+
+---
+# ===========================
+# Deployment
+# ===========================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-analyzer
+  namespace: elastic
+  labels:
+    app: local-analyzer
+    tier: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: local-analyzer
+  template:
+    metadata:
+      labels:
+        app: local-analyzer
+        tier: inference
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: local-analyzer
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["app-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: local-analyzer
+              topologyKey: kubernetes.io/hostname
+
+      # ── Init Container: GCS → 로컬 다운로드 ──────────────────
+      initContainers:
+      - name: download-adapter
+        image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+        command: ["bash", "-lc"]
+        args:
+          - |
+            set -euo pipefail
+
+            echo "[init] EXPERIMENT_CASE : ${EXPERIMENT_CASE}"
+            echo "[init] TEACHER_PROVIDER: ${TEACHER_PROVIDER}"
+            echo "[init] ADAPTER_TYPE    : ${ADAPTER_TYPE}"
+            echo "[init] GCS_BUCKET      : ${GCS_BUCKET}"
+
+            GCS_ADAPTER="gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/${TEACHER_PROVIDER}/adapter_${ADAPTER_TYPE}"
+            DEST="${ADAPTER_LOCAL_DIR}"
+
+            echo "[init] GCS path  : ${GCS_ADAPTER}"
+            echo "[init] Local dest: ${DEST}"
+            mkdir -p "${DEST}"
+
+            echo "[init] Downloading adapter files..."
+            gsutil -m cp -r "${GCS_ADAPTER}/*" "${DEST}/"
+
+            echo "[init] Download complete."
+            ls -lh "${DEST}/"
+            echo "[init] Total: $(du -sh ${DEST} | cut -f1)"
+
+        # ConfigMap 전체를 envFrom으로 한번에 주입
+        envFrom:
+        - configMapRef:
+            name: local-analyzer-config
+
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+
+      # ── Main Container ─────────────────────────────────────────
+      containers:
+      - name: local-analyzer
+        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/local-analyzer:2.0
+        imagePullPolicy: Always
+
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+
+        # ConfigMap 전체를 envFrom으로 한번에 주입
+        # → local_analyzer.py에서 os.getenv()로 직접 참조
+        envFrom:
+        - configMapRef:
+            name: local-analyzer-config
+
+        # anomaly-config에서 추가로 필요한 값만 개별 주입
+        env:
+        - name: GOOGLE_CLOUD_PROJECT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GOOGLE_CLOUD_PROJECT
+
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+        - name: code-volume
+          mountPath: /app/local_analyzer.py
+          subPath: local_analyzer.py
+
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 120
+          periodSeconds: 20
+          timeoutSeconds: 5
+
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 120
+          periodSeconds: 10
+          timeoutSeconds: 3
+
+        # resources:
+        #   requests:
+        #     cpu: "500m"
+        #     memory: "512Mi"
+        #   limits:
+        #     cpu: "2000m"
+        #     memory: "6Gi"
+
+        # page fault 실험 위해, es db에 cpu 모두 할당
+        resources:
+          requests:
+            cpu: "100m"      # 500m에서 하향 (Elasticsearch에 양보)
+            memory: "512Mi"    # 모델 로딩 안정성을 위해 상향 (OOM 방지)
+          limits:
+            cpu: "1000m"     # 2000m에서 하향
+            memory: "6Gi"    # 6Gi에서 하향 (클러스터 여유분 확보)
+
+      volumes:
+      - name: data-volume
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: local-analyzer-code
+
+---
+# ===========================
+# Service (ClusterIP)
+# ===========================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: local-analyzer
+  namespace: elastic
+  labels:
+    app: local-analyzer
+    tier: inference
+spec:
+  type: ClusterIP
+  selector:
+    app: local-analyzer
+    tier: inference
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+
+# ===========================
+# 배포 절차
+# ===========================
+#
+# 1. 코드 ConfigMap 생성/갱신:
+#    kubectl create configmap local-analyzer-code \
+#      --from-file=local_analyzer.py=apps/local_analyzer.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# 2. Deployment 적용:
+#    kubectl apply -f 06-local-analyzer.yaml
+#
+# 3. init container 다운로드 로그 확인:
+#    kubectl logs -n elastic -l app=local-analyzer -c download-adapter --follow
+#
+# 4. main container 모델 로딩 확인:
+#    kubectl logs -n elastic -l app=local-analyzer -c local-analyzer --follow
+#
+# 5. Ready 확인:
+#    kubectl rollout status deployment/local-analyzer -n elastic
+#
+# ===========================
+# 어댑터 교체 (mined ↔ distance)
+# ===========================
+#
+#    kubectl patch configmap local-analyzer-config -n elastic \
+#      --type merge -p '{"data":{"ADAPTER_TYPE":"distance"}}'
+#    kubectl rollout restart deployment/local-analyzer -n elastic
+#
+# ===========================
+# orchestrator 전환
+# ===========================
+# #
+#    kubectl set env deployment/anomaly-orchestrator \
+#      ANALYZER_URL=http://local-analyzer:80 -n elastic

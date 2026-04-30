@@ -1,0 +1,141 @@
+# ===========================
+# ServiceAccount (처음 한 번만 apply, 이후 생략 가능)
+# ===========================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evaluation-sa
+  namespace: elastic
+  annotations:
+    iam.gke.io/gcp-service-account: evaluation-sa@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+
+# evaluation-code ConfigMap 등록:
+# kubectl create configmap evaluation-code \
+#   --from-file=batch_inference.py \
+#   --from-file=gt_loader.py \
+#   --from-file=evaluation_metrics.py \
+#   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+
+---
+# ===========================
+# [2] Router + Retriever (Internal Batch)   ← 핵심 평가 Job
+#     용도: Recall@5 검색 품질 평가
+#     ★ V5: /route-batch + /retrieve-batch 연결
+#     ★ Dual Recall: recall@5_raw + recall@5_coreset_adjusted
+#     ★ page_fault_delta: Retriever I/O 압박 측정
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: evaluation-router-retriever-pca64-k100-pct100-hnsw-default
+  # name: evaluation-router-retriever-pca64-k100-pct100-v14-bucket3
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: v5.0
+    pipeline: router-retriever
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        pipeline: router-retriever
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: evaluation-sa
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: evaluator
+        image: python:3.10-slim
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        - name: SKIP_ANALYZER
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_ANALYZER
+        - name: N_SAMPLES
+          value: "1000"
+        - name: BATCH_SIZE
+          value: "100"
+        - name: TIMEOUT
+          value: "1200"
+        - name: CORESET_PERCENTAGE
+          value: "100"
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Evaluation V5.0 - Router + Retriever"
+          echo "  experiment_case    : ${EXPERIMENT_CASE}"
+          echo "  percolate_version  : ${PERCOLATE_QUERY_VERSION}"
+          echo "  coreset_percentage : ${CORESET_PERCENTAGE}"
+          echo "  skip_analyzer      : ${SKIP_ANALYZER}"
+          echo "  [Dual Recall: recall@5_raw + recall@5_coreset_adjusted]"
+          echo "  [page_fault_delta: Retriever I/O 측정]"
+          echo "================================================"
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx tqdm structlog scikit-learn google-cloud-storage
+          cd /app
+          python batch_inference.py \
+            --pipeline-mode         router_retriever \
+            --experiment-case       ${EXPERIMENT_CASE} \
+            --percolate-version     ${PERCOLATE_QUERY_VERSION} \
+            --coreset-percentage    ${CORESET_PERCENTAGE} \
+            --n-samples             ${N_SAMPLES} \
+            --batch-size            ${BATCH_SIZE} \
+            --timeout               ${TIMEOUT} \
+            --output-dir            /results
+          [ -f /results/summary.txt ] && cat /results/summary.txt
+        resources:
+          # requests:
+          #   cpu: 1000m
+          #   memory: 3Gi
+          # limits:
+          #   cpu: 2000m
+          #   memory: 6Gi
+          requests:
+            cpu: 100m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code

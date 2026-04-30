@@ -1,0 +1,68 @@
+{
+  "current_response_time_percentiles": {
+    "response_time_percentile_0.95": null
+  },
+  "errors": [],
+  "fail_ratio": 0.0,
+  "state": "running",
+  "stats": [
+    {
+      "avg_content_length": 196.0,
+      "avg_response_time": 32.288743999977726,
+      "current_fail_per_sec": 0.0,
+      "current_rps": 1.7,
+      "max_response_time": 51.0,
+      "median_response_time": 34,
+      "method": "GET",
+      "min_response_time": 4.0,
+      "name": "/health [router-rr]",
+      "ninetieth_response_time": 47,
+      "ninety_ninth_response_time": 51,
+      "num_failures": 0,
+      "num_requests": 31,
+      "response_time_percentile_0.95": 50,
+      "response_time_percentile_0.99": 51,
+      "safe_name": "/health [router-rr]"
+    },
+    {
+      "avg_content_length": 2014.225,
+      "avg_response_time": 375.7560357650185,
+      "current_fail_per_sec": 0.0,
+      "current_rps": 10.0,
+      "max_response_time": 11648.0,
+      "median_response_time": 170.0,
+      "method": "POST",
+      "min_response_time": 36.0,
+      "name": "/route [rr]",
+      "ninetieth_response_time": 280.0,
+      "ninety_ninth_response_time": 12000.0,
+      "num_failures": 0,
+      "num_requests": 200,
+      "response_time_percentile_0.95": 310.0,
+      "response_time_percentile_0.99": 12000.0,
+      "safe_name": "/route [rr]"
+    },
+    {
+      "avg_content_length": 1770.2207792207791,
+      "avg_response_time": 329.66302258442863,
+      "current_fail_per_sec": 0.0,
+      "current_rps": 11.7,
+      "max_response_time": 11648.0,
+      "median_response_time": 150.0,
+      "method": "",
+      "min_response_time": 4.0,
+      "name": "Aggregated",
+      "ninetieth_response_time": 270.0,
+      "ninety_ninth_response_time": 9500.0,
+      "num_failures": 0,
+      "num_requests": 231,
+      "response_time_percentile_0.95": 310.0,
+      "response_time_percentile_0.99": 9500.0,
+      "safe_name": "Aggregated"
+    }
+  ],
+  "total_avg_response_time": 329.66302258442863,
+  "total_fail_per_sec": 0.0,
+  "total_rps": 11.7,
+  "user_count": 200
+}

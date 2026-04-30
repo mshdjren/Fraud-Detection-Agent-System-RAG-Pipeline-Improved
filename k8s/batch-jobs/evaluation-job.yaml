@@ -1,0 +1,499 @@
+# ===========================
+# ServiceAccount
+# ===========================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evaluation-sa
+  namespace: elastic
+  annotations:
+    iam.gke.io/gcp-service-account: evaluation-sa@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+
+# ===========================
+# evaluation-code ConfigMap 등록 방법
+# ===========================
+#
+# kubectl create configmap evaluation-code \
+#   --from-file=batch_inference.py \
+#   --from-file=gt_loader.py \
+#   --from-file=evaluation_metrics.py \
+#   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# 포함 파일:
+#   batch_inference.py   — pipeline 실행 + metric 계산 (V5.0)
+#   gt_loader.py         — GT 데이터 로드 + kNN top5 계산 (original_index 기반)
+#   evaluation_metrics.py — recall@5 / AUROC 계산
+#
+# ===========================
+# GCS 데이터 경로 (gt_loader.py 기본값)
+# ===========================
+#
+#   GT_TEST_PARQUET      : /data/test_data.parquet
+#   GT_TRAIN_PARQUET_BASE: /data/coreset_parquets/
+#                          raw_plus_cluster_tree_percentage_{PCT}.parquet
+#   GT_TEST_EMB_PATH     : /data/embeddings/test_embeddings.npy
+#   GT_TRAIN_EMB_BASE    : /data/embeddings/
+#                          anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_{PCT}_merged.npy
+
+---
+# ===========================
+# [1] Router Only
+#     용도: 클러스터 할당 품질 빠른 평가
+#     ★ V5: /route-batch 엔드포인트 사용 (enable-internal-batch)
+#     ★ Recall@5는 측정하지 않음 (Retriever 미포함)
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: evaluation-router-only
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: v5.0
+    pipeline: router-only
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        pipeline: router-only
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+      containers:
+      - name: evaluator
+        image: python:3.10-slim
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        - name: SKIP_ANALYZER
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_ANALYZER
+        - name: N_SAMPLES
+          value: "1000"
+        - name: BATCH_SIZE
+          value: "20"
+        - name: TIMEOUT
+          value: "300"
+        - name: CORESET_PERCENTAGE
+          value: "100"
+
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Evaluation V5.0 - Router Only"
+          echo "  experiment_case   : ${EXPERIMENT_CASE}"
+          echo "  percolate_version : ${PERCOLATE_QUERY_VERSION}"
+          echo "  skip_analyzer     : ${SKIP_ANALYZER}"
+          echo "================================================"
+
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx tqdm structlog scikit-learn google-cloud-storage
+
+          cd /app
+          python batch_inference.py \
+            --pipeline-mode         router_only \
+            --enable-internal-batch \
+            --experiment-case       ${EXPERIMENT_CASE} \
+            --percolate-version     ${PERCOLATE_QUERY_VERSION} \
+            --coreset-percentage    ${CORESET_PERCENTAGE} \
+            --n-samples             ${N_SAMPLES} \
+            --batch-size            ${BATCH_SIZE} \
+            --timeout               ${TIMEOUT} \
+            --output-dir            /results
+
+          [ -f /results/summary.txt ] && cat /results/summary.txt
+
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            cpu: 1000m
+            memory: 4Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code
+
+---
+# ===========================
+# [2] Router + Retriever (Internal Batch)
+#     용도: Recall@5 검색 품질 평가 — 핵심 평가 Job
+#     ★ V5: /route-batch + /retrieve-batch 연결 (call_router_retriever_batch)
+#     ★ Dual Recall: recall@5_raw + recall@5_coreset_adjusted
+#     ★ page_fault_delta: Retriever I/O 압박 측정
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: evaluation-router-retriever
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: v5.0
+    pipeline: router-retriever
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        pipeline: router-retriever
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+      containers:
+      - name: evaluator
+        image: python:3.10-slim
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        - name: SKIP_ANALYZER
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_ANALYZER
+        - name: N_SAMPLES
+          value: "1000"
+        - name: BATCH_SIZE
+          value: "20"
+        - name: TIMEOUT
+          value: "600"
+        - name: CORESET_PERCENTAGE
+          value: "100"
+
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Evaluation V5.0 - Router + Retriever"
+          echo "  experiment_case    : ${EXPERIMENT_CASE}"
+          echo "  percolate_version  : ${PERCOLATE_QUERY_VERSION}"
+          echo "  coreset_percentage : ${CORESET_PERCENTAGE}"
+          echo "  skip_analyzer      : ${SKIP_ANALYZER}"
+          echo "  [Dual Recall: recall@5_raw + recall@5_coreset_adjusted]"
+          echo "  [page_fault_delta: Retriever I/O 측정]"
+          echo "================================================"
+
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx tqdm structlog scikit-learn google-cloud-storage
+
+          cd /app
+          python batch_inference.py \
+            --pipeline-mode         router_retriever \
+            --enable-internal-batch \
+            --experiment-case       ${EXPERIMENT_CASE} \
+            --percolate-version     ${PERCOLATE_QUERY_VERSION} \
+            --coreset-percentage    ${CORESET_PERCENTAGE} \
+            --n-samples             ${N_SAMPLES} \
+            --batch-size            ${BATCH_SIZE} \
+            --timeout               ${TIMEOUT} \
+            --output-dir            /results
+
+          [ -f /results/summary.txt ] && cat /results/summary.txt
+
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 3Gi
+          limits:
+            cpu: 2000m
+            memory: 6Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code
+
+---
+# ===========================
+# [3] Full Pipeline (E2E)
+#     용도: Router + Retriever + Analyzer 전체 파이프라인 평가
+#           Anomaly AUROC + Recall@5 raw/adjusted
+#     ★ V5: full 모드는 asyncio 병렬 (enable-internal-batch 미지원)
+#     ★ Analyzer LLM 호출로 시간 소요 → n-samples 제한 권장
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: evaluation-full-pipeline
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: v5.0
+    pipeline: full
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        pipeline: full
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+      containers:
+      - name: evaluator
+        image: python:3.10-slim
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        - name: SKIP_ANALYZER
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_ANALYZER
+        - name: N_SAMPLES
+          value: "100"
+        - name: BATCH_SIZE
+          value: "10"
+        - name: TIMEOUT
+          value: "600"
+        - name: CORESET_PERCENTAGE
+          value: "100"
+
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Evaluation V5.0 - Full Pipeline (E2E)"
+          echo "  experiment_case   : ${EXPERIMENT_CASE}"
+          echo "  skip_analyzer     : ${SKIP_ANALYZER}"
+          echo "  [Analyzer LLM 호출 포함 → n-samples 제한]"
+          echo "================================================"
+
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx tqdm structlog scikit-learn google-cloud-storage
+
+          cd /app
+          python batch_inference.py \
+            --pipeline-mode      full \
+            --experiment-case    ${EXPERIMENT_CASE} \
+            --percolate-version  ${PERCOLATE_QUERY_VERSION} \
+            --coreset-percentage ${CORESET_PERCENTAGE} \
+            --n-samples          ${N_SAMPLES} \
+            --batch-size         ${BATCH_SIZE} \
+            --timeout            ${TIMEOUT} \
+            --output-dir         /results
+
+          [ -f /results/summary.txt ] && cat /results/summary.txt
+
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 3Gi
+          limits:
+            cpu: 2000m
+            memory: 6Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code
+
+---
+# ===========================
+# [4] Coreset Dual Recall 비교 실험
+#     용도: 100% / 10% / 1% coreset별
+#           recall@5_raw vs recall@5_coreset_adjusted 차이 측정
+#
+#     기대 결과:
+#       100% coreset → raw ≈ adjusted (모든 GT original_index 존재)
+#       10%  coreset → adjusted > raw  (불가능한 GT 제외 → 공정 평가)
+#       1%   coreset → adjusted >> raw (90% GT 소실 → raw는 매우 낮음)
+#
+#     ★ V5: GT = kNN 탐색 → original_index 변환 (gt_loader.py)
+#           retrieved_original_indices 와 set-intersection으로 recall 계산
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: evaluation-coreset-dual-recall
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: v5.0
+    experiment: coreset-dual-recall
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        experiment: coreset-dual-recall
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+      containers:
+      - name: evaluator
+        image: python:3.10-slim
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        - name: SKIP_ANALYZER
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_ANALYZER
+
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Coreset Dual Recall Comparison (V5.0)"
+          echo "  experiment_case : ${EXPERIMENT_CASE}"
+          echo "  측정: recall@5_raw vs recall@5_coreset_adjusted"
+          echo "  GT 기준: kNN → original_index 변환 (gt_loader V5)"
+          echo "================================================"
+
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx tqdm structlog scikit-learn google-cloud-storage
+
+          cd /app
+          for PCT in 100 10 1; do
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  coreset_percentage = ${PCT}%"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            python batch_inference.py \
+              --pipeline-mode         router_retriever \
+              --enable-internal-batch \
+              --experiment-case       ${EXPERIMENT_CASE} \
+              --percolate-version     ${PERCOLATE_QUERY_VERSION} \
+              --coreset-percentage    ${PCT} \
+              --n-samples             500 \
+              --batch-size            20 \
+              --timeout               600 \
+              --output-dir            /results/coreset-${PCT}
+
+            python3 - << PYEOF
+          import json
+          m = json.load(open('/results/coreset-${PCT}/metrics.json'))
+          ret = m.get('retrieval_metrics', {})
+          print(f"  recall@5_raw      = {ret.get('recall@5_raw', 'N/A'):.4f}")
+          print(f"  recall@5_adjusted = {ret.get('recall@5_coreset_adjusted', 'N/A'):.4f}")
+          print(f"  delta(adj-raw)    = {ret.get('recall@5_delta', 'N/A'):.4f}")
+          print(f"  coverage_rate     = {ret.get('coreset_coverage_rate', 'N/A'):.4f}")
+          print(f"  n_empty_gt(adj)   = {ret.get('n_empty_gt_after_filtering', 'N/A')}")
+          PYEOF
+          done
+
+          echo ""
+          echo "================================================"
+          echo " Dual Recall Comparison Done"
+          for PCT in 100 10 1; do
+            echo "  coreset ${PCT}%:"
+            grep -E "recall|delta|coverage|empty" /results/coreset-${PCT}/summary.txt 2>/dev/null | head -7 || true
+          done
+          echo "================================================"
+
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 3Gi
+          limits:
+            cpu: 2000m
+            memory: 6Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code
+
+# ===========================
+# 제거된 Job (v5.0)
+# ===========================
+#
+# [구 3] evaluation-router-retriever-async
+#   제거 이유: router_retriever 모드의 --enable-internal-batch가
+#             /route-batch + /retrieve-batch 연결로 표준화됨.
+#             async 단건 병렬은 중복이며 개별 파일도 없음.
+#
+# [구 6] evaluation-batch-size-comparison
+#   제거 이유: v5 배치 구조(/route-batch, /retrieve-batch) 변경으로
+#             단순 batch_size 파라미터 비교의 의미가 퇴색.
+#             개별 파일도 없음.
+#
+# ===========================
+# 배포 명령 (전체 일괄)
+# ===========================
+#
+# kubectl apply -f evaluation-job.yaml
+#
+# # 특정 Job 실행 확인
+# kubectl get jobs -n elastic -l app=evaluation
+# kubectl logs -n elastic -l app=evaluation,pipeline=router-retriever --tail=100

@@ -1,0 +1,137 @@
+# ===========================
+# ServiceAccount (처음 한 번만 apply, 이후 생략 가능)
+# ===========================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evaluation-sa
+  namespace: elastic
+  annotations:
+    iam.gke.io/gcp-service-account: evaluation-sa@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+
+# evaluation-code ConfigMap 등록:
+# kubectl create configmap evaluation-code \
+#   --from-file=batch_inference.py \
+#   --from-file=gt_loader.py \
+#   --from-file=evaluation_metrics.py \
+#   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+
+---
+# ===========================
+# [4] Coreset Dual Recall 비교 실험
+#     용도: 100% / 10% / 1% coreset별
+#           recall@5_raw vs recall@5_coreset_adjusted 차이 측정
+#
+#     기대 결과:
+#       100% → raw ≈ adjusted  (모든 GT original_index 존재)
+#       10%  → adjusted > raw  (불가능한 GT 제외 → 공정 평가)
+#       1%   → adjusted >> raw (90% GT 소실 → raw는 매우 낮음)
+#
+#     ★ V5: GT = kNN → original_index 변환 (gt_loader V5)
+#           retrieved_original_indices set-intersection으로 recall 계산
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: evaluation-coreset-dual-recall
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: v5.0
+    experiment: coreset-dual-recall
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        experiment: coreset-dual-recall
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+      containers:
+      - name: evaluator
+        image: python:3.10-slim
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        - name: SKIP_ANALYZER
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_ANALYZER
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Coreset Dual Recall Comparison (V5.0)"
+          echo "  experiment_case : ${EXPERIMENT_CASE}"
+          echo "  측정: recall@5_raw vs recall@5_coreset_adjusted"
+          echo "  GT 기준: kNN → original_index 변환 (gt_loader V5)"
+          echo "================================================"
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx tqdm structlog scikit-learn google-cloud-storage
+          cd /app
+          for PCT in 100 10 1; do
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "  coreset_percentage = ${PCT}%"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            python batch_inference.py \
+              --pipeline-mode         router_retriever \
+              --enable-internal-batch \
+              --experiment-case       ${EXPERIMENT_CASE} \
+              --percolate-version     ${PERCOLATE_QUERY_VERSION} \
+              --coreset-percentage    ${PCT} \
+              --n-samples             500 \
+              --batch-size            20 \
+              --timeout               600 \
+              --output-dir            /results/coreset-${PCT}
+            python3 - << PYEOF
+          import json
+          m = json.load(open('/results/coreset-${PCT}/metrics.json'))
+          ret = m.get('retrieval_metrics', {})
+          print(f"  recall@5_raw      = {ret.get('recall@5_raw', 'N/A'):.4f}")
+          print(f"  recall@5_adjusted = {ret.get('recall@5_coreset_adjusted', 'N/A'):.4f}")
+          print(f"  delta(adj-raw)    = {ret.get('recall@5_delta', 'N/A'):.4f}")
+          print(f"  coverage_rate     = {ret.get('coreset_coverage_rate', 'N/A'):.4f}")
+          print(f"  n_empty_gt(adj)   = {ret.get('n_empty_gt_after_filtering', 'N/A')}")
+          PYEOF
+          done
+          echo ""
+          echo "================================================"
+          echo " Dual Recall Comparison Done"
+          for PCT in 100 10 1; do
+            echo "  coreset ${PCT}%:"
+            grep -E "recall|delta|coverage|empty" /results/coreset-${PCT}/summary.txt 2>/dev/null | head -7 || true
+          done
+          echo "================================================"
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code
