@@ -50,6 +50,7 @@ from fastapi.responses import Response
 import structlog
 import httpx
 from pybreaker import CircuitBreaker, CircuitBreakerError
+from agent_tools import AgentTool, choose_tool, list_enabled_tools
 
 # ===========================
 # Configuration
@@ -58,6 +59,7 @@ from pybreaker import CircuitBreaker, CircuitBreakerError
 ROUTER_URL    = os.getenv("ROUTER_URL",    "http://anomaly-router:80")
 RETRIEVER_URL = os.getenv("RETRIEVER_URL", "http://anomaly-retriever:80")
 ANALYZER_URL  = os.getenv("ANALYZER_URL",  "http://anomaly-analyzer:80")
+MCP_WRAPPER_ENABLED = os.getenv("MCP_WRAPPER_ENABLED", "false").lower() == "true"
 
 EXPERIMENT_CASE           = os.getenv("EXPERIMENT_CASE",           "pca_64")
 DEFAULT_PERCOLATE_VERSION = os.getenv("DEFAULT_PERCOLATE_VERSION",  "v2")
@@ -80,6 +82,10 @@ CACHE_TTL    = int(os.getenv("CACHE_TTL", "600"))
 # ★ V5: SKIP_ANALYZER — Analyzer 스킵, top1_distance 기반 score 산출
 SKIP_ANALYZER      = os.getenv("SKIP_ANALYZER", "false").lower() == "true"
 DISTANCE_THRESHOLD = float(os.getenv("DISTANCE_THRESHOLD", "0.5"))
+FAST_TRACK_ENABLED = os.getenv("FAST_TRACK_ENABLED", "true").lower() == "true"
+DEEP_TRACK_ENABLED = os.getenv("DEEP_TRACK_ENABLED", "true").lower() == "true"
+COMPARE_TRACK_ENABLED = os.getenv("COMPARE_TRACK_ENABLED", "false").lower() == "true"
+FAST_TRACK_DISTANCE_THRESHOLD = float(os.getenv("FAST_TRACK_DISTANCE_THRESHOLD", "0.85"))
 
 VALID_EXPERIMENT_CASES = [
     "emb_vectors",
@@ -338,18 +344,31 @@ async def call_router(
     """
     start = time.time()
     try:
-        resp = await call_with_retry(
-            client, "POST", f"{ROUTER_URL}/route",
-            timeout=ROUTER_TIMEOUT,
-            service_name="router",
-            json={"embedding": embedding},
-            headers={
-                "Content-Type":     "application/json",
-                "X-Router-Case":    experiment_case,
-                "X-Router-Version": percolate_version,
-            }
-        )
-        result = resp.json()
+        if MCP_WRAPPER_ENABLED:
+            resp = await call_with_retry(
+                client, "POST", f"{ROUTER_URL}/mcp/execute",
+                timeout=ROUTER_TIMEOUT,
+                service_name="router",
+                json={
+                    "tool": "router.route",
+                    "arguments": {"embedding": embedding},
+                },
+                headers={"Content-Type": "application/json"},
+            )
+            result = resp.json().get("result", {})
+        else:
+            resp = await call_with_retry(
+                client, "POST", f"{ROUTER_URL}/route",
+                timeout=ROUTER_TIMEOUT,
+                service_name="router",
+                json={"embedding": embedding},
+                headers={
+                    "Content-Type":     "application/json",
+                    "X-Router-Case":    experiment_case,
+                    "X-Router-Version": percolate_version,
+                }
+            )
+            result = resp.json()
         service_latency.labels(service="router").observe(time.time() - start)
         logger.info(
             "router_success",
@@ -385,19 +404,41 @@ async def call_retriever(
     """
     start = time.time()
     try:
+        payload = {
+            "embedding":   embedding,
+            "cluster_ids": cluster_ids,
+            "vec_index":   vec_index,
+            "top_k":       top_k,
+        }
+<<<<<<< ours
+        if MCP_WRAPPER_ENABLED:
+            resp = await call_with_retry(
+                client, "POST", f"{RETRIEVER_URL}/mcp/execute",
+                timeout=RETRIEVER_TIMEOUT,
+                service_name="retriever",
+                json={"tool": "retriever.retrieve", "arguments": payload},
+                headers={"Content-Type": "application/json"},
+            )
+            result = resp.json().get("result", {})
+        else:
+            resp = await call_with_retry(
+                client, "POST", f"{RETRIEVER_URL}/retrieve",
+                timeout=RETRIEVER_TIMEOUT,
+                service_name="retriever",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            result = resp.json()
+=======
         resp = await call_with_retry(
             client, "POST", f"{RETRIEVER_URL}/retrieve",
             timeout=RETRIEVER_TIMEOUT,
             service_name="retriever",
-            json={
-                "embedding":   embedding,
-                "cluster_ids": cluster_ids,
-                "vec_index":   vec_index,
-                "top_k":       top_k,
-            },
+            json=payload,
             headers={"Content-Type": "application/json"},
         )
         result = resp.json()
+>>>>>>> theirs
         service_latency.labels(service="retriever").observe(time.time() - start)
         multi_cluster_search.inc()
         logger.info(
@@ -500,6 +541,32 @@ async def detect_anomaly(test_case: TestCase):
 
     experiment_case_counter.labels(experiment_case=exp_case).inc()
 
+    # tool 정의 (claude-code식: definition + enabled)
+    tools: List[AgentTool] = [
+        AgentTool(
+            name="anomaly.fast_track_distance_gate",
+            description="거리 기반 빠른 이상 판정(Analyzer 스킵 경로)",
+            input_schema={"distance": "float"},
+            is_enabled=lambda: FAST_TRACK_ENABLED,
+            run=lambda **kwargs: _run_fast_track(**kwargs),
+        ),
+        AgentTool(
+            name="anomaly.deep_track_two_stage",
+            description="router(percolate)+retriever(knn)+analyzer의 기본 2-stage 탐지",
+            input_schema={"embedding": "float[576]", "tx_dict": "dict"},
+            is_enabled=lambda: DEEP_TRACK_ENABLED,
+            run=lambda **kwargs: _run_deep_track(**kwargs),
+        ),
+        AgentTool(
+            name="anomaly.compare_track_raw_es",
+            description="A/B용: compare 실험 경로(현재는 deep track 재사용)",
+            input_schema={"embedding": "float[576]", "tx_dict": "dict"},
+            is_enabled=lambda: COMPARE_TRACK_ENABLED,
+            run=lambda **kwargs: _run_compare_track(**kwargs),
+        ),
+    ]
+    enabled_tool_names = list_enabled_tools(tools)
+
     logger.info(
         "pipeline_start",
         request_id=request_id,
@@ -507,6 +574,7 @@ async def detect_anomaly(test_case: TestCase):
         percolate_version=pv,
         skip_analyzer=SKIP_ANALYZER,
         embedding_dim=len(test_case.embedding),
+        enabled_tools=enabled_tool_names,
     )
 
     # ── 원본 거래 필드 dict (Analyzer 전달용) ─────────────────
@@ -532,6 +600,58 @@ async def detect_anomaly(test_case: TestCase):
         return PipelineResponse(**cached_result)
 
     latencies: Dict[str, float] = {}
+
+    async def _run_fast_track(*, top1_dist: float, response_payload: Dict[str, Any]) -> PipelineResponse:
+        score = distance_to_score(top1_dist)
+        is_anomaly = score >= 0.5
+        return PipelineResponse(
+            classification="ABNORMAL" if is_anomaly else "NORMAL",
+            confidence=int(score * 100),
+            reasoning="fast_track_distance_gate",
+            key_evidence=[
+                f"selected_tool=anomaly.fast_track_distance_gate",
+                f"top1_distance={top1_dist:.4f}",
+                f"fast_threshold={FAST_TRACK_DISTANCE_THRESHOLD}",
+            ],
+            final_verdict=None,
+            **response_payload,
+            skip_analyzer=True,
+            persona_used=False,
+            tree_rules_used=False,
+        )
+
+    async def _run_deep_track(*, client: httpx.AsyncClient, response_payload: Dict[str, Any], persona: Optional[Dict], results_raw: List[Dict], tx: Dict) -> PipelineResponse:
+        analyzer_result = await call_analyzer(
+            client,
+            test_transaction=tx,
+            cluster_id=response_payload["primary_cluster_id"],
+            top_k_normal_results=results_raw,
+            top1_distance=response_payload["top_1_distance"],
+            experiment_case=exp_case,
+            persona=persona,
+            tree_features=None,
+        )
+        return PipelineResponse(
+            classification=analyzer_result["classification"],
+            confidence=analyzer_result["confidence"],
+            reasoning=analyzer_result.get("reasoning"),
+            key_evidence=analyzer_result.get("key_evidence", []),
+            final_verdict=analyzer_result.get("final_verdict"),
+            **response_payload,
+            skip_analyzer=False,
+            persona_used=analyzer_result.get("persona_used", False),
+            tree_rules_used=analyzer_result.get("tree_rules_used", False),
+        )
+
+    async def _run_compare_track(*, client: httpx.AsyncClient, response_payload: Dict[str, Any], persona: Optional[Dict], results_raw: List[Dict], tx: Dict) -> PipelineResponse:
+        # 최소 변경 원칙: compare track은 현재 deep track 재사용 (향후 raw ES SDK 비교 실험 지점)
+        return await _run_deep_track(
+            client=client,
+            response_payload=response_payload,
+            persona=persona,
+            results_raw=results_raw,
+            tx=tx,
+        )
 
     try:
         async with httpx.AsyncClient() as client:
@@ -595,100 +715,50 @@ async def detect_anomaly(test_case: TestCase):
 
             page_fault_pass.observe(pf_delta)
 
-            # ── SKIP_ANALYZER 분기 ────────────────────────────
-            if SKIP_ANALYZER:
+            response_payload = dict(
+                primary_cluster_id=primary_cluster_id,
+                top_5_clusters=top_5_clusters,
+                vec_index=vec_index,
+                match_type=match_type,
+                match_score=match_score,
+                top_1_distance=top1_dist,
+                top_k=len(results_raw),
+                page_fault_delta=pf_delta,
+                is_hot=is_hot,
+                latency_ms=latencies,
+                experiment_case=exp_case,
+                percolate_version=pv,
+            )
+            selected_tool = choose_tool(
+                fast_track_enabled=FAST_TRACK_ENABLED or SKIP_ANALYZER,
+                deep_track_enabled=DEEP_TRACK_ENABLED,
+                compare_track_enabled=COMPARE_TRACK_ENABLED,
+                distance_hint=top1_dist,
+                fast_threshold=FAST_TRACK_DISTANCE_THRESHOLD,
+            )
+
+            if selected_tool == "anomaly.fast_track_distance_gate":
                 skip_analyzer_hits.inc()
-                score      = distance_to_score(top1_dist)
-                is_anomaly = score >= 0.5
-                total_ms   = (time.time() - pipeline_start) * 1000
-                latencies["total"] = total_ms
-                pipeline_latency.observe(total_ms / 1000)
-
-                result = PipelineResponse(
-                    classification="ABNORMAL" if is_anomaly else "NORMAL",
-                    confidence=int(score * 100),
-                    reasoning=None,
-                    key_evidence=[
-                        f"top1_distance={top1_dist:.4f}",
-                        f"threshold={DISTANCE_THRESHOLD}",
-                        f"anomaly_score={score:.4f}",
-                    ],
-                    final_verdict=None,
-                    primary_cluster_id=primary_cluster_id,
-                    top_5_clusters=top_5_clusters,
-                    vec_index=vec_index,
-                    match_type=match_type,
-                    match_score=match_score,
-                    top_1_distance=top1_dist,
-                    top_k=len(results_raw),
-                    page_fault_delta=pf_delta,
-                    is_hot=is_hot,
-                    skip_analyzer=True,
-                    latency_ms=latencies,
-                    experiment_case=exp_case,
-                    percolate_version=pv,
-                    persona_used=False,
-                    tree_rules_used=False,
-                )
-                set_to_cache(cache_key, result.model_dump())
-                pipeline_requests_total.labels(
-                    status="success_skip", percolate_version=pv, experiment_case=exp_case
-                ).inc()
-                logger.info(
-                    "pipeline_done_skip",
-                    request_id=request_id,
-                    score=score,
-                    top1_dist=top1_dist,
-                    pf_delta=pf_delta,
-                    total_ms=total_ms,
-                )
-                return result
-
-            # ── Stage 3: Analyzer ──────────────────────────────
-            try:
-                t = time.time()
-                analyzer_result = await call_analyzer(
-                    client,
-                    test_transaction=tx_dict,
-                    cluster_id=primary_cluster_id,
-                    top_k_normal_results=results_raw,   # retriever v5 SearchResult 그대로
-                    top1_distance=top1_dist,
-                    experiment_case=exp_case,
+                result = await _run_fast_track(top1_dist=top1_dist, response_payload=response_payload)
+            elif selected_tool == "anomaly.compare_track_raw_es":
+                result = await _run_compare_track(
+                    client=client,
+                    response_payload=response_payload,
                     persona=persona,
-                    tree_features=None,                 # router v5에서 tree_features 제거됨
+                    results_raw=results_raw,
+                    tx=tx_dict,
                 )
-                latencies["analyzer"] = (time.time() - t) * 1000
-            except CircuitBreakerError:
-                pipeline_requests_total.labels(
-                    status="circuit_open", percolate_version=pv, experiment_case=exp_case
-                ).inc()
-                raise HTTPException(status_code=503, detail="Analyzer unavailable (circuit open)")
+            else:
+                result = await _run_deep_track(
+                    client=client,
+                    response_payload=response_payload,
+                    persona=persona,
+                    results_raw=results_raw,
+                    tx=tx_dict,
+                )
 
         total_ms = (time.time() - pipeline_start) * 1000
         latencies["total"] = total_ms
-
-        result = PipelineResponse(
-            classification=analyzer_result["classification"],
-            confidence=analyzer_result["confidence"],
-            reasoning=analyzer_result.get("reasoning"),
-            key_evidence=analyzer_result.get("key_evidence",  []),
-            final_verdict=analyzer_result.get("final_verdict"),
-            primary_cluster_id=primary_cluster_id,
-            top_5_clusters=top_5_clusters,
-            vec_index=vec_index,
-            match_type=match_type,
-            match_score=match_score,
-            top_1_distance=top1_dist,
-            top_k=len(results_raw),
-            page_fault_delta=pf_delta,
-            is_hot=is_hot,
-            skip_analyzer=False,
-            latency_ms=latencies,
-            experiment_case=exp_case,
-            percolate_version=pv,
-            persona_used=analyzer_result.get("persona_used",    False),
-            tree_rules_used=analyzer_result.get("tree_rules_used", False),
-        )
 
         set_to_cache(cache_key, result.model_dump())
 

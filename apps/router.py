@@ -250,6 +250,17 @@ class RouteResponse(BaseModel):
     persona:             Optional[Dict[str, Any]] = None
     preprocessing_stats: Optional[Dict[str, Any]] = None
 
+
+class McpExecuteRequest(BaseModel):
+    tool: str
+    arguments: Dict[str, Any]
+
+
+class McpExecuteResponse(BaseModel):
+    ok: bool
+    tool: str
+    result: Dict[str, Any]
+
 # ===========================
 # vec_index 결정
 # ===========================
@@ -1067,6 +1078,21 @@ async def route_batch(
             )
 
     return await asyncio.gather(*[_run(tc) for tc in test_cases])
+
+
+@app.post("/mcp/execute", response_model=McpExecuteResponse)
+async def mcp_execute(req: McpExecuteRequest):
+    """
+    Minimal MCP-style wrapper endpoint for router.
+    Supported tool:
+      - router.route
+    """
+    if req.tool != "router.route":
+        raise HTTPException(status_code=400, detail=f"unsupported tool: {req.tool}")
+
+    tc = TestCase(**req.arguments)
+    result = await route_to_cluster(tc)
+    return McpExecuteResponse(ok=True, tool=req.tool, result=result.model_dump())
 
 
 # ===========================

@@ -1,8 +1,11 @@
 """
-retriever.py — Vector Search Retriever (V5)
+retriever.py — Vector Search Retriever (V5.2)
 ============================================
-
 변경사항:
+    [03.31. V5.2 변경사항]: ingest.py의 _routing 반영
+    - def search 함수 : routing_param 정의 및 routing_param 필요한 각 함수들에 인자 전달
+    - query에도 cluster_id 정의 및 client.search에도 전달해야
+
   ★ V5.1: /retrieve-batch 엔드포인트 추가
       - batch_inference.py call_retriever_batch() 지원
       - 입력: List[RetrieveRequest] (각 request 독립적으로 search() 호출)
@@ -165,6 +168,17 @@ class BatchErrorResponse(BaseModel):
     reason:  str  = ""
     results: list = []   # 빈 리스트 — _parse_retriever_response 호환
 
+
+class McpExecuteRequest(BaseModel):
+    tool: str
+    arguments: dict
+
+
+class McpExecuteResponse(BaseModel):
+    ok: bool
+    tool: str
+    result: dict
+
 # ──────────────────────────────────────────────
 # Query Builders
 # ──────────────────────────────────────────────
@@ -243,7 +257,7 @@ def _hnsw_with_filter_query(embedding: List[float], cluster_ids: List[int], k: i
     return body
 
 
-def _faiss_knn_query(embedding: List[float], cluster_ids: List[int], vec_index: str, k: int) -> dict:
+def _faiss_knn_query(embedding: List[float], cluster_ids: List[int], vec_index: str, k: int, routing_param: str) -> dict:
     """
     Step 1: ES에서 cluster_id 필터링된 후보 벡터(vec)와 ID를 Fetch
     """
@@ -254,7 +268,7 @@ def _faiss_knn_query(embedding: List[float], cluster_ids: List[int], vec_index: 
         "_source": ["vec", "original_index", "cluster_id"]
     }
     
-    res = client.search(index=vec_index, body=candidate_query)
+    res = client.search(index=vec_index, body=candidate_query, routing=routing_param)
     hits = res["hits"]["hits"]
     
     if not hits:
@@ -325,6 +339,8 @@ def search(
 
     results = []
 
+    routing_param = ",".join(map(str, cluster_ids)) if cluster_ids else None
+
     try:
         # ── 분기점 1: SKIP_ANALYZER (Case 2: Baseline 비교용) ──
         if is_skip:
@@ -338,19 +354,19 @@ def search(
             if SEARCH_MODE == "faiss":
                 # Case 3-1: FAISS 기반 최적화 Exact KNN (ES 외부 연산)
                 # 이 함수는 내부에서 검색과 SearchResult 구성을 모두 마쳐서 반환함
-                results = _faiss_knn_query(embedding, cluster_ids, vec_index, k)
+                results = _faiss_knn_query(embedding, cluster_ids, vec_index, k, routing_param)
             
             elif SEARCH_MODE == "hnsw_filtered":
                 # Case 1-1: Filter 내장형 HNSW (Pre-filtering)
                 body = _hnsw_with_filter_query(embedding, cluster_ids, k)
-                res = client.search(index=vec_index, body=body)
+                res = client.search(index=vec_index, body=body, routing=routing_param)
                 results = _parse_es_hits(res["hits"]["hits"])
             
             else:
                 # Case 3-2: 기본 Exact KNN (script_score)
                 # SEARCH_MODE가 "script_score"이거나 명시되지 않은 경우의 Fallback
                 body = _exact_knn_query(embedding, cluster_ids, k)
-                res = client.search(index=vec_index, body=body)
+                res = client.search(index=vec_index, body=body, routing=routing_param)
                 results = _parse_es_hits(res["hits"]["hits"])
 
     except Exception as e:
@@ -413,26 +429,6 @@ def search(
         skip_analyzer=   is_skip,
     )
 
-# ──────────────────────────────────────────────
-# Endpoints
-# ──────────────────────────────────────────────
-# @app.post("/retrieve", response_model=RetrieveResponse)
-# def retrieve(req: RetrieveRequest):
-#     """
-#     vec_index: router가 결정한 인덱스명
-#       - 원본 coreset: fraud_ecom_percentage_{pct}_cluster_tree_vec
-#       - gaussian aug: fraud_ecom_aug_{mult}x_{pct}pct_{vec_type}_vec
-
-#     cluster_ids: router top-k cluster ID 목록
-#       - SKIP_ANALYZER=true 시 [] 전달 → 전체 인덱스 검색
-#     """
-#     return search(
-#         embedding=   req.embedding,
-#         cluster_ids= req.cluster_ids,
-#         vec_index=   req.vec_index,
-#         k=           req.top_k,
-#     )
-
 @app.post("/retrieve", response_model=RetrieveResponse)
 async def retrieve(req: RetrieveRequest):    
     """
@@ -450,49 +446,6 @@ async def retrieve(req: RetrieveRequest):
         req.vec_index,
         req.top_k,
     )
-
-
-
-# @app.post("/retrieve-batch")
-# def retrieve_batch(reqs: List[RetrieveRequest]):
-#     """
-#     Batch 검색 엔드포인트 (batch_inference.py call_retriever_batch() 전용).
-
-#     입력: List[RetrieveRequest]  각 item = {embedding, cluster_ids, vec_index, top_k}
-#     출력: List[RetrieveResponse | BatchErrorResponse]
-#       - 단건 성공: RetrieveResponse dict
-#       - 단건 실패: {"error": true, "reason": "...", "results": []}
-
-#     batch_inference는 r.get("error") 로 실패 여부를 판단하므로
-#     전체 batch는 항상 HTTP 200을 반환하고 개별 실패를 error 필드로 표시.
-#     """
-#     results = []
-#     for req in reqs:
-#         try:
-#             resp = search(
-#                 embedding=   req.embedding,
-#                 cluster_ids= req.cluster_ids,
-#                 vec_index=   req.vec_index,
-#                 k=           req.top_k,
-#             )
-#             results.append(resp.dict())
-#         except HTTPException as e:
-#             logger.warning(
-#                 "retrieve_batch_item_failed",
-#                 vec_index=req.vec_index,
-#                 cluster_ids_count=len(req.cluster_ids),
-#                 status=e.status_code,
-#                 detail=e.detail,
-#             )
-#             results.append({"error": True, "reason": e.detail, "results": []})
-#         except Exception as e:
-#             logger.error(
-#                 "retrieve_batch_item_error",
-#                 vec_index=req.vec_index,
-#                 error=str(e),
-#             )
-#             results.append({"error": True, "reason": str(e), "results": []})
-#     return results
 
 @app.post("/retrieve-batch")
 async def retrieve_batch(reqs: List[RetrieveRequest]):
@@ -517,6 +470,21 @@ async def retrieve_batch(reqs: List[RetrieveRequest]):
             return {"error": True, "reason": str(e), "results": []}
 
     return await asyncio.gather(*[_run(req) for req in reqs])
+
+
+@app.post("/mcp/execute", response_model=McpExecuteResponse)
+async def mcp_execute(req: McpExecuteRequest):
+    """
+    Minimal MCP-style wrapper endpoint for retriever.
+    Supported tool:
+      - retriever.retrieve
+    """
+    if req.tool != "retriever.retrieve":
+        raise HTTPException(status_code=400, detail=f"unsupported tool: {req.tool}")
+
+    payload = RetrieveRequest(**req.arguments)
+    resp = await retrieve(payload)
+    return McpExecuteResponse(ok=True, tool=req.tool, result=resp.model_dump())
 
 @app.get("/health")
 def health():
@@ -574,64 +542,3 @@ if __name__ == "__main__":
     import uvicorn
     # 여기 포트가 8000인지, 실제 서비스 포트와 맞는지 확인하세요.
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
-
-
-# @app.get("/health")
-# def health():
-#     return {
-#         "status":          "healthy",
-#         "service":         "retriever",
-#         "search_mode":     SEARCH_MODE,
-#         "skip_analyzer":   SKIP_ANALYZER,
-#         "experiment_label": EXPERIMENT_LABEL,
-#         "knn_candidates":  KNN_CANDIDATES,
-#     }
-
-# @app.get("/ready")
-# async def ready():
-#     try:
-#         # Elasticsearch 클러스터 상태 확인
-#         info = client.cluster.health(timeout="5s")
-#         return {
-#             "status":        "ready",
-#             "elasticsearch": info.get("cluster_name"),
-#             "configuration": {
-#                 "search_mode":   SEARCH_MODE,
-#                 "skip_analyzer": SKIP_ANALYZER,
-#                 # "es_timeout":    ES_REQUEST_TIMEOUT,
-#             }
-#         }
-#     except Exception as e:
-#         logger.error("ready_check_failed", error=str(e))
-#         raise HTTPException(status_code=503, detail=str(e))
-    
-# @app.get("/metrics")
-# async def metrics():
-#     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
-
-# # ===========================
-# # Startup / Shutdown
-# # ===========================
-
-# @app.on_event("startup")
-# async def startup_event():
-#     # retriever 고유의 시작 로그
-#     logger.info(
-#         "retriever_started",
-#         version="5.1.0",
-#         search_mode=SEARCH_MODE,
-#         skip_analyzer=SKIP_ANALYZER,
-#         es_url=ES_URL
-#     )
-
-# @app.on_event("shutdown")
-# async def shutdown_event():
-#     client.close()
-#     logger.info("retriever_stopped")
-
-# # uvicorn 실행 (메인 모듈로 실행 시)
-# if __name__ == "__main__":
-#     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
-
-# app.mount("/metrics", make_asgi_app())

@@ -98,6 +98,34 @@ spec:
           # value: "http://anomaly-analyzer:80"
           #local analyzer
           value: "http://local-analyzer:80"
+<<<<<<< ours
+        - name: MCP_WRAPPER_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: MCP_WRAPPER_ENABLED
+=======
+        - name: FAST_TRACK_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: FAST_TRACK_ENABLED
+        - name: DEEP_TRACK_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: DEEP_TRACK_ENABLED
+        - name: COMPARE_TRACK_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: COMPARE_TRACK_ENABLED
+        - name: FAST_TRACK_DISTANCE_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: FAST_TRACK_DISTANCE_THRESHOLD
+>>>>>>> theirs
         # ... (기존 env 설정들 동일) ...
         - name: ROUTER_TIMEOUT
           valueFrom:

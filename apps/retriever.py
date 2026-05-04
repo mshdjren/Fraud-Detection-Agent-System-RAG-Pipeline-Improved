@@ -168,6 +168,17 @@ class BatchErrorResponse(BaseModel):
     reason:  str  = ""
     results: list = []   # 빈 리스트 — _parse_retriever_response 호환
 
+
+class McpExecuteRequest(BaseModel):
+    tool: str
+    arguments: dict
+
+
+class McpExecuteResponse(BaseModel):
+    ok: bool
+    tool: str
+    result: dict
+
 # ──────────────────────────────────────────────
 # Query Builders
 # ──────────────────────────────────────────────
@@ -459,6 +470,21 @@ async def retrieve_batch(reqs: List[RetrieveRequest]):
             return {"error": True, "reason": str(e), "results": []}
 
     return await asyncio.gather(*[_run(req) for req in reqs])
+
+
+@app.post("/mcp/execute", response_model=McpExecuteResponse)
+async def mcp_execute(req: McpExecuteRequest):
+    """
+    Minimal MCP-style wrapper endpoint for retriever.
+    Supported tool:
+      - retriever.retrieve
+    """
+    if req.tool != "retriever.retrieve":
+        raise HTTPException(status_code=400, detail=f"unsupported tool: {req.tool}")
+
+    payload = RetrieveRequest(**req.arguments)
+    resp = await retrieve(payload)
+    return McpExecuteResponse(ok=True, tool=req.tool, result=resp.model_dump())
 
 @app.get("/health")
 def health():
