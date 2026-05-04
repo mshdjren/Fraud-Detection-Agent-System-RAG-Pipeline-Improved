@@ -1,4 +1,5 @@
 """
+<<<<<<< ours
 Controller Service — v1.0 (Layer 1 Single-Shot Planner)
 ========================================================
 
@@ -516,3 +517,88 @@ async def startup_event():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8003, log_level="info")
+=======
+controller.py
+-------------
+Single-shot planner controller with lightweight LRU cache.
+현재 단계에서는 규칙 기반 fallback을 기본으로 사용하고,
+향후 Gemini planner 호출을 같은 인터페이스로 교체할 수 있도록 설계.
+"""
+
+from __future__ import annotations
+
+from collections import OrderedDict
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+
+
+@dataclass
+class PlanResponse:
+    track: str                      # fast | deep
+    sub_agents: List[str]           # e.g. ["distance", "evidence", "persona"]
+    expansion_enabled: bool
+    expansion_budget: int
+    tie_break_enabled: bool
+    source: str                     # llm | fallback | lru_cache
+
+
+class PlanLRUCache:
+    def __init__(self, max_size: int = 256):
+        self.max_size = max_size
+        self._store: "OrderedDict[Tuple, PlanResponse]" = OrderedDict()
+
+    def get(self, key: Tuple) -> Optional[PlanResponse]:
+        if key not in self._store:
+            return None
+        val = self._store.pop(key)
+        self._store[key] = val
+        return val
+
+    def put(self, key: Tuple, val: PlanResponse) -> None:
+        if key in self._store:
+            self._store.pop(key)
+        self._store[key] = val
+        while len(self._store) > self.max_size:
+            self._store.popitem(last=False)
+
+
+def _bucketize(x: float, step: float = 0.05) -> float:
+    return round(x / step) * step
+
+
+def build_plan_key(*, distance_hint: float, resource_degraded: bool, cache_hot: bool) -> Tuple:
+    return (_bucketize(distance_hint), int(resource_degraded), int(cache_hot))
+
+
+def fallback_plan(*, distance_hint: float, resource_degraded: bool) -> PlanResponse:
+    # 시스템 보호 우선
+    if resource_degraded:
+        return PlanResponse(
+            track="fast",
+            sub_agents=["distance"],
+            expansion_enabled=False,
+            expansion_budget=0,
+            tie_break_enabled=False,
+            source="fallback",
+        )
+
+    # 간단한 single-shot plan (향후 LLM 대체 지점)
+    if distance_hint >= 0.85:
+        return PlanResponse(
+            track="fast",
+            sub_agents=["distance"],
+            expansion_enabled=False,
+            expansion_budget=0,
+            tie_break_enabled=False,
+            source="fallback",
+        )
+    return PlanResponse(
+        track="deep",
+        sub_agents=["distance", "evidence", "persona"],
+        expansion_enabled=True,
+        expansion_budget=1,
+        tie_break_enabled=True,
+        source="fallback",
+    )
+
+>>>>>>> theirs

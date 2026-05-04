@@ -51,6 +51,10 @@ import structlog
 import httpx
 from pybreaker import CircuitBreaker, CircuitBreakerError
 from agent_tools import AgentTool, choose_tool, list_enabled_tools
+<<<<<<< ours
+=======
+from controller import PlanLRUCache, build_plan_key, fallback_plan
+>>>>>>> theirs
 
 # ===========================
 # Configuration
@@ -86,6 +90,11 @@ FAST_TRACK_ENABLED = os.getenv("FAST_TRACK_ENABLED", "true").lower() == "true"
 DEEP_TRACK_ENABLED = os.getenv("DEEP_TRACK_ENABLED", "true").lower() == "true"
 COMPARE_TRACK_ENABLED = os.getenv("COMPARE_TRACK_ENABLED", "false").lower() == "true"
 FAST_TRACK_DISTANCE_THRESHOLD = float(os.getenv("FAST_TRACK_DISTANCE_THRESHOLD", "0.85"))
+<<<<<<< ours
+=======
+RESOURCE_DEGRADED_CPU_THRESHOLD = float(os.getenv("RESOURCE_DEGRADED_CPU_THRESHOLD", "0.85"))
+CONTROLLER_LRU_SIZE = int(os.getenv("CONTROLLER_LRU_SIZE", "256"))
+>>>>>>> theirs
 
 VALID_EXPERIMENT_CASES = [
     "emb_vectors",
@@ -159,6 +168,7 @@ page_fault_pass = Histogram(
 # ===========================
 
 cache_store: Dict[str, tuple] = {}
+plan_cache = PlanLRUCache(max_size=CONTROLLER_LRU_SIZE)
 
 def get_cache_key(test_case: "TestCase") -> str:
     """embedding 앞 32차원 + 거래 필드 해시."""
@@ -411,6 +421,7 @@ async def call_retriever(
             "top_k":       top_k,
         }
 <<<<<<< ours
+<<<<<<< ours
         if MCP_WRAPPER_ENABLED:
             resp = await call_with_retry(
                 client, "POST", f"{RETRIEVER_URL}/mcp/execute",
@@ -430,6 +441,8 @@ async def call_retriever(
             )
             result = resp.json()
 =======
+=======
+>>>>>>> theirs
         resp = await call_with_retry(
             client, "POST", f"{RETRIEVER_URL}/retrieve",
             timeout=RETRIEVER_TIMEOUT,
@@ -655,6 +668,29 @@ async def detect_anomaly(test_case: TestCase):
 
     try:
         async with httpx.AsyncClient() as client:
+            # ── Controller: single-shot plan + LRU cache ─────────────────
+            # (현재는 fallback planner. 향후 Gemini 호출로 동일 인터페이스 확장)
+            # global centroid distance 대체 지표로 첫 64-dim L2 norm 근사값 사용(최소 변경)
+            dist_hint = min(
+                2.0,
+                math.sqrt(sum(float(v) * float(v) for v in test_case.embedding[:64])) / 8.0
+            )
+            resource_degraded = False  # TODO: Prometheus/노드 메트릭 연동 지점
+            cache_hot = cached_result is not None
+            pkey = build_plan_key(
+                distance_hint=dist_hint,
+                resource_degraded=resource_degraded,
+                cache_hot=cache_hot,
+            )
+            plan = plan_cache.get(pkey)
+            if plan is None:
+                plan = fallback_plan(
+                    distance_hint=dist_hint,
+                    resource_degraded=resource_degraded,
+                )
+                plan_cache.put(pkey, plan)
+            else:
+                plan.source = "lru_cache"
 
             # ── Stage 1: Router ────────────────────────────────
             try:
@@ -729,6 +765,7 @@ async def detect_anomaly(test_case: TestCase):
                 experiment_case=exp_case,
                 percolate_version=pv,
             )
+<<<<<<< ours
             selected_tool = choose_tool(
                 fast_track_enabled=FAST_TRACK_ENABLED or SKIP_ANALYZER,
                 deep_track_enabled=DEEP_TRACK_ENABLED,
@@ -750,11 +787,43 @@ async def detect_anomaly(test_case: TestCase):
                 )
             else:
                 result = await _run_deep_track(
+=======
+            # Controller plan 우선, 없을 때 choose_tool fallback
+            if plan.track == "fast":
+                selected_tool = "anomaly.fast_track_distance_gate"
+            elif plan.track == "deep":
+                selected_tool = "anomaly.deep_track_two_stage"
+            else:
+                selected_tool = choose_tool(
+                    fast_track_enabled=FAST_TRACK_ENABLED or SKIP_ANALYZER,
+                    deep_track_enabled=DEEP_TRACK_ENABLED,
+                    compare_track_enabled=COMPARE_TRACK_ENABLED,
+                    distance_hint=top1_dist,
+                    fast_threshold=FAST_TRACK_DISTANCE_THRESHOLD,
+                )
+
+            if selected_tool == "anomaly.fast_track_distance_gate":
+                skip_analyzer_hits.inc()
+                result = await _run_fast_track(top1_dist=top1_dist, response_payload=response_payload)
+            elif selected_tool == "anomaly.compare_track_raw_es":
+                result = await _run_compare_track(
+>>>>>>> theirs
                     client=client,
                     response_payload=response_payload,
                     persona=persona,
                     results_raw=results_raw,
                     tx=tx_dict,
+<<<<<<< ours
+=======
+                )
+            else:
+                result = await _run_deep_track(
+                    client=client,
+                    response_payload=response_payload,
+                    persona=persona,
+                    results_raw=results_raw,
+                    tx=tx_dict,
+>>>>>>> theirs
                 )
 
         total_ms = (time.time() - pipeline_start) * 1000

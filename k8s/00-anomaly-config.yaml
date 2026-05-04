@@ -16,15 +16,11 @@ data:
   ROUTER_URL: "http://anomaly-router"
   RETRIEVER_URL: "http://anomaly-retriever"
   ANALYZER_URL: "http://anomaly-analyzer"
-<<<<<<< ours
   MCP_WRAPPER_ENABLED: "false"
-=======
   FAST_TRACK_ENABLED: "true"
   DEEP_TRACK_ENABLED: "true"
   COMPARE_TRACK_ENABLED: "false"
   FAST_TRACK_DISTANCE_THRESHOLD: "0.85"
->>>>>>> theirs
-
   # ✅ GCP Configuration (for Analyzer)
   GOOGLE_CLOUD_PROJECT: "project-fcd52ffc-8b8b-4557-858"
   GOOGLE_CLOUD_REGION: "us-central1"
