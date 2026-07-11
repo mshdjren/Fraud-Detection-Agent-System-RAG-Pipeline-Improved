@@ -58,7 +58,7 @@ PASSWORD = os.getenv("PASSWORD")
 
 GAUSSIAN_AUG_DATA_DIR = os.getenv("GAUSSIAN_AUG_DATA_DIR", "/data/gaussian_aug")
 GCS_GAUSSIAN_AUG_BASE = os.getenv("GCS_GAUSSIAN_AUG_BASE",
-                                   "gs://fraudecom/tree-search/gaussian_aug")
+                                   "gs://fraud_ecomm/tree-search/gaussian_aug")
 
 GAUSSIAN_AUG_MULTIPLIERS = [
     int(m.strip())

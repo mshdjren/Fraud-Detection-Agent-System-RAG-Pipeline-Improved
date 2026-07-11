@@ -1,0 +1,105 @@
+# ===========================
+# Orchestrator Service Requirements
+# Python 3.12
+# ===========================
+
+# Web Framework (common)
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+
+# HTTP Client (common)
+httpx==0.27.2
+
+# Monitoring (common)
+prometheus-client==0.21.0
+
+# Utilities (common)
+python-dotenv==1.0.1
+pydantic==2.9.2
+pydantic-settings==2.6.1
+
+# Logging (common)
+structlog==24.4.0
+
+# ===========================
+# Circuit Breaker (Orchestrator 전용)
+# ===========================
+
+pybreaker==1.2.0
+
+# ===========================
+# Data Processing (Orchestrator)
+# ===========================
+
+numpy==1.26.0  # Mock vector 생성용 (TODO: 실제 vectorizer로 교체)
+
+# ===========================
+# Notes
+# ===========================
+
+# pybreaker:
+#   - Circuit breaker pattern implementation
+#   - Prevents cascading failures
+#   - Configurable failure thresholds
+#   - Automatic recovery attempts
+#
+# httpx:
+#   - Async HTTP client
+#   - Used for Router/Retriever/Analyzer calls
+#   - Timeout and retry support
+#
+# Orchestrator는:
+#   - Elasticsearch 직접 접근 안 함
+#   - Vertex AI 접근 안 함
+#   - 다른 서비스만 HTTP로 호출
+
+# # ===========================
+# # Orchestrator Service Requirements
+# # Python 3.12
+# # ===========================
+
+# # Web Framework (common)
+# fastapi==0.115.0
+# uvicorn[standard]==0.32.0
+# python-multipart==0.0.12
+
+# # HTTP Client (common)
+# httpx==0.27.2
+
+# # Monitoring (common)
+# prometheus-client==0.21.0
+
+# # Utilities (common)
+# python-dotenv==1.0.1
+# pydantic==2.9.2
+# pydantic-settings==2.6.1
+
+# # Logging (common)
+# structlog==24.4.0
+
+# # ===========================
+# # Circuit Breaker (Orchestrator 전용)
+# # ===========================
+
+# pybreaker==1.2.0
+
+# # ===========================
+# # Notes
+# # ===========================
+
+# # pybreaker:
+# #   - Circuit breaker pattern implementation
+# #   - Prevents cascading failures
+# #   - Configurable failure thresholds
+# #   - Automatic recovery attempts
+# #
+# # httpx:
+# #   - Async HTTP client
+# #   - Used for Router/Retriever/Analyzer calls
+# #   - Timeout and retry support
+# #
+# # Orchestrator는:
+# #   - Elasticsearch 직접 접근 안 함
+# #   - Vertex AI 접근 안 함
+# #   - 다른 서비스만 HTTP로 호출

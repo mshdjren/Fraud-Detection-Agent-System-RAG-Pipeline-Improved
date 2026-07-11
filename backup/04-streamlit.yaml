@@ -1,0 +1,182 @@
+# ===========================
+# Streamlit UI ConfigMap
+# ===========================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: streamlit-config
+  namespace: elastic
+  labels:
+    app: fraud-detection-ui
+data:
+  ORCHESTRATOR_URL: "http://anomaly-orchestrator:80"
+  # Agent Graph 시각화용 — controller /graph/mermaid 엔드포인트 호출
+  CONTROLLER_URL:   "http://anomaly-controller:80"
+  EXPERIMENT_CASE:  "pca_64_k100"
+  ADAPTER_TYPE:     "mined"
+
+---
+# ===========================
+# ServiceAccount
+# ===========================
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fraud-detection-ui
+  namespace: elastic
+  labels:
+    app: fraud-detection-ui
+
+---
+# ===========================
+# Deployment
+# ===========================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraud-detection-ui
+  namespace: elastic
+  labels:
+    app: fraud-detection-ui
+    tier: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fraud-detection-ui
+  template:
+    metadata:
+      labels:
+        app: fraud-detection-ui
+        tier: frontend
+    spec:
+      serviceAccountName: fraud-detection-ui
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: fraud-detection-ui
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: streamlit
+        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/fraud-detection-ui:1.0
+        imagePullPolicy: Always
+
+        ports:
+        - containerPort: 8501
+          name: http
+          protocol: TCP
+
+        # ConfigMap 전체를 envFrom으로 한번에 주입
+        envFrom:
+        - configMapRef:
+            name: streamlit-config
+
+        livenessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 20
+          periodSeconds: 15
+          timeoutSeconds: 5
+
+        readinessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            # plotly 차트 렌더링을 위해 기존 512Mi → 768Mi로 소폭 상향
+            cpu: "500m"
+            memory: "768Mi"
+
+        volumeMounts:
+        - name: code-volume
+          mountPath: /app/streamlit.py
+          subPath: streamlit.py
+
+      volumes:
+      - name: code-volume
+        configMap:
+          name: streamlit-code
+
+---
+# ===========================
+# Service (LoadBalancer)
+# ===========================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraud-detection-ui
+  namespace: elastic
+  labels:
+    app: fraud-detection-ui
+    tier: frontend
+spec:
+  type: LoadBalancer
+  selector:
+    app: fraud-detection-ui
+    tier: frontend
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8501
+    protocol: TCP
+
+# ===========================
+# 배포 절차
+# ===========================
+#
+# 0. (최초 1회) 이미지 빌드 — Dockerfile에 아래 requirements가 포함되어야 함:
+#    streamlit==1.40.0
+#    requests==2.32.3
+#    pyyaml==6.0.2
+#    plotly==5.24.1          # Latency Breakdown 차트
+#    streamlit-mermaid==0.2.0 # Agent Graph Mermaid 시각화
+#
+# 1. 코드 ConfigMap 생성/갱신:
+#    kubectl create configmap streamlit-code \
+#      --from-file=streamlit.py=apps/streamlit.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# 2. Deployment 적용:
+#    kubectl apply -f 04-streamlit.yaml
+#
+# 3. 외부 IP 확인:
+#    kubectl get svc fraud-detection-ui -n elastic
+#    → EXTERNAL-IP 할당 후 http://<EXTERNAL-IP> 접속
+#
+# ===========================
+# 설정 변경 방법
+# ===========================
+#
+# orchestrator URL 변경:
+#    kubectl patch configmap streamlit-config -n elastic \
+#      --type merge -p '{"data":{"ORCHESTRATOR_URL":"http://anomaly-orchestrator:80"}}'
+#    kubectl rollout restart deployment/fraud-detection-ui -n elastic
+#
+# Agent Graph 기능 비활성화 (controller 없는 환경):
+#    → CONTROLLER_URL을 빈 문자열로 설정해도 UI가 graceful degrade됨
+#      (토글 시 "Controller 연결 필요" 안내 메시지 표시)

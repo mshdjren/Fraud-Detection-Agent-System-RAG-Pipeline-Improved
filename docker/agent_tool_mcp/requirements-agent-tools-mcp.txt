@@ -1,0 +1,39 @@
+# ===========================
+# Agent Tools MCP Server Requirements
+# Python 3.12 / CPU-only
+# ===========================
+# expand_within_cluster / reroute_cross_cluster 를 표준 MCP tool로 노출하는
+# 서비스 전용 requirements. controller.py(TOOL_EXECUTION_MODE=mcp)가 REST
+# shim(/tools/{name}/call)으로 호출하거나, 표준 MCP client가 /mcp(streamable-
+# http)로 직접 호출할 수 있다.
+#
+# 버전 호환 메모:
+#   mcp==1.27.2 → pydantic>=2.11.0, pydantic-settings>=2.5.2, httpx>=0.27.1
+#   (analyzer requirements.txt의 pydantic==2.9.2 / httpx 미지정 버전에서 충돌
+#    발생. 아래는 mcp 의존성을 만족하는 최소 상향 버전 — 이 환경에서 실제
+#    설치+동작 검증 완료.)
+
+# ── Web Framework ─────────────────────────────────────────
+fastapi==0.115.0             # analyzer requirements.txt 동일
+uvicorn[standard]==0.32.0    # analyzer requirements.txt 동일
+starlette==0.38.6            # fastapi 0.115.0과 호환되는 starlette
+
+# ── Monitoring ────────────────────────────────────────────
+prometheus-client==0.21.0    # analyzer requirements.txt 동일
+
+# ── Utilities ─────────────────────────────────────────────
+structlog==24.4.0            # analyzer requirements.txt 동일
+python-dotenv==1.0.1         # analyzer requirements.txt 동일
+
+# pydantic: mcp==1.27.2 는 pydantic>=2.11.0 을 요구 — analyzer의 2.9.2는
+# 충돌. 이 환경 실측값(2.13.4)으로 상향. pydantic-settings도 함께 올림.
+pydantic==2.13.4
+pydantic-settings==2.14.1
+
+# ── HTTP client (Retriever 호출) ────────────────────────────
+# mcp==1.27.2 는 httpx>=0.27.1 을 요구. analyzer의 미고정 httpx와 달리
+# 명시적으로 이 환경 실측값(0.28.1)으로 지정.
+httpx==0.28.1
+
+# ── MCP server SDK ────────────────────────────────────────
+mcp==1.27.2

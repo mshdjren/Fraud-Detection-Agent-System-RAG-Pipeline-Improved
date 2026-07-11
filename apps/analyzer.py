@@ -51,7 +51,7 @@ LLM_TEMPERATURE      = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_MAX_TOKENS       = int(os.getenv("LLM_MAX_TOKENS", "1024"))
 
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
-GOOGLE_CLOUD_REGION  = os.getenv("GOOGLE_CLOUD_REGION", "us-central1")
+GOOGLE_CLOUD_REGION  = os.getenv("GOOGLE_CLOUD_REGION", "us-west1")
 
 MAX_RETRIES          = int(os.getenv("MAX_RETRIES", "5"))
 RETRY_BACKOFF        = int(os.getenv("RETRY_BACKOFF", "5"))

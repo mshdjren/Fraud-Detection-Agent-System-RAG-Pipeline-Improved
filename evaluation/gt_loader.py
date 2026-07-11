@@ -67,7 +67,7 @@ VALID_EXPERIMENT_CASES: List[str] = [
 ]
 
 # GCS 경로 상수
-GCS_BUCKET_NAME = "fraudecom"
+GCS_BUCKET_NAME = "fraud_ecomm"
 
 # test_with_gt parquet (experiment_case별)
 TEST_PARQUET_PATH_TEMPLATE = "tree-search/tree_fraudecom/{experiment_case}/test_with_gt.parquet"

@@ -140,7 +140,7 @@ class RetrieveRequest(BaseModel):
     cluster_ids: List[int]        # router에서 전달받은 cluster_id 목록
                                   # SKIP_ANALYZER=true 시 빈 리스트([]) 허용 → 전체 검색
     vec_index:   str              # router가 결정한 인덱스명
-    top_k:       int = 5
+    top_k:       int = 3   # ★ 기본 inference top-k=3 (expand 시 controller가 5로 요청)
 
 
 class SearchResult(BaseModel):

@@ -122,7 +122,7 @@ NODE_ALLOCATION = {
 }
 PERCOLATOR_NODE = os.getenv("NODE_PERCOLATOR", "elasticsearch-ha-es-main-3")
 
-GCS_TREE_BASE = os.getenv("GCS_TREE_BASE", "gs://fraudecom/tree-search/tree_fraudecom")
+GCS_TREE_BASE = os.getenv("GCS_TREE_BASE", "gs://fraud_ecomm/tree-search/tree_fraudecom")
 
 PERCOLATOR_SHARD_DISTRIBUTION = os.getenv("PERCOLATOR_SHARD_DISTRIBUTION", "false").strip().lower() == "true"
 ATTR_PERCOLATOR = os.getenv("ATTR_PERCOLATOR", "percolator")
@@ -666,7 +666,7 @@ def load_coreset_parquet(percentage: int, experiment_case) -> pd.DataFrame:
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"Coreset parquet not found: {path}\n"
-            f"  GCS: gs://fraudecom/tree-search/tree_fraudecom/"
+            f"  GCS: gs://fraud_ecomm/tree-search/tree_fraudecom/"
             f"raw_plus_cluster_tree_percentage_{percentage}.parquet"
         )
     print(f"\n[parquet] Loading {percentage}% coreset: {path}")

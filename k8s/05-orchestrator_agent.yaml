@@ -1,0 +1,292 @@
+# ServiceAccount (최소 권한)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: anomaly-orchestrator
+  namespace: elastic
+  labels:
+    app: anomaly-orchestrator
+    tier: api
+
+---
+# ConfigMap (환경 변수용)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anomaly-orchestrator-config
+  namespace: elastic
+  labels:
+    app: anomaly-orchestrator
+data:
+  # ROUTER_TIMEOUT: "5"
+  ROUTER_TIMEOUT: "15"
+  # RETRIEVER_TIMEOUT: "10"
+  RETRIEVER_TIMEOUT: "15"
+  # ANALYZER_TIMEOUT 제거됨 — orchestrator_agentic.py는 더 이상 analyzer를
+  # 직접 호출하지 않는다(controller.py가 직접 호출). PLANNER_TIMEOUT이
+  # router+retriever base call 이후 controller.py(/detect, agent loop 전체)
+  # 호출의 타임아웃을 담당하므로, 그 값을 충분히 크게 잡아야 한다.
+  PLANNER_TIMEOUT: "1200"
+  TOTAL_TIMEOUT: "1200"
+  # CB_FAILURE_THRESHOLD: "10"
+  CB_FAILURE_THRESHOLD: "9999"
+  # CB_RECOVERY_TIMEOUT: "60"
+  CB_RECOVERY_TIMEOUT: "5"
+  # MAX_RETRIES: "5"
+  MAX_RETRIES: "1"
+  # RETRY_BACKOFF_FACTOR: "4"
+  RETRY_BACKOFF_FACTOR: "1"
+  # RETRY_INITIAL_WAIT: "2"
+  RETRY_INITIAL_WAIT: "1"
+  ENABLE_CACHE: "false"
+  # ENABLE_CACHE: "true"
+  CACHE_TTL: "600"
+
+# Agentic workflow 설정 — orchestrator가 유일하게 직접 판정하는 분기점만 남음.
+# BOUNDARY_LOW/HIGH, MAX_EXPANSION_ITER, W_ANALYZER는 제거됨: sufficiency
+# 기반 boundary 판정과 expand/reroute 루프 제어는 전부 controller.py
+# (LangGraph StateGraph, AGENT_MAX_ROUNDS — 06-controller.yaml 참고)로
+# 이전되었다. 여기서 값을 바꿔도 더 이상 agent loop 동작에 영향을 주지
+# 않으므로 혼동을 막기 위해 제거한다.
+  FAST_TRACK_DIST_THRESHOLD: "0.01"
+  # Direct / mcp — controller.py(TOOL_EXECUTION_MODE)와 동일 값으로 맞춰야
+  # 응답의 key_evidence/agent_trace 표기가 일치한다 (orchestrator 자신은
+  # tool을 실행하지 않으므로 동작에는 영향 없음, 표기 일관성용).
+  TOOL_EXECUTION_MODE: "mcp_navtive"
+---
+# Deployment (Orchestrator)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-orchestrator
+  namespace: elastic
+  labels:
+    app: anomaly-orchestrator
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly-orchestrator
+  template:
+    metadata:
+      labels:
+        app: anomaly-orchestrator
+        tier: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: anomaly-orchestrator
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["app-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: anomaly-orchestrator
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: orchestrator
+        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/anomaly-orchestrator:1.0
+        imagePullPolicy: Always
+
+        #for agentic_loop
+        command: ["python", "-m", "uvicorn", "orchestrator_agentic:app", "--host", "0.0.0.0", "--port", "8080"]
+
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: ROUTER_URL
+          value: "http://anomaly-router:80"
+        - name: RETRIEVER_URL
+          value: "http://anomaly-retriever:80"
+        # ANALYZER_URL 제거됨 — orchestrator_agentic.py는 더 이상 analyzer를
+        # 직접 호출하지 않는다. analyzer 호출은 controller.py(/detect, agent
+        # loop의 analyze node)가 전담하며, 그 서비스의 ANALYZER_URL은
+        # 06-controller.yaml의 anomaly-controller-config ConfigMap에서 관리.
+        # ⚠ 참고: 아래 4개(MCP_WRAPPER_ENABLED~FAST_TRACK_DISTANCE_THRESHOLD)는
+        # orchestrator_agentic.py 코드에서 실제로 읽지 않는 값이다(다른
+        # ConfigMap `anomaly-config` 참조, 이 파일의 작업 범위 밖). 코드가
+        # 실제 참조하는 fast-track 임계값은 FAST_TRACK_DIST_THRESHOLD(아래,
+        # anomaly-orchestrator-config ConfigMap)이다. 혼동 방지를 위해 표시.
+        - name: MCP_WRAPPER_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: MCP_WRAPPER_ENABLED
+        - name: FAST_TRACK_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: FAST_TRACK_ENABLED
+        - name: DEEP_TRACK_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: DEEP_TRACK_ENABLED
+        - name: COMPARE_TRACK_ENABLED
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: COMPARE_TRACK_ENABLED
+        - name: FAST_TRACK_DISTANCE_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: FAST_TRACK_DISTANCE_THRESHOLD
+
+        - name: DIST_TOP_K
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: DIST_TOP_K
+
+        # ... (기존 env 설정들 동일) ...
+        - name: ROUTER_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: ROUTER_TIMEOUT
+        - name: RETRIEVER_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: RETRIEVER_TIMEOUT
+        - name: PLANNER_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: PLANNER_TIMEOUT
+        - name: TOTAL_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: TOTAL_TIMEOUT
+        - name: CB_FAILURE_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: CB_FAILURE_THRESHOLD
+        - name: CB_RECOVERY_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: CB_RECOVERY_TIMEOUT
+        - name: MAX_RETRIES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: MAX_RETRIES
+        - name: RETRY_BACKOFF_FACTOR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: RETRY_BACKOFF_FACTOR
+        - name: RETRY_INITIAL_WAIT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: RETRY_INITIAL_WAIT
+        - name: ENABLE_CACHE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: ENABLE_CACHE
+        - name: CACHE_TTL
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: CACHE_TTL
+
+        - name: CONTROLLER_URL
+          value: "http://anomaly-controller:80"
+        - name: FAST_TRACK_DIST_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: FAST_TRACK_DIST_THRESHOLD
+        # BOUNDARY_LOW/BOUNDARY_HIGH/MAX_EXPANSION_ITER/W_ANALYZER env 제거됨
+        # — orchestrator_agentic.py는 더 이상 boundary를 직접 판정하거나
+        # score를 weighted-average로 결합하지 않는다. sufficiency 기반
+        # 판정과 expand/reroute 루프 제어는 controller.py(LangGraph
+        # StateGraph, AGENT_MAX_ROUNDS)가 전담한다.
+        - name: TOOL_EXECUTION_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-orchestrator-config
+              key: TOOL_EXECUTION_MODE
+
+        # ✅ Volume Mount 추가
+        volumeMounts:
+        - name: code-volume
+          mountPath: /app/orchestrator.py
+          subPath: orchestrator.py
+        - name: code-volume                                   # 추가
+          mountPath: /app/orchestrator_agentic.py             # 추가
+          subPath: orchestrator_agentic.py                    # 추가
+        - name: code-volume                                   # 추가
+          mountPath: /app/agent_tools.py                      # 추가
+          subPath: agent_tools.py                             # 추가
+        # controller.py mount 제거됨 — orchestrator_agentic.py는 더 이상
+        # controller 모듈을 import하지 않는다. agent loop 전체(analyze→plan
+        # →tool→loop)는 HTTP로 anomaly-controller 서비스(/detect)에
+        # 위임되므로, 그 코드는 06-controller.yaml의 controller-code
+        # ConfigMap에만 존재하면 된다.
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 300
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 300
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+
+      # ✅ Volume 선언 추가
+      volumes:
+      - name: code-volume
+        configMap:
+          name: orchestrator-code
+
+---
+# Service (LoadBalancer)
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-orchestrator
+  namespace: elastic
+  labels:
+    app: anomaly-orchestrator
+spec:
+  type: LoadBalancer
+  selector:
+    app: anomaly-orchestrator
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP

@@ -1,272 +1,221 @@
+# ===========================
+# GKE Managed Prometheus — Alert & Recording Rules
+# Updated for Agent Loop Pipeline
+# ===========================
+#
+# V3(구버전) 대비 변경 사항:
+#   - pipeline_requests_total, cache_hits_total/cache_misses_total,
+#     circuit_breaker_state, case_override_used_total,
+#     embedding_override_used_total, llm_retry_attempts_total,
+#     rate_limit_waits_total, analysis_requests_total, probe_success
+#     → 전부 지금 코드베이스에 존재하지 않는 V3 전용 메트릭이라 제거.
+#     (circuit_breaker_state는 pybreaker가 자동으로 Prometheus에 노출하지
+#      않아서 없음 — 필요하면 orchestrator_agentic.py에 별도 Gauge를
+#      추가해야 함. 지금은 그 전까지 알림에서 제외.)
+#   - 대신 실제 존재하는 메트릭(analyzer_*, plan_*, detect_*, agent_*,
+#     planner_calls_total, retriever_*, percolate_*)으로 전부 재작성.
+#   - ControllerFallbackRate 알림을 새로 추가 — 최근 실제로 겪은 사고
+#     (controller pod 재시작 중 orchestrator가 조용히 distance-only
+#     fallback으로 전환되는 문제)를 바로 잡기 위한 핵심 알림.
+#   - Elasticsearch 관련 알림은 그대로 유지 (ES는 변경 없음).
+
 apiVersion: monitoring.googleapis.com/v1
 kind: ClusterRules
 metadata:
   name: anomaly-detection-alerts
-  namespace: elastic
 spec:
   groups:
   - name: fraud-detection.rules
     interval: 30s
     rules:
-    
+
     # ===========================
     # Service Health
     # ===========================
-    
+
     - alert: ServiceDown
-      expr: up{job=~"anomaly-(router|retriever|analyzer|orchestrator)"} == 0
+      expr: |
+        up{job=~"local-analyzer|controller|anomaly-router|anomaly-retriever|anomaly-orchestrator"} == 0
       for: 2m
       labels:
         severity: critical
       annotations:
         summary: "Service {{ $labels.job }} is down"
-        description: "{{ $labels.job }} in namespace {{ $labels.namespace }} has been down for more than 2 minutes."
-    
-    - alert: HighErrorRate
+        description: "{{ $labels.job }}이(가) 2분 이상 응답하지 않습니다. 최근 사고 패턴(pod 재시작으로 인한 연쇄 fallback)일 수 있으니 kubectl get pods -n elastic 로 RESTARTS 확인."
+
+    # ★ 핵심 — controller 장애/fallback 오염 여부를 바로 보여주는 지표.
+    #   최근 agent-loop smoke에서 48개 연속 controller_unavailable_fallback이
+    #   떴던 사고가 재발하면 이 알림이 가장 먼저 울려야 한다.
+    - alert: ControllerFallbackRateHigh
       expr: |
-        sum(rate(pipeline_requests_total{status="error"}[5m])) 
-        / 
-        sum(rate(pipeline_requests_total[5m])) > 0.1
-      for: 5m
-      labels:
-        severity: warning
-      annotations:
-        summary: "High error rate detected"
-        description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes."
-    
-    - alert: CircuitBreakerOpen
-      expr: circuit_breaker_state > 0
-      for: 2m
-      labels:
-        severity: warning
-      annotations:
-        summary: "Circuit breaker {{ $labels.service }} is open"
-        description: "Circuit breaker for {{ $labels.service }} has been open for more than 2 minutes."
-    
-    # ===========================
-    # Latency Alerts
-    # ===========================
-    
-    - alert: HighPipelineLatency
-      expr: |
-        histogram_quantile(0.95, 
-          sum by (le) (rate(pipeline_latency_seconds_bucket[5m]))
-        ) > 300
-      for: 5m
-      labels:
-        severity: warning
-      annotations:
-        summary: "High pipeline latency (P95 > 300s)"
-        description: "95th percentile latency is {{ $value }}s over the last 5 minutes."
-    
-    - alert: HighLLMLatency
-      expr: |
-        histogram_quantile(0.95, 
-          sum by (le) (rate(llm_inference_latency_seconds_bucket[5m]))
-        ) > 120
-      for: 5m
-      labels:
-        severity: warning
-      annotations:
-        summary: "High LLM inference latency (P95 > 120s)"
-        description: "95th percentile LLM latency is {{ $value }}s."
-    
-    - alert: AnalyzerTimeout
-      expr: |
-        histogram_quantile(0.95, 
-          sum by (le) (rate(llm_inference_latency_seconds_bucket[5m]))
-        ) > 240
+        sum(rate(planner_calls_total{status!="success"}[5m]))
+        /
+        sum(rate(planner_calls_total[5m])) > 0.1
       for: 3m
       labels:
         severity: critical
       annotations:
-        summary: "Analyzer approaching 300s timeout limit"
-        description: "LLM latency is {{ $value }}s, approaching timeout."
-    
+        summary: "orchestrator → controller 호출 실패율 {{ $value | humanizePercentage }}"
+        description: "planner_calls_total 중 success가 아닌 비율이 10%를 초과했습니다. status별(timeout/http_error/fallback) 분리해서 kubectl logs -n elastic -l app=anomaly-orchestrator 확인 필요."
+
+    - alert: AnalyzerParseErrorRateHigh
+      expr: |
+        sum(rate(analyzer_parse_errors_total[5m])) > 0.05
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "local-analyzer JSON 파싱 실패율 상승"
+        description: "GGUF 모델 출력이 JSON으로 파싱되지 않는 비율이 높습니다({{ $value }} req/s). 양자화/프롬프트 정합성 문제일 수 있음 — local_analyzer.py의 model_raw_output 로그 확인."
+
     # ===========================
-    # Retry & Rate Limiting
+    # Latency
     # ===========================
-    
-    - alert: HighRetryRate
+
+    - alert: AnalyzerLatencyHigh
+      expr: |
+        histogram_quantile(0.95,
+          sum by (le) (rate(analyzer_latency_seconds_bucket[5m]))
+        ) > 90
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "local-analyzer P95 latency > 90s"
+        description: "GGUF CPU 추론이 {{ $value }}s로 느립니다. n_threads/limits.cpu 튜닝 또는 CFS throttling 여부(kubectl describe pod) 확인."
+
+    - alert: DetectLoopLatencyHigh
+      expr: |
+        histogram_quantile(0.95,
+          sum by (le) (rate(detect_latency_seconds_bucket[5m]))
+        ) > 150
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "controller agent loop P95 latency > 150s"
+        description: "analyze가 2라운드 이상 도는 경우가 많아지고 있을 수 있음 — agent_round_total, agent_path_total 분포 확인."
+
+    - alert: RetrieverSearchLatencyHigh
+      expr: |
+        histogram_quantile(0.95,
+          sum by (le) (rate(retriever_search_latency_ms_bucket[5m]))
+        ) > 2000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "retriever P95 search latency > 2s"
+        description: "Elasticsearch HNSW 검색이 느려지고 있습니다. ES 클러스터 상태(cluster_health_status), JVM heap(retriever_es_jvm_heap_percent) 확인."
+
+    - alert: RouterPercolateLatencyHigh
+      expr: |
+        histogram_quantile(0.95,
+          sum by (le) (rate(percolate_matching_time_ms_bucket[5m]))
+        ) > 500
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "router percolate query P95 latency > 500ms"
+
+    # ===========================
+    # Agent Loop Behavior (신규 — controller.py agent loop 전용)
+    # ===========================
+
+    - alert: AgentLoopBudgetExceededRateHigh
+      expr: |
+        sum(rate(agent_loop_budget_exceeded_total[5m]))
+        /
+        sum(rate(detect_requests_total[5m])) > 0.05
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "agent loop budget 초과 비율 > 5%"
+        description: "round>=budget으로 강제 종료되는 요청이 늘고 있습니다. AGENT_MAX_ROUNDS 상향 또는 sufficiency 판정 로직 재검토 필요."
+
+    - alert: ExpandReroutePathImbalance
+      expr: |
+        (
+          sum(rate(agent_path_total{path=~"deep\\+expand"}[10m]))
+          /
+          sum(rate(agent_path_total[10m]))
+        ) > 0.9
+      for: 15m
+      labels:
+        severity: info
+      annotations:
+        summary: "expand 경로 쏠림 (>90%)"
+        description: "reroute_cross_cluster가 거의 안 쓰이고 있습니다 — gap_category 텍스트 분류(mismatch 감지)가 제대로 동작하는지 analyzer_schema._classify_gap_text 관련 로그 확인."
+
+    # ===========================
+    # Retry
+    # ===========================
+
+    - alert: OrchestratorRetryRateHigh
       expr: sum(rate(retry_attempts_total[5m])) > 0.5
       for: 5m
       labels:
         severity: warning
       annotations:
-        summary: "High retry rate detected (> 0.5 req/sec)"
-        description: "Retry rate is {{ $value }} requests/sec."
-    
-    - alert: FrequentLLMRetries
-      expr: sum(rate(llm_retry_attempts_total[5m])) > 0.3
-      for: 5m
-      labels:
-        severity: warning
-      annotations:
-        summary: "Frequent LLM retries (Quota/Stability issues)"
-        description: "LLM retry rate is {{ $value }} requests/sec."
-    
-    - alert: RateLimitThrottling
-      expr: sum(rate(rate_limit_waits_total[5m])) > 0.1
-      for: 10m
-      labels:
-        severity: info
-      annotations:
-        summary: "Rate limiter is throttling requests"
-        description: "Rate limit wait rate: {{ $value }} requests/sec."
-    
-    - alert: QuotaExhaustion
-      expr: |
-        sum(rate(analysis_requests_total{status="error"}[5m])) > 0.5
-        and
-        sum(rate(llm_retry_attempts_total[5m])) > 0.5
-      for: 3m
-      labels:
-        severity: critical
-      annotations:
-        summary: "Possible Vertex AI quota exhaustion"
-        description: "High error rate with frequent retries detected."
-    
-    # ===========================
-    # Resource Usage
-    # ===========================
-    
-    - alert: HighMemoryUsage
-      expr: |
-        container_memory_usage_bytes{pod=~"anomaly-.*", container!=""} 
-        / 
-        container_spec_memory_limit_bytes{pod=~"anomaly-.*", container!=""} > 0.9
-      for: 5m
-      labels:
-        severity: warning
-      annotations:
-        summary: "Memory usage > 90% in {{ $labels.pod }}"
-        description: "Pod {{ $labels.pod }} memory at {{ $value | humanizePercentage }}."
-    
-    - alert: HighCPUUsage
-      expr: |
-        sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~"anomaly-.*", container!=""}[5m])) 
-        / 
-        sum by (pod) (container_spec_cpu_quota{pod=~"anomaly-.*", container!=""} / 100000) > 0.9
-      for: 5m
-      labels:
-        severity: warning
-      annotations:
-        summary: "CPU usage > 90% in {{ $labels.pod }}"
-        description: "Pod {{ $labels.pod }} CPU at {{ $value | humanizePercentage }}."
-    
-    # ===========================
-    # Cache Performance
-    # ===========================
-    
-    - alert: LowCacheHitRate
-      expr: |
-        sum(rate(cache_hits_total[5m])) 
-        / 
-        (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m]))) < 0.5
-      for: 10m
-      labels:
-        severity: info
-      annotations:
-        summary: "Low cache hit rate (< 50%)"
-        description: "Cache hit rate is {{ $value | humanizePercentage }}."
-    
-    # ===========================
-    # ✨ V3 Specific Alerts
-    # ===========================
-    
-    - alert: HighValidationErrorRate
+        summary: "orchestrator retry 비율 상승 (> 0.5 req/s)"
+        description: "router/retriever 호출 재시도가 잦습니다 — service별({{ $labels.service }}) 상태 확인."
+
+    - alert: ValidationErrorRateHigh
       expr: sum(rate(validation_errors_total[5m])) > 0.1
       for: 5m
       labels:
         severity: warning
       annotations:
-        summary: "High validation error rate"
-        description: "Validation errors at {{ $value }} req/sec. Check field: {{ $labels.field }}."
-    
-    - alert: CaseOverrideImbalance
-      expr: |
-        stddev(
-          sum by (case) (rate(case_override_used_total[5m]))
-        ) 
-        / 
-        avg(
-          sum by (case) (rate(case_override_used_total[5m]))
-        ) > 0.5
-      for: 10m
-      labels:
-        severity: info
-      annotations:
-        summary: "Imbalanced case override usage"
-        description: "Case override distribution is uneven. Check A/B test configuration."
-    
-    - alert: UnexpectedCaseUsage
-      expr: |
-        sum(rate(pipeline_requests_total{case!="default"}[5m])) 
-        / 
-        sum(rate(pipeline_requests_total[5m])) > 0.8
-      for: 10m
-      labels:
-        severity: info
-      annotations:
-        summary: "High case override usage (> 80%)"
-        description: "{{ $value | humanizePercentage }} of requests use case override."
-    
-    - alert: EmbeddingOverrideAnomaly
-      expr: |
-        abs(
-          sum(rate(embedding_override_used_total{use_knn="true"}[5m])) 
-          - 
-          sum(rate(embedding_override_used_total{use_knn="false"}[5m]))
-        ) 
-        / 
-        sum(rate(embedding_override_used_total[5m])) > 0.7
-      for: 10m
-      labels:
-        severity: info
-      annotations:
-        summary: "Embedding override usage imbalance"
-        description: "KNN vs Raw embedding usage is highly imbalanced."
-    
+        summary: "orchestrator 입력 검증 실패율 상승"
+        description: "field={{ $labels.field }} 검증 실패가 잦습니다 — 클라이언트/테스트 스크립트의 요청 스키마 확인."
+
     # ===========================
-    # Performance by Configuration
+    # Resource Usage (GKE 시스템 메트릭 — 앱 변경과 무관하게 유효)
     # ===========================
-    
-    - alert: CasePerformanceDegradation
+
+    - alert: HighMemoryUsage
       expr: |
-        max(
-          histogram_quantile(0.95, 
-            sum by (le, case) (rate(pipeline_latency_seconds_bucket[5m]))
-          )
-        ) 
-        / 
-        min(
-          histogram_quantile(0.95, 
-            sum by (le, case) (rate(pipeline_latency_seconds_bucket[5m]))
-          )
-        ) > 2
-      for: 10m
-      labels:
-        severity: warning
-      annotations:
-        summary: "Significant latency difference between cases"
-        description: "Max case latency is >2x min case latency. Investigate case configuration."
-    
-    - alert: HighErrorRateByCase
-      expr: |
-        sum by (case) (rate(pipeline_requests_total{status="error"}[5m])) 
-        / 
-        sum by (case) (rate(pipeline_requests_total[5m])) > 0.15
+        container_memory_usage_bytes{pod=~"(local-analyzer|controller|anomaly-.*)-.*", container!=""}
+        /
+        container_spec_memory_limit_bytes{pod=~"(local-analyzer|controller|anomaly-.*)-.*", container!=""} > 0.9
       for: 5m
       labels:
         severity: warning
       annotations:
-        summary: "High error rate for case {{ $labels.case }}"
-        description: "Error rate is {{ $value | humanizePercentage }} for case {{ $labels.case }}."
-    
+        summary: "메모리 사용률 > 90% in {{ $labels.pod }}"
+        description: "{{ $labels.pod }} 메모리 {{ $value | humanizePercentage }}. GGUF 로드 중이면 정상 스파이크일 수 있으나 지속되면 OOMKill 위험."
+
+    - alert: HighCPUUsage
+      expr: |
+        sum by (pod) (rate(container_cpu_usage_seconds_total{pod=~"(local-analyzer|controller|anomaly-.*)-.*", container!=""}[5m]))
+        /
+        sum by (pod) (container_spec_cpu_quota{pod=~"(local-analyzer|controller|anomaly-.*)-.*", container!=""} / 100000) > 0.9
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "CPU 사용률 > 90% in {{ $labels.pod }}"
+        description: "{{ $labels.pod }} CPU {{ $value | humanizePercentage }}. n_threads가 limits.cpu보다 많으면 CFS throttling 의심."
+
+    - alert: PodRestartingFrequently
+      expr: |
+        rate(kube_pod_container_status_restarts_total{
+          namespace="elastic",
+          pod=~"(local-analyzer|controller|anomaly-.*)-.*"
+        }[15m]) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "{{ $labels.pod }} 재시작 빈발"
+        description: "재시작률 {{ $value }} restarts/sec. livenessProbe 설정(periodSeconds/failureThreshold)과 OOMKilled 여부(kubectl logs --previous) 확인."
+
     # ===========================
-    # Elasticsearch Health
+    # Elasticsearch Health (변경 없음)
     # ===========================
-    
+
     - alert: ElasticsearchClusterRed
       expr: elasticsearch_cluster_health_status{color="red"} == 1
       for: 5m
@@ -275,7 +224,7 @@ spec:
       annotations:
         summary: "Elasticsearch cluster status is RED"
         description: "Cluster {{ $labels.cluster }} is in RED state."
-    
+
     - alert: ElasticsearchClusterYellow
       expr: elasticsearch_cluster_health_status{color="yellow"} == 1
       for: 10m
@@ -284,15 +233,15 @@ spec:
       annotations:
         summary: "Elasticsearch cluster status is YELLOW"
         description: "Cluster {{ $labels.cluster }} is in YELLOW state."
-    
+
     - alert: HighElasticsearchDiskUsage
       expr: |
         (
-          elasticsearch_filesystem_data_size_bytes 
-          - 
+          elasticsearch_filesystem_data_size_bytes
+          -
           elasticsearch_filesystem_data_free_bytes
-        ) 
-        / 
+        )
+        /
         elasticsearch_filesystem_data_size_bytes > 0.85
       for: 10m
       labels:
@@ -300,104 +249,101 @@ spec:
       annotations:
         summary: "Elasticsearch disk usage > 85%"
         description: "Node {{ $labels.node }} disk at {{ $value | humanizePercentage }}."
-    
-    # ===========================
-    # Readiness & Liveness
-    # ===========================
-    
-    - alert: AnalyzerNotReady
-      expr: |
-        up{job="anomaly-analyzer"} == 1
-        and
-        probe_success{job="anomaly-analyzer"} == 0
-      for: 2m
-      labels:
-        severity: warning
-      annotations:
-        summary: "Analyzer is up but readiness probe is failing"
-        description: "Analyzer pod is running but not ready to serve traffic."
-    
-    - alert: PodRestartingFrequently
-      expr: |
-        rate(kube_pod_container_status_restarts_total{
-          namespace="elastic",
-          pod=~"anomaly-.*"
-        }[15m]) > 0.1
-      for: 5m
-      labels:
-        severity: warning
-      annotations:
-        summary: "Pod {{ $labels.pod }} restarting frequently"
-        description: "Restart rate: {{ $value }} restarts/sec."
 
-# ===========================
-# Recording Rules (for dashboard optimization)
-# ===========================
+  # ===========================
+  # Recording Rules (대시보드 쿼리 최적화용)
+  # ===========================
 
   - name: fraud-detection.recording-rules
     interval: 30s
     rules:
-    
-    # Pipeline request rate by case
-    - record: pipeline:requests:rate5m
+
+    # agent 경로 분포 (fast+none / deep+expand / deep+reroute 등)
+    - record: agent:path:rate5m
       expr: |
-        sum by (case, status, router_version) (
-          rate(pipeline_requests_total[5m])
+        sum by (path) (rate(agent_path_total[5m]))
+
+    # controller agent loop rounds per request P95
+    - record: agent:rounds:p95
+      expr: |
+        histogram_quantile(0.95,
+          sum by (le) (rate(agent_rounds_per_request_bucket[5m]))
         )
-    
-    # Pipeline latency percentiles by case
-    - record: pipeline:latency:p95
+
+    # orchestrator → controller 위임 성공률 (사고 감지 핵심 지표)
+    - record: controller:delegation_success_rate:5m
       expr: |
-        histogram_quantile(0.95, 
-          sum by (le, case) (rate(pipeline_latency_seconds_bucket[5m]))
+        sum(rate(planner_calls_total{status="success"}[5m]))
+        /
+        sum(rate(planner_calls_total[5m]))
+
+    # analyzer latency P95/P99
+    - record: analyzer:latency:p95
+      expr: |
+        histogram_quantile(0.95,
+          sum by (le) (rate(analyzer_latency_seconds_bucket[5m]))
         )
-    
-    - record: pipeline:latency:p99
+    - record: analyzer:latency:p99
       expr: |
-        histogram_quantile(0.99, 
-          sum by (le, case) (rate(pipeline_latency_seconds_bucket[5m]))
+        histogram_quantile(0.99,
+          sum by (le) (rate(analyzer_latency_seconds_bucket[5m]))
         )
-    
-    # Service latency percentiles
-    - record: service:latency:p95
+
+    # end-to-end agent loop latency P95/P99
+    - record: detect:latency:p95
       expr: |
-        histogram_quantile(0.95, 
-          sum by (le, service) (rate(service_latency_seconds_bucket[5m]))
+        histogram_quantile(0.95,
+          sum by (le) (rate(detect_latency_seconds_bucket[5m]))
         )
-    
-    # Success rate by case
-    - record: pipeline:success_rate:5m
+    - record: detect:latency:p99
       expr: |
-        sum by (case) (rate(pipeline_requests_total{status="success"}[5m])) 
-        / 
-        sum by (case) (rate(pipeline_requests_total[5m]))
-    
-    # Case override usage rate
-    - record: case_override:usage_rate:5m
+        histogram_quantile(0.99,
+          sum by (le) (rate(detect_latency_seconds_bucket[5m]))
+        )
+
+    # planner action(accept_verdict/expand/reroute) 분포
+    - record: plan:action:rate5m
       expr: |
-        sum(rate(case_override_used_total[5m])) 
-        / 
-        sum(rate(pipeline_requests_total[5m]))
-    
-    # Embedding override usage rate
-    - record: embedding_override:usage_rate:5m
+        sum by (action) (rate(plan_action_total[5m]))
+
+    # retriever / router latency P95
+    - record: retriever:search_latency:p95
       expr: |
-        sum(rate(embedding_override_used_total[5m])) 
-        / 
-        sum(rate(pipeline_requests_total[5m]))
-    
-    # Cache hit rate
-    - record: cache:hit_rate:5m
+        histogram_quantile(0.95,
+          sum by (le) (rate(retriever_search_latency_ms_bucket[5m]))
+        )
+    - record: router:percolate_latency:p95
       expr: |
-        sum(rate(cache_hits_total[5m])) 
-        / 
-        (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m])))
-    
-    # LLM retry rate
-    - record: llm:retry_rate:5m
-      expr: sum(rate(llm_retry_attempts_total[5m]))
-    
-    # Validation error rate by field
-    - record: validation:error_rate:5m
+        histogram_quantile(0.95,
+          sum by (le) (rate(percolate_matching_time_ms_bucket[5m]))
+        )
+
+    # mcp transport 3-axis 비교 (direct vs mcp vs mcp_native)
+    - record: mcp:transport_latency:p95
       expr: |
-        sum by (field) (rate(validation_errors_total[5m]))
+        histogram_quantile(0.95,
+          sum by (le, mode) (rate(mcp_transport_latency_seconds_bucket[5m]))
+        )
+
+# ===========================
+# 배포 / 확인 명령어
+# ===========================
+#
+# 적용:
+#   kubectl apply -f prometheus-rules.yaml
+#
+# 등록 확인:
+#   kubectl get clusterrules
+#   kubectl describe clusterrules anomaly-detection-alerts
+#
+# rule-evaluator가 규칙을 로드했는지:
+#   kubectl logs -n gmp-system -l app.kubernetes.io/name=rule-evaluator --tail=100
+#
+# 알림이 실제로 평가되고 있는지 (Cloud Monitoring Alerting 콘솔 또는 PromQL):
+#   sum(rate(planner_calls_total{status!="success"}[5m])) / sum(rate(planner_calls_total[5m]))
+#
+# ⚠️ 주의: GMP는 자체 Alertmanager UI가 없다 — 알림을 실제로 받으려면
+#   Cloud Monitoring의 "알림 정책(Alerting Policy)"을 별도로 연결하거나,
+#   ClusterRules의 alert 결과를 ALERTS{} 메트릭으로 Grafana에서 조회해
+#   Grafana Alerting으로 받는 방식 중 택1 필요. 지금 파일만으로는
+#   "규칙 평가"까지만 되고 "알림 발송"은 별도 설정이 한 단계 더 필요함.

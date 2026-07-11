@@ -7,3 +7,5 @@
 streamlit==1.40.0
 requests==2.32.3
 pyyaml==6.0.2
+
+streamlit-mermaid>=0.2.0   # Mermaid 텍스트 렌더링

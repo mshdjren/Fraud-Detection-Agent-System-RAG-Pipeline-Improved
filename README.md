@@ -1,422 +1,183 @@
-# Fraud Detection RAG Pipeline
+# Fraud Detection AgentRAG Pipeline
 
 <p align="center">
   <img src="https://img.shields.io/badge/GKE-Kubernetes-326CE5?logo=kubernetes" />
   <img src="https://img.shields.io/badge/Elasticsearch-8.x-005571?logo=elasticsearch" />
+  <img src="https://img.shields.io/badge/LangGraph-StateGraph-1C3C3C" />
   <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi" />
   <img src="https://img.shields.io/badge/Python-3.10-3776AB?logo=python" />
 </p>
 
-## 📌 프로젝트 개요 (Project Overview)
+## 📌 프로젝트 개요
 
-**금융/반도체 이상 탐지를 위한 RAG(Retrieval-Augmented Generation) 파이프라인**
+**Multi-Cluster Memory Bank 이상탐지 알고리즘(EAAI 2025)을 운영 가능한 AgentRAG 시스템으로 확장한 엔드투엔드 파이프라인**입니다.
 
-Tabular 데이터에서 이상 거래를 탐지하고 원인을 설명하는 엔드투엔드 시스템입니다. 
-Elasticsearch 기반 Two-Stage Retrieval과 경량 LLM Analyzer를 결합하여, 검색 및 이상탐지 성능 목표를 개선하고자 하였습니다.
+Tabular 이상 거래를 "retrieval → 거리 기반 이상탐지 → 판정 원인 설명" 흐름으로 처리하며, Vector Indexing · Router(클러스터 라우팅) · Retriever(HNSW) · Evaluator(LLM) · Planner · Orchestrator의 6개 MSA로 GKE에 배포했습니다. 정적 forwardRAG(전수 LLM 추론 baseline)에서 출발해, **검색 결과를 의심하고 선택적으로 재검색하는 Agent 시스템**으로 확장한 과정과 그 측정 근거가 이 프로젝트의 핵심입니다.
 
-## 🎯 To be Updated..
-
-- [ ] 코드 정리 (llm analyzer training colab, gke elasticsearch node, 전체적인 주석 및 불필요한 코드 정리)
-- [ ] 전체 파이프라인 설명 picture update 예정
-- [ ] Locust 부하테스트 report 이미지 update 예정
-- [ ] Data mining 관련 통계 update 예정
-- [ ] LLM analyzer streamlit GRPO 적용 전 (SFT only) 예시라, 적용 유무 비교 이미지 update 예정
-- [ ] ## 🚀 실행 가이드 (Quick Start) update 예정 
-
-### 🎯 핵심 문제 해결
+### 🎯 핵심 문제 해결 (검증 완료 지표)
 
 | 문제 | 해결 방안 | 성과 |
 |------|---------|------|
-| 벡터 검색 병목 | Cluster-Based Two-Stage Retrieval | Router Recall@5 9% ↑, Latency P99 25% ↓ |
-| 메모리 제약 | Coreset Sampling (10%) | AUROC 0.4%↓ <-> 메모리 89% ↓ (2.8GB → 0.31GB) 검증 |
-| CPU Node에서 LLM Analayzer 추론 제약 | 지식 증류 (7B → 0.5B) | Inference time 2.5배 ↑ |
-| 파이프라인 오류 학습 부족 | Pipeline-Aware Hard Negative Mining | AUROC 2.3% ↑ |
-| Confidence 과신 문제 | GRPO 강화학습 (4-axis reward) | ECE 8% ↓ |
+| 벡터 검색 병목 | Percolate Query Bucketization (3단계 고도화) | Router Recall@5 +9%p, P99 latency −25% |
+| 메모리 제약 | Coreset Sampling 10% 운영점 | 메모리 −89% (2.8GB→0.31GB), AUROC 손실 0.4%p 이내, median latency −46% |
+| Teacher 오답이 학습 신호 오염 | Rejection Sampling (GT-free 생성 → GT 필터) | teacher 정답률 60~65% 감안 ×1.7 oversample로 품질·수량 동시 확보 |
+| 작은 모델의 modal collapse | 과제 설계 원인 정량 규명 → Deterministic-LLM 역할 분리 | what_missing 생성 타이밍 11%→100%, 실제 이탈 feature 지목 정합도 70% |
+| Ambiguous 전수 재검색의 낭비 | 측정 기반 Selective Tool Gate (rule search) | expand 발동 84%→10~12%, 게이트 영역 내 good/bad flip 3.2:1 |
 
 ---
 
-## 🏗️ 시스템 아키텍처 (Architecture)
-
-[파이프라인 overview picture 업로드 예정]
-<!-- ![Fraud Detection System Architecture Diagram](./picture/pipeline.jpg) -->
-
-### 파이프라인 흐름
+## 🏗️ 시스템 아키텍처
 
 ```text
 Test Transaction
       ↓
-[Router] Percolate Query → Cluster Matching (최근접 클러스터 필터링)
+[Router]     Percolate Query → 클러스터 매칭 (rank1=percolate, rank2~5=centroid score)
       ↓
-[Retriever] Filtered KNN → Top-5 Normal Vectors (클러스터 내 검색)
+[Retriever]  Filtered HNSW → 거리 신호 top-5 / LLM evidence top-3
       ↓
-[Analyzer] Distance Scoring + LLM Reasoning → 이상 판단 + 원인 설명
+[Controller] LangGraph StateGraph — Evaluator(LLM) → Selective Tool Gate → Planner
+      │         ├─ confident            → accept
+      │         ├─ mismatch 신호        → reroute_cross_cluster (rank2 클러스터 + persona 교체)
+      │         └─ expand rule 충족     → expand_within_cluster (evidence 3→5)
       ↓
-[Orchestrator] Final Output → API Response
+[Orchestrator] 최종 판정 + round_log/termination → API Response
 ```
 
----
-
-## 🔬 핵심 기술 (Core Technologies)
-
-### 1️⃣ Percolate Query-based Cluster Routing
-
-최근접 정상 클러스터의 매칭 정확도 및 검색 속도 개선을 위해, 라우팅 쿼리를 **3단계에 걸쳐 고도화**했습니다.
+`PIPELINE_MODE=forward`로 전환하면 동일 인프라에서 **정적 forwardRAG baseline**(route→retrieve→analyzer 1회, 3-key 출력)으로 동작합니다 — Agent 시스템의 가치를 같은 문제지에서 A/B 측정하기 위한 구조입니다.
 
 ---
 
-#### **Version 1: Strict AND**
+## 🔬 핵심 기술
 
-Decision Tree의 리프 노드 경로를 `bool.filter`의 range 조건으로 직접 변환하여 정밀 매칭합니다.
+### 1️⃣ 검색 파이프라인 최적화
 
-```python
-# 예시: feature v1 ∈ [0.8, ∞) AND v3 ∈ [-1.2, ∞) → Cluster 63
-{
-  "query": {
-    "bool": {
-      "filter": [
-        {"range": {"v1": {"gte": 0.8}}},
-        {"range": {"v3": {"gte": -1.2}}}
-      ]
-    }
-  }
-}
-```
+**Percolate Query 3단계 고도화** — Strict AND(v1) → Centroid-Augmented(v1+aug) → Bucketization(v1+aug+bucket):
 
-- **의도**: Decision tree의 leaf 정보를 각 클러스터의 rules로 표현하고, 이를 직관적으로 percolate query로 매칭 
-- **한계**: Strict AND 다수 결합으로 인해, Top-5 클러스터 매칭의 다양성이 떨어짐 (같은 1개의 클러스터만 매칭)
-
----
-
-#### **Version 2: Centroid-Augmented Diversity**
-
-Version1의 Top-1 매칭 결과에 **벡터 유사도 기반 Top-4 클러스터**를 추가하여 다양성을 보완합니다.
-
-```python
-# Phase 1: Strict AND로 Top-1 확보
-top_1 = percolate_strict_and(test_vec)
-
-# Phase 2: Centroid cosine distance로 Top-4 보완
-top_4_nearest = sorted(
-    cluster_centroids, 
-    key=lambda c: 1 - cosine_similarity(test_vec, c)
-)[:4]
-
-# 최종 Top-5
-candidates = [top_1] + top_4_nearest
-```
-
-- **의도**: Recall@5 및 Top-5 매칭 다양성 ↑
-- **한계**: Strict AND에 비해 검색 지연 ↑
-
----
-
-#### **Version 3: Optimized Bucketization**
-
-Range 조건을 **Bucket index + Term filter**로 변환하여 후보군 pruning을 최적화합니다.
-
-````python
-# 1. Ingest: Range → Bucket index
-split_points["v1"] = [-2.5, -1.0, 0.0, 1.0, 2.5]
-# Rule: v1 ≤ 0.8 → bucket_3, direction="lte"
-
-# 2. Query: Test vector → Candidate buckets
-test_vec["v1"] = 0.05  # → bucket_3
-tolerance = ±1         # → [2, 3, 4]
-````
-
-##### **최종 Query 구조**
-
-````python
-{
-  "bool": {
-    "must": [
-      # 기존 percolate (range 매칭)
-      {"percolate": {"field": "query", "document": {...}}},
-      
-      # Bucket pre-filter (term 매칭)
-      {
-        "bool": {
-          "should": [
-            # v1 feature
-            {
-              "must": [
-                {"term": {"v1_direction": "lte"}},
-                {"terms": {"v1_bucket": [2, 3, 4]}}
-              ]
-            },
-            # ... 총 9개 features
-          ],
-          "minimum_should_match": 3  # 9개 중 3개
-        }
-      }
-    ]
-  }
-}
-````
-
-- **의도**: Range 부동소수점 비교 → Term filter bitset 연산
-- **한계**: Percolate query index ↑ 및 rules 수가 늘어났을때의 검색 지연 가능성
-
----
-
-#### 📊 실험 결과 (Percoalte query routing)
-
-Percolate query version에 따른 클러스터 정확도, 리콜, 단건 검색 지연 시간 및 AUROC 지표를 비교합니다.
-
-| query version | Cluster acc / Recall@5 (Router) | Router MRR | Latency p99 (ms) |  Recall@5 (knn) / AUROC |
+| query version | Cluster acc / Recall@5 | Router MRR | Latency p99 (ms) | Recall@5 (knn) / AUROC |
 | :--- | :---: | :---: | :---: | :---: |
-| **Strict AND (v1)** | 0.816 / 0.816 | 0.941 | 420.25 | 0.786 / 0.8726 |
-| **V1 + aug** | **0.823 / 0.905** | **1.00** | 430.01 | **0.956 / 0.9125** |
-| **V1 + aug + bucket** | 0.823 / 0.897 | 0.988 | **409.25** | 0.956 / 0.9037 |
+| Strict AND (v1) | 0.816 / 0.816 | 0.941 | 420.25 | 0.786 / 0.8726 |
+| **v1 + aug** | **0.823 / 0.905** | **1.00** | 430.01 | **0.956 / 0.9125** |
+| v1 + aug + bucket | 0.823 / 0.897 | 0.988 | **409.25** | 0.956 / 0.9037 |
+
+**Coreset Sampling 운영점** — 1,000만 건 인덱스에 page fault를 의도적으로 유발해 메모리 병목을 재현하고, 압축률-AUROC-latency trade-off에서 10%를 운영점으로 채택 (메모리 −89%, AUROC 손실 0.4%p 이내, median latency −46%). HNSW 파라미터(m, ef_construction) sweep과 벡터 quantization(int8/BBQ)을 직교 축으로 결합해 벡터 인덱스 메모리 추가 −25%, Recall 손실 0.5%p 이내.
+
+### 2️⃣ 학습 데이터 생성 — Mining + Rejection Sampling
+
+- **Pipeline-aware Hard Negative Mining**: 파이프라인이 실제 틀리는 3가지 오류 패턴(클러스터 매칭 실패 · 최근접 정상 벡터 검색 오류 · 거리 차이 모호)을 정의하고 학습 데이터에 반영
+- **Rejection Sampling**: teacher(Qwen2.5-14B)가 GT hint 없이 순수 추론 → cls가 GT와 불일치하는 샘플 제거. teacher 정답률(60~65%)을 감안한 ×1.7 oversample로 목표 수량 확보. mining/boundary/easy 비율 조정으로 특정 구간 편중에 따른 학습 신호 왜곡 방지
+- **what_missing 품질 필터** *(진행 중)*: 학습 데이터 진단 결과 wm 고유율 18.9%, 최빈 문장("boundary distance; expand evidence")이 28.2%를 점유 — cls만 거르는 rejection이 wm boilerplate를 통과시켜 student가 이를 암기(서빙에서 42/50 동일 문장으로 재현). boilerplate 금지구 + feature grounding + dedup cap(≤2%) 필터를 Pass 2 직후에 추가
+
+### 3️⃣ forwardRAG → Evaluator 전환: 한계의 정량 진단
+
+초기 forwardRAG는 매칭된 클러스터·최근접 정상 벡터와의 차이를 근거로 **{cls, confidence, reasoning} 3-key**를 출력하는 정적 구조였습니다. 학습·서빙에서 확인된 구조적 한계:
+
+1. **confidence가 실제 난이도와 무관하게 평균값으로 회귀**하고 reasoning이 상투적 문구로 수렴
+2. **클러스터 매칭을 100% 신뢰하는 전제** — 라우팅 자체가 틀린 hard negative(Type 1/2)를 구조적으로 감지 불가
+3. **modal collapse 정량 규명**: {cls, sufficiency, what_missing}를 단일 출력으로 학습하자 소형 모델이 다수 클래스로 붕괴. 원인이 모델 용량이 아니라 이산적 sufficiency 판정 · key 간 conditional dependency · what_missing 학습 신호 희소성이 겹친 **과제 설계 문제**임을 확인 (teacher조차 boundary 정확도 59% 천장)
+
+→ 검색 신뢰도(sufficiency)를 판별하고 재검색(expand/reroute)을 촉발하는 **Evaluator + Agent loop**로 확장.
+
+### 4️⃣ Deterministic-LLM 역할 분리
+
+"규칙으로 정확히 계산되는 신호는 코드가, 서술만 LLM이" — 6회 독립 측정에서 L2 거리가 유일한 분류 신호였다는 결론의 필연적 귀결입니다.
+
+| 신호 | 담당 | 근거 |
+|---|---|---|
+| sufficiency | **deterministic** (nd-band [0.3, 0.55) 주입) | 이산 판정의 SFT collapse — 주입 전환 후 wm 생성 타이밍 11%→100% |
+| cls | **deterministic** (nd threshold, `ANALYZER_DECISION_MODE=det`) | nd가 유일 신호; `llm` 모드와 A/B 스위치 유지 |
+| what_missing | **LLM** (유일한 자유 출력) | 실제 이탈 feature 지목 정합도 70% |
+| 이웃 spread | **deterministic** (거리 구조 신호) | LLM 재진술 실험 실패(활용 0%) — 서술 대상이 아닌 계산 대상 |
+
+**Selective Tool Gate** — "ambiguous면 무조건 expand"를 폐기하고 측정으로 발동 조건을 설계:
+
+- **expand**: 오프라인 rule search(N=28,302)로 `nd∈[0.48, 0.60) AND plateau_ratio≤0.142`(top-5 거리 조밀도) 도출 — 발동 영역에서 good/bad flip **3.2 : 1** (89/28), coverage 1.2%. spread5 조건은 non-binding으로 확인되어 제외. 실측: expand rate 84% → 10~12%
+- **reroute**: what_missing 텍스트에는 mismatch 신호가 없음(boilerplate)을 확인 → 라우터의 관측 신호로 대체: `match_type=centroid`(percolate 매칭 실패, 실측 60%) + rank1/2 score 근접(≥0.93). rank2 클러스터로 전환 시 **해당 클러스터의 persona까지 교체**해 analyzer가 새 기준으로 재평가 *(τ 캘리브레이션 진행 중 — round_log의 gate 관측 필드 × GT cluster로 확정 예정)*
+
+### 5️⃣ LLM Analyzer 경량화 및 평가 체계
+
+- **Knowledge Distillation**: Qwen2.5-14B teacher → 0.5B/3B student, GGUF Q4 양자화로 CPU 서빙
+- **SFT/GRPO**: 정확도·서술 일치도·사실성 reward → SFT 대비 AUROC +2.3%p, ECE −8%
+- **LLM-as-Judge**: GT가 없는 what_missing 품질을 이산 rubric(0/0.5/1)으로 자동 채점. **judge 신뢰성 자체를 검증** — GT 케이스와의 점수 상관 + 동일 입력 2회 채점 일치율 + 순서 교환 편향 체크를 통과해야 지표로 채택
+- **Latency 분석** *(진행 중)*: Colab L4 → e2-standard-2(2 vCPU) 이관 시 이론 15~40× 증가 (prefill compute-bound 30~70× + decode bandwidth-bound 10~20×). 실측 단건 ~38s → persona 복원 후 ~68s. 대응: ① Selective Gate로 2차 호출 자체를 84%→10%대로 절감 ② det 모드에서 LLM 역할이 wm 한 문장으로 축소된 만큼 **0.5B 전환** ③ 프롬프트 다이어트(prefill 지배 환경)
+
+### 6️⃣ Agent System vs forwardRAG — 동일 인프라 A/B
+
+configmap 스위치만으로 두 모드를 같은 문제지(NB01 teacher 생성 eval set, 고정 seed)에서 비교합니다:
+
+| | forwardRAG (baseline) | Agent System |
+|---|---|---|
+| 전환 | `PIPELINE_MODE=forward` + `ANALYZER_TASK=forward` | `agent` + `evaluator` (기본) |
+| 흐름 | route→retrieve→analyzer 1회 | + Evaluator→Gate→Planner→expand/reroute loop |
+| LLM 출력 | {cls, confidence, reasoning} 전부 LLM | {what_missing}만 LLM (cls/sufficiency는 deterministic) |
+| 비교 축 | AUROC / FNR / FPR / **LLM 호출량** / latency / 경로별 기여 | 동일 harness (`agent_batch_inference --eval-source eval_set`) |
+
+*현재 상태: 게이트 배포 후 smoke에서 구조 동작 확인(expand 10~12%, reroute 첫 발화 30%). 판정 지표는 nd threshold 캘리브레이션(0.5→0.42, 분포 실측 기반)과 50+ 샘플 재실행 후 확정 예정.*
+
+### 7️⃣ Observability & 검증 도구
+
+- **LangGraph round_log**: 각 round의 {nd, sufficiency, what_missing, planner 결정 vs 게이트 결정, 게이트 관측치(plateau/ratio/match_type), evidence top-k}를 구조화 기록 — 경로별(no-loop/expand/reroute) FNR·AUROC 기여, conditional edge 정확성, loop 안전성(budget 초과 0건)을 배치 리포트로 측정
+- **Streamlit 검증 UI**: 입력 거래의 연관성(최근접 정상 벡터·매칭 점수)·판정 근거·재검색 이력 시각화, 매칭 점수가 낮으면 검색 신뢰도 주의 표기
+- **Locust 부하 테스트**: 단계별 부하에서 P95 latency·에러율 측정 (coreset/HNSW 운영점 검증에 사용)
 
 ---
 
-### 2️⃣ Filtered KNN (Coreset Sampling 검증)
-Coreset Sampling 최적 운영점 검증: 메모리-이상탐지 성능-검색 latency trade-off 분석을 통해, coreset sampling 비율 10%의 최적점을 도출하고자 하였습니다.
+## 🗂 의사결정 기록 (채택 / 보류 / 기각)
 
-<table>
-<tr>
-<td width="50%" align="center">
+측정으로 내린 결정들 — "무엇을 하지 않기로 했는가"도 시스템 설계의 일부입니다.
 
-<img src="picture/coreset_explain.jpg" width="100%">
-
-**Coreset Sampling Algorithm**<br>[(from https://kmhana.tistory.com/6)](https://kmhana.tistory.com/6)
-
-</td>
-<td width="50%" align="center">
-
-<img src="picture/coreset_tsne.jpg" width="100%">
-
-**Cluster Distribution with coreset sampling ratio**<br>(t-SNE)
-
-</td>
-</tr>
-</table>
+| 결정 | 근거 |
+|---|---|
+| ❌ Global Centroid hard-anomaly gate | threshold 전 구간 precision 0.64~0.76 — 정상 임베딩의 multimodal 구조상 단일 centroid로 고정밀 게이트 불가 |
+| ❌ spread 신호의 LLM 서술 | 학습 후 활용 0% — deterministic 거리 신호(plateau_ratio)로 이관 |
+| ❌ retrieval_reliability 출력 슬롯 | 0/200 미발화 — 폐기, sufficiency로 일원화 |
+| ❌ 단순 PatchCore reweight (k=5) | boundary AUROC +2.5%p였지만 할인 전용 계수로 분포가 좌측 이동 → FNR 0.16→0.26, wrong flip 순손실(816 vs 581) |
+| ⏸ Centered reweight | FNR 안전(0.159)하나 boundary 개선 +0.5%p로 소실 — Selective Gate 영역 한정 재검토 대상 |
+| ⏸ 0.5B student 전환 | det 모드에서 LLM 역할 축소로 정당화 — wm 품질 필터 적용 재학습 후 3B와 judge 비교로 결정 |
+| ✅ Selective expand gate | rule search 검증 (위 4️⃣) |
+| ✅ Deterministic sufficiency 주입 | wm 타이밍 11%→100% |
 
 ---
 
-#### 📊 실험 결과 (Coreset Sampling 검증)
+## 💻 기술 스택
 
-**Croreset Sampling 비율 vs AUROC vs 검색 지연**
+**Infra**: GKE (e2 CPU nodes), Elasticsearch 8.x (ECK), GCS, Artifact Registry, Prometheus + Grafana
+**ML**: Qwen2.5 (0.5B/3B student, 14B teacher), PEFT/LoRA, llama-cpp-python (GGUF Q4), Gemini Flash Lite (Planner)
+**Serving**: FastAPI, LangGraph StateGraph, MCP tool wrapper, structlog, pybreaker
+**Training/Eval**: Colab L4 (NB01 데이터 생성 → NB02 SFT → NB03 평가·Judge), Streamlit, Locust
 
-| Coreset % | Index Size (GB) | Docs Count | AUROC | Recall@5 (knn) | Median Latency (ms) |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| 100 | 2.8 | 140,128 | 0.956 | **0.956** | 125 |
-| **10** | 0.31 | 14,012 | **0.952** | 0.947 | 68 |
-| 1 | 0.035 | 1,401 | 0.901 | 0.882 | **52** |
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-**Coreset Sampling 유무에 따른 Page Faults 발생 정도**<br>
-*(Memory 2GB로 Node 제한 시)*
-
-| Index sharding | 100% Index<br>(Page Faults/sec) | 10% Index<br>(Page Faults/sec) |
-| :---: | :---: | :---: |
-| **X** | 45.2 | 38.7 |
-| **O** | 52.3 | **8.1** |
-
-</td>
-<td width="50%" valign="top" align="center">
-
-<img src="picture/coreset_tradeoff.jpg" width="100%">
-<p align="center"><i>AUROC and Inference Speed vs. Coreset Sampling Ratio</i></p>
-
-</td>
-</tr>
-</table>
-
-<br>
-
----
-
-### 3️⃣ Pipeline-aware data mining & LLM Analyzer 경량화 및 GRPO 최적화
-Router 오류(type1), Cross-cluster 오류(type2), Distance boundary(type3) 3가지 타입 구조화된 실패 케이스 mining 및 6-axis reward function을 통해, LLM Analyzer의 AUROC +2.3%p 향상 및 confidence calibration(ECE 0.15→0.08) 개선을 도출하고자 하였습니다.
-
-**Pipeline-Aware Hard Negative Mining (3가지 유형)**
-```python
-# Type 1: Router Misrouting (28% 발생)
-#   → gt_cluster_id ≠ predicted_cluster
-
-# Type 2: Cross-Cluster Retrieval (55% 발생)
-#   → 라우팅 정확하나 HNSW 경계에서 타 클러스터 이웃 혼입
-
-# Type 3: Distance Band (15% 발생)
-#   → top1_distance ∈ [P75, P90], moderate/distant 경계
-
-```
-
-**Knowledge Distillation (Qwen2.5-7B → 0.5B) 및 GRPO 강화학습 (Group Relative Policy Optimization)**
-```python
-# 4축 보상 함수 (그룹 내 상대 비교)
-Reward = 0.40 × Accuracy          # Binary 판정
-       + 0.30 × Calibration       # |confidence - actual| 최소화
-       + 0.20 × Coherence         # 20-80 단어, 논리 일관성
-       + 0.10 × Factuality        # Evidence 근거 사실성
-
-Advantage = (reward - group_mean) / group_std  # 같은 hard negative type 내
-Policy_loss = -advantage × log_prob + KL_penalty
-```
----
-
-#### 📊 실험 결과 (Data mining 및 LLM Analyzer 최적화)
-
-**LLM Analyzer Interface (Streamlit)**
-
-<img src="./picture/llm_streamlit.jpg" alt="Streamlit Screenshot" width="200%">
-
-<br>
-
-**Data mining 및 GRPO 적용 유무에 따른 LLM Analyzer 이상 판단 성능**
-
-| Data Type | Training | AUROC | ECE ↓ | Judge ↑ |
-|:---|:---:|:---:|:---:|:---:|
-| **Distance-based** | SFT | 0.820 | 0.15 | 6.5/10 |
-| **Mining-based** | SFT | 0.850 | 0.12 | 7.0/10 |
-| **Distance-based** | GRPO | 0.840 | 0.08 | 7.2/10 |
-| **Mining-based** | GRPO | **0.873** | **0.08** | **7.5/10** |
-
-- **ECE (Expected Calibration Error)**: Confidence calibration 지표, 낮을수록 우수 (Teacher prompt 개선 + GRPO calibration reward)
-- **Judge**: HuggingFace-based reasoning quality 평가 (Relevance, Consistency, Specificity), 10점 만점
-
----
-
-## 💻 기술 스택 (Technology Stack)
-
-**Infrastructure & Deployment**
-- **Orchestration**: Kubernetes (GKE), Helm
-- **Monitoring**: Prometheus, Grafana
-
-**Data & Search**
-- **Search Engine**: Elasticsearch 8.x (ECK)
-- **Vector DB**: HNSW Index (Elasticsearch)
-- **Data Processing**: PySpark, Pandas
-
-**ML & AI**
-- **Framework**: PyTorch, Transformers (Hugging Face)
-- **LLM**: Qwen2.5-0.5B-Instruct (LoRA fine-tuned)
-- **Teacher Model**: Gemini-flash-2.5-lite, Qwen2.5-7B
-- **Training**: SFT (Supervised Fine-Tuning), GRPO (RL)
-
-**Backend & API**
-- **Framework**: FastAPI 0.115
-- **Async**: asyncio, aiohttp
-- **Validation**: Pydantic
-
-**Cloud & Storage**
-- **Platform**: Google Cloud Platform
-- **Storage**: Google Cloud Storage (GCS)
-- **Registry**: Artifact Registry, Container Registry
-
---- 
-
-## 🚀 실행 가이드 (Quick Start)
-
-### Prerequisites
-```bash
-# 필수 도구 설치
-- kubectl (1.28+)
-- gcloud CLI
-- Docker
-- Python 3.10+
-```
-
-### 1️⃣ Elasticsearch 배포 (ECK)
-```bash
-# Elasticsearch Operator 설치
-kubectl apply -f https://download.elastic.co/downloads/eck/2.9.0/crds.yaml
-kubectl apply -f https://download.elastic.co/downloads/eck/2.9.0/operator.yaml
-
-# Elasticsearch Cluster 배포
-kubectl apply -f k8s/elasticsearch-cluster.yaml
-
-# 인덱스 생성
-python scripts/create_index.py --experiment-case pca_64_k100
-```
-
-### 2️⃣ Microservices 배포
-```bash
-# ConfigMap 적용 (환경 변수)
-kubectl apply -f k8s/00-anomaly-config.yaml
-
-# 각 서비스 배포
-kubectl apply -f k8s/02-router.yaml
-kubectl apply -f k8s/03-retriever.yaml
-kubectl apply -f k8s/04-local-analyzer.yaml
-kubectl apply -f k8s/05-orchestrator.yaml
-```
-
-### 3️⃣ 추론 실행
-```bash
-# Batch Inference (평가용)
-python batch_inference.py \
-  --experiment-case pca_64_k100 \
-  --percolate-version v14 \
-  --coreset-percentage 10
-
-# API 호출 (실시간)
-curl -X POST http://localhost:8000/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "purchase_value": 32.53,
-    "source": "SEO",
-    "browser": "Chrome",
-    "sex": "M",
-    "age": 25
-  }'
-```
-
-## 🔧 개발 환경 설정 (Development)
+## 🚀 실행 가이드
 
 ```bash
-# 1. 가상환경 생성
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+# 1) ES + 서비스 배포 (k8s/ configmap 패턴 — 상세는 배포 문서)
+kubectl apply -f k8s/00-anomaly-config.yaml -n elastic
+# router / retriever / local-analyzer / controller / orchestrator configmap + rollout
 
-# 2. 의존성 설치
-pip install -r requirements.txt
+# 2) 모드 전환 (agent ↔ forwardRAG baseline)
+kubectl patch configmap anomaly-config -n elastic --type merge \
+  --patch '{"data": {"PIPELINE_MODE": "forward"}}'
+kubectl patch configmap local-analyzer-config -n elastic --type merge \
+  --patch '{"data": {"ANALYZER_TASK": "forward"}}'
+kubectl rollout restart deployment/anomaly-orchestrator deployment/local-analyzer -n elastic
 
-# 3. 환경 변수 설정
-cp .env.example .env
-# .env 파일에 GCP_PROJECT, ES_HOST 등 설정
-
-# 4. 로컬 테스트
-pytest tests/
+# 3) 평가 (고정 eval set — 버전/모드 간 동일 문제지)
+python evaluation/agent_eval/agent_batch_inference.py \
+    --eval-source eval_set --n-samples 100 \
+    --gcs-upload gs://fraud_ecomm/evaluation/agent-eval
+# → NB03 Section C가 bucket 마운트로 로드해 Layer1/3 채점 + 버전 비교
 ```
----
 
-## 📁 프로젝트 구조 (Directory Structure)
+## 📁 프로젝트 구조
 
-```text
-fraudecom_v3/
-├── apps/
-│   ├── ingest_tree_pipeline.py   # Elasticsearch Data ingestion
-│   ├── router/                   # Percolate Query 기반 클러스터 라우팅
-│   ├── retriever/                # Coreset Sampling + HNSW KNN
-│   ├── analyzer/                 # LLM 기반 이상 판단 + 원인 설명
-│   └── orchestrator/             # 전체 워크플로우 제어
-
-├── k8s/
-│   ├── elasticsearch/            # ECK 배포 설정
-│   ├── router-deployment.yaml
-│   ├── retriever-deployment.yaml
-│   └── analyzer-deployment.yaml
-├── evaluation/
-│   ├── batch_inference.py        # 평가용 배치 추론
-│   └── evaluation_metrics.py
-│   └── hard_negative_miner.py    # Hard Negative Mining
-└── README.md
 ```
----
+apps/          # router, retriever, local_analyzer(evaluator|forward), controller(LangGraph), orchestrator
+common/        # config, prompts(학습·서빙 단일 소스), judge(LLM-as-Judge)
+evaluation/    # agent_eval(batch/metrics/report), gt_loader, hard_negative_miner, vector_db_sweep
+k8s/           # configmap 기반 배포 매니페스트 + batch jobs
+notebooks/     # NB01(데이터 생성) → NB02(SFT) → NB03(평가·Judge) → NB04(forwardRAG, 재작성 중)
+```
 
-## 📚 참조 (References)
+## 📚 참조
 
-**학술 논문**
-- [WaferDC: Multi-cluster Memory Bank](https://github.com/SpatialAILab/WaferDC)
-- [AnoLLM: Large Language Models for Tabular Anomaly Detection](https://github.com/amazon-science/AnoLLM-large-language-models-for-tabular-anomaly-detection)
-- [GRPO: Group Relative Policy Optimization](https://arxiv.org/pdf/2402.03300)
-
-**기술 문서**
-- [Elasticsearch Percolate Query](https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-percolate-query.html)
-- [GKE RAG pipeline](https://docs.cloud.google.com/kubernetes-engine/docs/tutorials/build-rag-chatbot?hl=ko)
+- Multi-Cluster Memory Bank 이상탐지 (EAAI 2025, 공동 1저자) — 본 파이프라인의 알고리즘 기반
+- PatchCore (CVPR 2022) — Coreset sampling, local density reweighting
+- Elasticsearch Percolate Query / HNSW, LangGraph, MCP

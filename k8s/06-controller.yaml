@@ -1,0 +1,271 @@
+# ===========================
+# Controller ConfigMap: Planner Settings
+# ===========================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anomaly-controller-config
+  namespace: elastic
+  labels:
+    app: anomaly-controller
+    tier: inference
+data:
+  LLM_MODEL:        "gemini-2.5-flash-lite"
+  LLM_TEMPERATURE:  "0.0"
+  LLM_MAX_TOKENS:   "512"
+
+  # Follow-up tool 토글
+  # compare_features는 초기 단계에서 비활성화 (Arm 3)
+  ENABLE_COMPARE_FEATURES: "false"
+
+  # ── Agent Loop (LangGraph StateGraph) 설정 ──────────────
+  # controller.py가 직접 읽는 값들. 이전에는 코드 기본값(GKE 서비스명
+  # 추정)에 그대로 맡겨져 있었으나, orchestrator의 ConfigMap 패턴과
+  # 동일하게 명시적으로 관리한다.
+  RETRIEVER_URL:    "http://anomaly-retriever:80"
+  ANALYZER_URL:     "http://local-analyzer:80"
+  # CPU-only GKE(e2-medium)에서 Qwen 추론은 10~30초 소요 가능
+  # — 기존 controller.py 하드코딩 10s로 타임아웃 발생 확인됨
+  ANALYZER_TIMEOUT: "120"
+  # ── [검증용] Analyzer Mock 토글 ──────────────────────────────────
+  # local analyzer 재튜닝 전 agent loop 검증 전용. 노트북 재튜닝 완료 후
+  # false로 되돌릴 것.
+  # MOCK_ANALYZER_ACTION도 검증용 (검증 안할때는 상관없음)
+  #   MOCK_ANALYZER_ACTION: "expand" → expand_within_cluster 경로 검증
+  #   MOCK_ANALYZER_ACTION: "reroute" → reroute_cross_cluster 경로 검증
+  FORCE_MOCK_ANALYZER: "false"
+  MOCK_ANALYZER_ACTION: "reroute"
+  # agent_tools_mcp_server.py 서비스 (TOOL_EXECUTION_MODE=mcp일 때만 사용)
+  TOOLS_MCP_URL:    "http://agent-tools-mcp:80"
+  # Direct / mcp — orchestrator의 TOOL_EXECUTION_MODE와 동일 값으로 맞춰야
+  # agent_trace의 "expand_within_cluster:{mode}" 표기가 둘 다 일치한다.
+  TOOL_EXECUTION_MODE: "mcp_navtive"
+  # expand/reroute 등 follow-up tool 반복 허용 횟수 (루프 가드)
+  AGENT_MAX_ROUNDS: "2"
+  # pre_router가 base_* 없이 단독 호출될 때(스모크 테스트 등)만 쓰는
+  # fast/deep 임계값 — orchestrator가 base call을 넘기는 정상 경로에서는
+  # 사용되지 않는다 (node_pre_router의 _base_provided 분기 참고).
+  FAST_TRACK_DISTANCE_THRESHOLD: "0.15"
+
+  TOOL_GATE_ENABLE : "true"
+  EXPAND_ND_LO : "0.48"
+  EXPAND_ND_HI : "0.60"
+  EXPAND_PLATEAU_TAU : "0.142"
+  REROUTE_ON_CENTROID : "true"
+  REROUTE_SCORE_RATIO : "0.93"
+
+---
+# ===========================
+# ServiceAccount (Workload Identity)
+# ===========================
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: anomaly-controller
+  namespace: elastic
+  labels:
+    app: anomaly-controller
+  annotations:
+    # analyzer와 동일한 GCP SA 재사용 (Vertex AI 권한 공유)
+    iam.gke.io/gcp-service-account: anomaly-analyzer@kakao-501107.iam.gserviceaccount.com
+
+---
+# ===========================
+# Deployment
+# ===========================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-controller
+  namespace: elastic
+  labels:
+    app: anomaly-controller
+    tier: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly-controller
+  template:
+    metadata:
+      labels:
+        app: anomaly-controller
+        tier: inference
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: anomaly-controller
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["app-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: anomaly-controller
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: controller
+        # ★ 더 이상 anomaly-analyzer:1.0을 재사용하지 않는다 — controller.py가
+        # LangGraph StateGraph(agent loop 전체)를 호스팅하면서 langgraph
+        # 의존성이 추가로 필요해졌고, analyzer 이미지에는 이게 없어 import
+        # 단계에서 깨진다(/detect가 "langgraph_not_available"만 반환).
+        # Dockerfile.controller + requirements-controller.txt로 별도 빌드.
+        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/anomaly-controller:1.0
+        imagePullPolicy: Always
+
+        command: ["python", "-m", "uvicorn", "controller:app", "--host", "0.0.0.0", "--port", "8080"]
+
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+
+        envFrom:
+        - configMapRef:
+            name: anomaly-controller-config
+
+        env:
+        - name: GOOGLE_CLOUD_PROJECT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GOOGLE_CLOUD_PROJECT
+        - name: GOOGLE_CLOUD_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GOOGLE_CLOUD_REGION
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 300
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 300
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+        resources:
+          requests:
+            cpu: 50m
+            memory: 192Mi
+          limits:
+            cpu: 750m
+            memory: 768Mi
+
+        volumeMounts:
+        - name: code-volume
+          mountPath: /app/controller.py
+          subPath: controller.py
+        - name: code-volume
+          mountPath: /app/agent_tools.py
+          subPath: agent_tools.py
+        - name: code-volume
+          mountPath: /app/analyzer_schema.py
+          subPath: analyzer_schema.py
+
+      volumes:
+      - name: code-volume
+        configMap:
+          name: controller-code
+
+---
+# ===========================
+# Service (ClusterIP)
+# ===========================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-controller
+  namespace: elastic
+  labels:
+    app: anomaly-controller
+    tier: inference
+spec:
+  type: ClusterIP
+  selector:
+    app: anomaly-controller
+    tier: inference
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+
+# ===========================
+# 배포 절차
+# ===========================
+#
+# 0. (최초 1회) controller 전용 이미지 빌드:
+#    docker build -f Dockerfile.controller \
+#      -t us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/anomaly-controller:1.0 .
+#    docker push us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/anomaly-controller:1.0
+#
+#    agent-tools-mcp 이미지 빌드:
+#    docker build -f Dockerfile.agent-tools-mcp \
+#      -t us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/agent-tools-mcp:1.0 .
+#    docker push us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/agent-tools-mcp:1.0
+#
+# 1. 코드 ConfigMap 생성/갱신:
+#    kubectl create configmap controller-code \
+#      --from-file=controller.py=apps/controller.py \
+#      --from-file=agent_tools.py=apps/agent_tools.py \
+#      --from-file=analyzer_schema.py=apps/analyzer_schema.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+#    kubectl create configmap agent-tools-mcp-code \
+#      --from-file=agent_tools.py=apps/agent_tools.py \
+#      --from-file=agent_tools_mcp_server.py=apps/agent_tools_mcp_server.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# 2. Deployment 적용:
+#    kubectl apply -f 06-controller.yaml
+#
+# 3. Ready 확인:
+#    kubectl rollout status deployment/anomaly-controller -n elastic
+#    kubectl rollout status deployment/agent-tools-mcp -n elastic
+#
+# ===========================
+# ENABLE_COMPARE_FEATURES 활성화 (Arm 3 실험 시)
+# ===========================
+#
+#    kubectl patch configmap anomaly-controller-config -n elastic \
+#      --type merge -p '{"data":{"ENABLE_COMPARE_FEATURES":"true"}}'
+#    kubectl rollout restart deployment/anomaly-controller -n elastic
+#    kubectl rollout restart deployment/agent-tools-mcp -n elastic
+#
+# ===========================
+# TOOL_EXECUTION_MODE 비교실험 (direct vs mcp)
+# ===========================
+#
+#    kubectl patch configmap anomaly-controller-config -n elastic \
+#      --type merge -p '{"data":{"TOOL_EXECUTION_MODE":"mcp"}}'
+#    kubectl rollout restart deployment/anomaly-controller -n elastic
+#    ※ orchestrator의 TOOL_EXECUTION_MODE(05-orchestrator_agent.yaml)도
+#      동일 값으로 맞춰야 응답의 key_evidence/agent_trace 표기가 일치한다.
+#      (orchestrator 자신은 tool을 직접 실행하지 않으므로 동작에는 영향 없음 —
+#      표기 일관성만을 위한 것.)

@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "kakaoo-501107",
+  "private_key_id": "b35a1ab9eefa2a0f3f6c925b896a1e8d1b0fc9e5",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCdxPA2PtNtTENZ\nIdztQKTCUANXuzGrzVNYZqjmBVGftDy+oZFMRdY2Q6DNbw4bWKxwQKYT3dEIQlnT\nTVTKim9FEFXwOEeJvjp+/fjy62MBp8oF5c3GjWi9zMxIXv5m2+Cbb5TVYBB7hGOE\n+mzcfu3lYKMTbSTrrQObyGWSeQhMP//4iO5wmdiFLPc7z3xa+ybPLWEhva3x+miZ\n36nA0QQaItslrVwnyBlby++tEUIXq9Wyef26ZDUC/onFZ0TuNaai5QbJt3cxu0lF\nCTzDQFPOqyy9zjcFeT8cVVGgEkiDbcfsldAteOUTvPubbRe6IhyaZr7JLxlkuxvj\n2jI9XSgZAgMBAAECggEACgWp1BWp8k5UaZPsSAlXDghC1hlhno4fW8UVuJr2OZob\npmkhZOzQyUdYLoSoqusMn+Azd0fxez//xcZVUGfP3rLFdXTrHSBqRd6V/b8fMx/j\nW6biq1jDTRShQNMBVSu647+IVFpTDGL3Zsn5DV67d6/rsWm5soZImDui3Cr3xc7M\nxUrUmdyR2Y3sv2iMEwKMOLPhWiVWkztSgtHZD2FzD7hw1DLzdpWn3pld7TriLfOW\n8JFgHw5Hao0iXrhIAi4kUzeI1OBUHuNHk8n2GZhlI1D0Aboi9dpP5q0XfmrgLYSq\nmKlEaCpVbk8S+kWKgJXxl2AoVI3tgZ4s9wNC1mQviQKBgQDPFd1180InVHILePXz\nNafmzwMq3DY2MlQgQjHYx/acGD1mbcgW2+x1GVigFFb3TU8W8XK+r0rdCh61XFVm\nePDPwhER3/68gZCK38PcLWuEm3V9rSA4U/dpMk6UEC3hWWwkkuoKA0UR0SSd65RL\nigZLK5BYcWYFjoaobAUpI7LEJQKBgQDDCQDuHIDRKys05Sy5iUW6ZQaDQe4yTLz6\nhB2IlRUVR8qsXBTi0LQQeB48UsBqh8Kx2gFaF/o1yHJRZBRlhuCD8eaI0O48x+tL\n9zV1MRZ31pEiAKG8fO+AJ48187Dgmzt8BDdbH026UQZgngNdHa9bPzJozL9JTQlc\nXcwL5iT35QKBgQCq0sGNY63lXZ554j0Yc+Fd3tQhDehWSqvktFYEGedPGhvEG7kb\nSi1C5zaZTk3y0D32khNyQo1ByvBL8K+tyQP0jYShNyIeA87lD/Kz9G+lwstncWGL\ntY/4ofv53WLLaoVvohUXT10xdlF7R3Jb4a6RYY0/t8NNwCVKV1jmd8EmVQKBgCyQ\nnxzJeInTAmFoyGpwunUX5oARjZsCu9/GVnVCE3o0WFRACim1pJ9qwwXnpr3w3YUE\nGnD6r5qgfbapVpvIUP71REcY7ocG63YFO7rWh5rEdY8+c7Z9GcC/yVJ7p3v7HIF+\n+SMiKQGcyAdFs+EQCmSgMSWPO1pFdxEbAafqY6IdAoGBAMjIXaAlHM15klVKVy2u\nhjz65vqcN0UmJso+gPk83GjLRKQIFds3JFRHF7/97EpB2j/0YT2uFOtDnD8ebE7q\nW8Do7X2CczS58iJ/QiQoeEky4JSm5wgUMMpvFpvH8OA3w42h41WyRBgS5wuCZ9ys\n9+sw+5T44U9dd+fwJQ5zQqKx\n-----END PRIVATE KEY-----\n",
+  "client_email": "grafana-gmp-reader@kakaoo-501107.iam.gserviceaccount.com",
+  "client_id": "112072628197014908141",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/grafana-gmp-reader%40kakaoo-501107.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}

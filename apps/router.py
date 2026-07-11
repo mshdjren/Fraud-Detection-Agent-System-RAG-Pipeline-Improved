@@ -214,10 +214,15 @@ class ClusterCandidate(BaseModel):
     """
     ★ v5: purity / support / leaf_id 제거
     cluster_id / rank / score 만 반환
+    ★ reroute persona 교체: 후보별 persona 동봉 — controller가 top2로
+      전환할 때 해당 cluster의 persona를 analyzer에 전달하기 위함.
+      (strict percolate/centroid-augment 두 경로 모두 _source에 persona가
+       이미 조회돼 있어 추가 ES 호출 없음. PERSONA_ENABLED=false면 None)
     """
     cluster_id: int
     rank:       int
     score:      float
+    persona:    Optional[Dict[str, Any]] = None
 
 
 class RouteResponse(BaseModel):
@@ -929,6 +934,7 @@ def _do_route(
             cluster_id=h["_source"]["cluster_id"],
             rank=rank,
             score=float(h.get("_score", 0.0)),
+            persona=(h["_source"].get("persona") if PERSONA_ENABLED else None),
         )
         for rank, h in enumerate(top5_hits, start=1)
     ]

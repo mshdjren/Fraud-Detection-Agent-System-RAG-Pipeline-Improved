@@ -63,7 +63,7 @@ logger = structlog.get_logger()
 # Constants
 # ──────────────────────────────────────────────────────────────
 
-GCS_BUCKET_NAME = "fraudecom"
+GCS_BUCKET_NAME = "fraud_ecomm"
 
 # GCS 저장 경로 템플릿
 GCS_MINING_PATH_TEMPLATE = (

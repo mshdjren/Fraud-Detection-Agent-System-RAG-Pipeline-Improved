@@ -301,7 +301,7 @@ spec:
       # ===========================
       containers:
       - name: ingest
-        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/es-tree-ingest:3.0
+        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/es-tree-ingest:3.0
         imagePullPolicy: Always
 
         command: ["bash", "-lc"]

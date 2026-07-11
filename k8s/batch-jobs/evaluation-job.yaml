@@ -7,7 +7,7 @@ metadata:
   name: evaluation-sa
   namespace: elastic
   annotations:
-    iam.gke.io/gcp-service-account: evaluation-sa@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+    iam.gke.io/gcp-service-account: evaluation-sa@kakaoo-501107.iam.gserviceaccount.com
 
 # ===========================
 # evaluation-code ConfigMap 등록 방법

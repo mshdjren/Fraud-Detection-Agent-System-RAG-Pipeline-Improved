@@ -104,7 +104,7 @@ spec:
         - name: GAUSSIAN_AUG_DATA_DIR
           value: "/data/gaussian_aug"
         - name: GCS_GAUSSIAN_AUG_BASE
-          value: "gs://fraudecom/tree-search/gaussian_aug"
+          value: "gs://fraud_ecom/tree-search/gaussian_aug"
         - name: GAUSSIAN_AUG_MULTIPLIERS
           # value: "2,5,10"    # 필요한 multiplier 조합 (20,30은 USE_CHUNK=true 권장)
           value: "30"    # 필요한 multiplier 조합 (20,30은 USE_CHUNK=true 권장)
@@ -219,7 +219,7 @@ spec:
       # ===========================
       containers:
       - name: ingest
-        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/es-tree-ingest:3.0
+        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/es-tree-ingest:3.0
         imagePullPolicy: Always
 
         command: ["bash", "-lc"]
@@ -270,7 +270,7 @@ spec:
         - name: GAUSSIAN_AUG_DATA_DIR
           value: "/data/gaussian_aug"
         - name: GCS_GAUSSIAN_AUG_BASE
-          value: "gs://fraudecom/tree-search/gaussian_aug"
+          value: "gs://fraud_ecom/tree-search/gaussian_aug"
 
         # 적재할 multiplier 목록 (쉼표 구분)
         # 주의: 20x/30x는 USE_CHUNK=true + N_CHUNKS 설정 권장

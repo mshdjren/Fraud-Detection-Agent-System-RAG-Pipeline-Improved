@@ -22,8 +22,8 @@ data:
   COMPARE_TRACK_ENABLED: "false"
   FAST_TRACK_DISTANCE_THRESHOLD: "0.85"
   # ✅ GCP Configuration (for Analyzer)
-  GOOGLE_CLOUD_PROJECT: "project-fcd52ffc-8b8b-4557-858"
-  GOOGLE_CLOUD_REGION: "us-central1"
+  GOOGLE_CLOUD_PROJECT: "kakaoo-501107"
+  GOOGLE_CLOUD_REGION: "us-west1"
 
   # ===========================
   # ✨ Experiment Control
@@ -52,7 +52,8 @@ data:
 
   # VERSIONS: "v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13", v14 -- v11만 ingest
   #ingest랑 아래 PERCOLATE_QUERY_VERSION, router랑 달라!"
-  VERSIONS: "v1,v11,v14"
+  # VERSIONS: "v1,v11,v14"
+  VERSIONS: "v1"
 
   # Flexible Matching Threshold (v2, v3에서 사용)
   # - 빈 문자열: experiment_case별 자동 계산 (권장)
@@ -60,7 +61,7 @@ data:
 
   # VERSIONS: "v,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13, v11a, v11b, v11c, v14"
   # Router가 실시간 percolate에 사용할 단일 버전
-  PERCOLATE_QUERY_VERSION: "v14"
+  PERCOLATE_QUERY_VERSION: "v1"
 
   # Persona Feature (Analyzer 전달 여부)
   PERSONA_ENABLED: "true"
@@ -69,7 +70,7 @@ data:
   #   true  → router가 cluster_id 할당 없이 전체 cluster 목록 반환
   #           retriever가 cluster_id filter 없이 전체 인덱스 vec 검색
   #   false → 정상 percolate + centroid fallback 흐름 (기본값)
-  SKIP_ANALYZER: "true"
+  SKIP_ANALYZER: "false"
 
   # ===========================
   # ✨ Coreset Sampling
@@ -117,7 +118,7 @@ data:
   PERCOLATOR_SHARD_DISTRIBUTION: "true"
   ATTR_PERCOLATOR: "percolator"  # percolate-distributed 노드셋의 box_type
   ATTR_DOCS: "docs"              # docs-datastore 노드셋의 box_type
-  N_SHARDS: "3"
+  N_SHARDS: "1"
   N_REPLICAS: "0"
 
   # Bucketization depth 비율
@@ -168,7 +169,7 @@ data:
   # ===========================
 
   # 임베딩 파일이 저장된 GCS 폴더 (파일명 제외)
-  GCS_EMB_BASE: "gs://fraudecom/tree-search/embeddings_fraudecom"
+  GCS_EMB_BASE: "gs://fraud_ecomm/tree-search/embeddings_fraudecom"
 
   # 임베딩 파일명 prefix
   # 실제 파일명: {prefix}_{percentage}_merged.npy
@@ -184,7 +185,7 @@ data:
   EMB_FILENAME_PREFIX: "anollm_lr5e-05_standard_smolLM_train_embeddings_percentage"
 
   # 케이스별 아티팩트 GCS 기본 경로
-  GCS_TREE_BASE: "gs://fraudecom/tree-search/tree_fraudecom"
+  GCS_TREE_BASE: "gs://fraud_ecomm/tree-search/tree_fraudecom"
 
   # ★ v5.1: centroid fallback 용 클러스터 수 K
   #   GCS 경로: {GCS_TREE_BASE}/k{N_CLUSTERS}/cluster_centroids.npy  shape=(K, D)
@@ -192,8 +193,31 @@ data:
   #   suffix 없는 케이스(pca_64, emb_vectors)는 이 값을 명시 사용.
   N_CLUSTERS: "100"
 
-  # ingest local container corest 저장 경로
+  # ingest local container corest 저장 경로afafsad
   CORESET_PARQUET_DIR: "/data/coreset_parquets"
+
+  BASE_TOP_K: "3"
+  EXPAND_TOP_K: "5"
+  ANALYZER_DECISION_MODE: "det"     # 비교실험 시 "llm"으로 patch
+  CLS_ND_THRESHOLD: "0.5"  # ===========================
+  # Agent eval
+  # ===========================
+
+  SUFFICIENCY_BOUNDARY_LOW:  "0.3"
+  SUFFICIENCY_BOUNDARY_HIGH: "0.55"
+  EVAL_JSONL_GCS: "tree-search/analyzer_ft/pca_64_k100/hf_0629/training_data_mined_eval.jsonl"
+  EVAL_SOURCE: "eval_set"
+  AGENT_EVAL_GCS_PREFIX: "gs://fraud_ecomm/agent_eval"
+
+  EVAL_RATIO: "0.1"          # NB01 EVAL_RATIO와 동일 (역매핑 구간)
+
+  TOOL_GATE_ENABLE : "true"
+  EXPAND_ND_LO : "0.48"
+  EXPAND_ND_HI : "0.60"
+  EXPAND_PLATEAU_TAU : "0.142"
+  REROUTE_ON_CENTROID : "true"
+  REROUTE_SCORE_RATIO : "0.93"
+  DIST_TOP_K : "5"
 
 # ===========================
 # Index Name Convention (참고용)

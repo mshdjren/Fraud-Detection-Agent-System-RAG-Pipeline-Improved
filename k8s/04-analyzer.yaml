@@ -52,7 +52,7 @@ metadata:
   name: anomaly-analyzer
   namespace: elastic
   annotations:
-    iam.gke.io/gcp-service-account: anomaly-analyzer@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+    iam.gke.io/gcp-service-account: anomaly-analyzer@kakaoo-501107.iam.gserviceaccount.com
 
 ---
 # ===========================
@@ -102,7 +102,7 @@ spec:
 
       containers:
       - name: analyzer
-        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/anomaly-analyzer:1.0
+        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/anomaly-analyzer:1.0
         imagePullPolicy: Always
 
         ports:

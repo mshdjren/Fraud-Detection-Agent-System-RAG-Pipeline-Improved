@@ -1,0 +1,196 @@
+# ===========================
+# Controller ConfigMap: Planner Settings
+# ===========================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anomaly-controller-config
+  namespace: elastic
+  labels:
+    app: anomaly-controller
+    tier: inference
+data:
+  LLM_MODEL:        "gemini-2.5-flash-lite"
+  LLM_TEMPERATURE:  "0.0"
+  LLM_MAX_TOKENS:   "512"
+
+  # Follow-up tool 토글
+  # compare_features는 초기 단계에서 비활성화 (Arm 3)
+  ENABLE_COMPARE_FEATURES: "false"
+
+---
+# ===========================
+# ServiceAccount (Workload Identity)
+# ===========================
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: anomaly-controller
+  namespace: elastic
+  labels:
+    app: anomaly-controller
+  annotations:
+    # analyzer와 동일한 GCP SA 재사용 (Vertex AI 권한 공유)
+    iam.gke.io/gcp-service-account: anomaly-analyzer@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+
+---
+# ===========================
+# Deployment
+# ===========================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anomaly-controller
+  namespace: elastic
+  labels:
+    app: anomaly-controller
+    tier: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anomaly-controller
+  template:
+    metadata:
+      labels:
+        app: anomaly-controller
+        tier: inference
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: anomaly-controller
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["app-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: anomaly-controller
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: controller
+        # analyzer 이미지 재사용: FastAPI + LangChain + Vertex AI 의존성 동일
+        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/anomaly-analyzer:1.0
+        imagePullPolicy: Always
+
+        command: ["python", "-m", "uvicorn", "controller:app", "--host", "0.0.0.0", "--port", "8080"]
+
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+
+        envFrom:
+        - configMapRef:
+            name: anomaly-controller-config
+
+        env:
+        - name: GOOGLE_CLOUD_PROJECT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GOOGLE_CLOUD_PROJECT
+        - name: GOOGLE_CLOUD_REGION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GOOGLE_CLOUD_REGION
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+
+        resources:
+          requests:
+            cpu: 10m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+        volumeMounts:
+        - name: code-volume
+          mountPath: /app/controller.py
+          subPath: controller.py
+        - name: code-volume
+          mountPath: /app/agent_tools.py
+          subPath: agent_tools.py
+
+      volumes:
+      - name: code-volume
+        configMap:
+          name: controller-code
+
+---
+# ===========================
+# Service (ClusterIP)
+# ===========================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: anomaly-controller
+  namespace: elastic
+  labels:
+    app: anomaly-controller
+    tier: inference
+spec:
+  type: ClusterIP
+  selector:
+    app: anomaly-controller
+    tier: inference
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+
+# ===========================
+# 배포 절차
+# ===========================
+#
+# 1. 코드 ConfigMap 생성/갱신:
+#    kubectl create configmap controller-code \
+#      --from-file=controller.py=apps/controller.py \
+#      --from-file=agent_tools.py=apps/agent_tools.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# 2. Deployment 적용:
+#    kubectl apply -f 06-controller.yaml
+#
+# 3. Ready 확인:
+#    kubectl rollout status deployment/anomaly-controller -n elastic
+#
+# ===========================
+# ENABLE_COMPARE_FEATURES 활성화 (Arm 3 실험 시)
+# ===========================
+#
+#    kubectl patch configmap anomaly-controller-config -n elastic \
+#      --type merge -p '{"data":{"ENABLE_COMPARE_FEATURES":"true"}}'
+#    kubectl rollout restart deployment/anomaly-controller -n elastic

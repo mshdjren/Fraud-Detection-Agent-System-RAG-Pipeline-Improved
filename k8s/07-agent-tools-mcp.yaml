@@ -1,0 +1,262 @@
+# ===========================
+# Agent Tools MCP Server
+# ===========================
+# 역할:
+#   agent_tools.py 에 정의된 follow-up tool
+#   (expand_within_cluster / reroute_cross_cluster / compare_features)을
+#   표준 MCP 프로토콜로 노출한다.
+#
+#   controller.py 가 TOOL_EXECUTION_MODE 에 따라:
+#     "direct"     → retriever 를 직접 HTTP 호출 (이 서비스 불필요)
+#     "mcp"        → /tools/{name}/call (REST shim, 이 서비스 경유)
+#     "mcp_native" → /mcp  (표준 MCP streamable-http, 이 서비스 경유)
+#
+# 코드 주입 방식 (다른 서비스와 동일):
+#   kubectl create configmap agent-tools-mcp-code \
+#     --from-file=agent_tools.py=apps/agent_tools.py \
+#     --from-file=agent_tools_mcp_server.py=apps/agent_tools_mcp_server.py \
+#     -n elastic --dry-run=client -o yaml | kubectl apply -f -
+# ===========================
+
+# ───────────────────────────
+# ServiceAccount
+# ───────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-tools-mcp
+  namespace: elastic
+  labels:
+    app: agent-tools-mcp
+    tier: inference
+  # GCP SA 불필요 — 이 서비스는 Vertex AI / GCS 등 GCP API를 직접 호출하지
+  # 않는다. retriever / router 는 클러스터 내부 HTTP로만 접근하므로
+  # Workload Identity annotation 생략.
+
+---
+# ───────────────────────────
+# ConfigMap (환경 변수용)
+# ───────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-tools-mcp-config
+  namespace: elastic
+  labels:
+    app: agent-tools-mcp
+    tier: inference
+data:
+  # ── 의존 서비스 URL ────────────────────────────────────────────
+  RETRIEVER_URL: "http://anomaly-retriever:80"
+  ROUTER_URL:    "http://anomaly-router:80"
+
+  # ── MCP 서버 바인딩 ────────────────────────────────────────────
+  # agent_tools_mcp_server.py 의 --host / --port 와 동일.
+  # Dockerfile CMD 에 하드코딩되어 있으나, 재정의가 필요할 때를 위해
+  # ConfigMap 에도 명시해 둔다.
+  MCP_HOST: "0.0.0.0"
+  MCP_PORT: "8080"
+
+  # ── Tool 토글 ─────────────────────────────────────────────────
+  # compare_features 는 3-axis 비교실험(Arm 3) 단계에서만 활성화한다.
+  # 기본 false — 활성화 절차는 파일 하단 주석 참고.
+  ENABLE_COMPARE_FEATURES: "false"
+
+---
+# ───────────────────────────
+# Deployment
+# ───────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-tools-mcp
+  namespace: elastic
+  labels:
+    app: agent-tools-mcp
+    tier: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-tools-mcp
+  template:
+    metadata:
+      labels:
+        app: agent-tools-mcp
+        tier: inference
+      annotations:
+        # FastMCP 는 /metrics 를 직접 노출하지 않으므로 /health 로 대체.
+        # Prometheus scrape 가 필요하면 agent_tools_mcp_server.py 에
+        # prometheus_client 엔드포인트를 추가한 뒤 /metrics 로 교체한다.
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8080"
+        prometheus.io/path:   "/health"
+    spec:
+      serviceAccountName: agent-tools-mcp
+
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["app-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: agent-tools-mcp
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: agent-tools-mcp
+        # Dockerfile.agent-tools-mcp + requirements-agent-tools-mcp.txt 로 빌드.
+        # 의존성: fastapi / uvicorn / mcp / httpx / structlog / pydantic.
+        # (langgraph / langchain 불필요 — tool 실행만 담당)
+        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/agent-tools-mcp:1.0
+        imagePullPolicy: Always
+
+        # streamable-http transport:
+        #   /mcp        — 표준 MCP JSON-RPC (TOOL_EXECUTION_MODE=mcp_native)
+        #   /tools/*    — REST shim         (TOOL_EXECUTION_MODE=mcp)
+        #   /health     — liveness/readiness probe
+        command: ["python", "agent_tools_mcp_server.py",
+                  "--transport", "http",
+                  "--host",      "0.0.0.0",
+                  "--port",      "8080"]
+
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+
+        # ConfigMap 전체를 환경변수로 주입 (05-orchestrator_agent.yaml 과 달리
+        # 이 서비스는 env var 수가 적으므로 envFrom 으로 일괄 주입한다)
+        envFrom:
+        - configMapRef:
+            name: agent-tools-mcp-config
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+        resources:
+          requests:
+            cpu:    "10m"
+            memory: "64Mi"
+          limits:
+            cpu:    "250m"
+            memory: "256Mi"
+
+        # code-volume: agent_tools.py / agent_tools_mcp_server.py 를
+        # ConfigMap(agent-tools-mcp-code)에서 런타임에 주입.
+        # 이미지 재빌드 없이 코드만 교체할 수 있어 개발 단계에서 편리하다.
+        volumeMounts:
+        - name: code-volume
+          mountPath: /app/agent_tools.py
+          subPath: agent_tools.py
+        - name: code-volume
+          mountPath: /app/agent_tools_mcp_server.py
+          subPath: agent_tools_mcp_server.py
+
+      volumes:
+      - name: code-volume
+        configMap:
+          name: agent-tools-mcp-code
+
+---
+# ───────────────────────────
+# Service (ClusterIP)
+# ───────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-tools-mcp
+  namespace: elastic
+  labels:
+    app: agent-tools-mcp
+    tier: inference
+spec:
+  type: ClusterIP
+  selector:
+    app: agent-tools-mcp
+    tier: inference
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+
+# ===========================
+# 배포 절차
+# ===========================
+#
+# 0. (최초 1회) 이미지 빌드 & push:
+#    docker build -f Dockerfile.agent-tools-mcp \
+#      -t us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/agent-tools-mcp:1.0 .
+#    docker push us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/agent-tools-mcp:1.0
+#
+# 1. 코드 ConfigMap 생성/갱신 (코드 변경 시마다):
+#    kubectl create configmap agent-tools-mcp-code \
+#      --from-file=agent_tools.py=apps/agent_tools.py \
+#      --from-file=agent_tools_mcp_server.py=apps/agent_tools_mcp_server.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# 2. 배포 적용:
+#    kubectl apply -f 07-agent-tools-mcp.yaml
+#
+# 3. Ready 확인:
+#    kubectl rollout status deployment/agent-tools-mcp -n elastic
+#
+# 4. 헬스 확인:
+#    kubectl exec -n elastic deploy/agent-tools-mcp -- \
+#      curl -s http://localhost:8080/health
+#
+#    # MCP tool 목록 확인 (표준 MCP 프로토콜 동작 검증)
+#    kubectl exec -n elastic deploy/anomaly-controller -- \
+#      python3 -c "
+#    import asyncio
+#    from langchain_mcp_adapters.client import MultiServerMCPClient
+#    async def main():
+#        c = MultiServerMCPClient({'t': {'url': 'http://agent-tools-mcp/mcp', 'transport': 'streamable_http'}})
+#        tools = await c.get_tools()
+#        print([t.name for t in tools])
+#    asyncio.run(main())"
+#
+# ===========================
+# ENABLE_COMPARE_FEATURES 활성화 (Arm 3 실험 시)
+# ===========================
+#
+#    kubectl patch configmap agent-tools-mcp-config -n elastic \
+#      --type merge -p '{"data":{"ENABLE_COMPARE_FEATURES":"true"}}'
+#    kubectl rollout restart deployment/agent-tools-mcp -n elastic
+#    # controller 도 함께 재시작해야 플래그가 양쪽에 반영된다
+#    kubectl rollout restart deployment/anomaly-controller -n elastic
+#
+# ===========================
+# TOOL_EXECUTION_MODE 전환 (direct → mcp → mcp_native)
+# ===========================
+#
+#    # controller 의 ConfigMap 을 변경하면 자동으로 반영됨
+#    kubectl patch configmap anomaly-controller-config -n elastic \
+#      --type merge -p '{"data":{"TOOL_EXECUTION_MODE":"mcp_native"}}'
+#    kubectl rollout restart deployment/anomaly-controller -n elastic
+#    # ※ agent-tools-mcp 자체는 재시작 불필요 — transport 수신 방식은
+#    #   이미 streamable-http / REST shim 양쪽을 동시에 서빙 중이다.

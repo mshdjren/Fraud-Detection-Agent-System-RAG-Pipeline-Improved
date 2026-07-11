@@ -38,3 +38,7 @@ safetensors==0.4.5          # adapter_model.safetensors 로드
 
 # ── 기타 ──────────────────────────────────────────────────
 requests==2.32.3            # streamlit_app.py에서 orchestrator 호출용
+
+# ── GGUF 추론 스택 (MODEL_BACKEND=gguf일 때 사용) ─────────
+# NB02 Section 14와 동일 버전 계열. --no-deps로 torch/numpy 보호.
+llama-cpp-python==0.3.4

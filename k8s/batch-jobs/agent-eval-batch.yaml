@@ -1,0 +1,451 @@
+# ===========================
+# agent-eval-batch.yaml
+# ===========================
+# 목적: agent_batch_inference.py + agent_eval_report.py 실행
+#       (agent_eval_metrics.py / agent_latency.py 는 import 모듈이므로 별도 Job 없음)
+#
+# 기존 yaml과의 관계:
+#   - ServiceAccount: agent-loop-batch.yaml 과 동일한 evaluation-sa 재사용
+#   - image / affinity / restartPolicy / resources: agent-loop-batch.yaml 패턴 그대로 유지
+#   - 기존 evaluation-code ConfigMap: gt_loader.py / evaluation_metrics.py 포함되어 있어 재사용
+#   - 신규 evaluation-agent-eval-code ConfigMap: 새 4개 파일 추가 등록 필요 (아래 참고)
+#
+# ConfigMap 등록 (최초 1회 + 파일 변경 시):
+#
+#   # 기존 evaluation-code 에 없는 파일들만 신규 ConfigMap으로 분리
+  # kubectl create configmap evaluation-agent-eval-code \
+  #   --from-file=agent_batch_inference.py \
+  #   --from-file=agent_eval_metrics.py \
+  #   --from-file=agent_eval_report.py \
+  #   --from-file=agent_latency.py \
+  #   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+#   # gt_loader.py / evaluation_metrics.py 는 기존 evaluation-code 에 이미 있음
+#   # → Job spec에서 두 ConfigMap을 모두 /app 에 마운트해서 import 가능하게 함
+#
+# ===========================
+# ServiceAccount (기존과 동일 — 이미 apply 돼 있으면 생략 가능)
+# ===========================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evaluation-sa
+  namespace: elastic
+  annotations:
+    iam.gke.io/gcp-service-account: evaluation-sa@kakaoo-501107.iam.gserviceaccount.com
+
+---
+# ===========================
+# Job 1: Agent Batch Inference
+#   agent_batch_inference.py 실행
+#   → agent_predictions.json + agent_eval_report.json 생성
+#   → GCS에 저장
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-eval-inference-pca64-k100-v14-07111
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: agentic-eval
+    pipeline: agent-loop
+    step: inference
+spec:
+  ttlSecondsAfterFinished: 604800   # 7일 후 자동 삭제 (기존과 동일)
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        pipeline: agent-loop
+        step: inference
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+
+      # affinity: 기존 agent-loop-batch.yaml 패턴 그대로 유지
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: evaluation-sa
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: agent-eval-inference
+        image: python:3.10-slim   # 기존과 동일
+
+        env:
+        # ── 기존 agent-loop-batch.yaml 환경변수 패턴 유지 ──────────
+        - name: ORCHESTRATOR_URL
+          value: "http://anomaly-orchestrator:80"
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        - name: EVAL_JSONL_GCS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EVAL_JSONL_GCS
+        - name: EVAL_SOURCE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EVAL_SOURCE
+        # ── 추론 파라미터 ─────────────────────────────────────────
+        # N_SAMPLES: 전체 평가 샘플 수.
+        #   smoke(검증): 10~20, 정식 평가: 500~1000
+        - name: N_SAMPLES
+          value: "50"
+        - name: START_INDEX
+          value: "10000"
+        - name: CORESET_PERCENTAGE
+          value: "100"
+        - name: TIMEOUT
+          value: "1200"    # per-sample timeout (agent CPU 추론 포함)
+
+        # ── boundary-only 옵션 ────────────────────────────────────
+        # "true" 로 설정하면 top1_dist 0.30~0.55 샘플만 대상으로 실행
+        # boundary FNR 개선 검증이 목적일 때 사용
+        - name: BOUNDARY_ONLY
+          value: "false"
+
+        # ── GCS 저장 경로 ─────────────────────────────────────────
+        - name: GCS_OUTPUT_BUCKET
+          value: "gs://fraud_ecomm/evaluation/agent-eval"
+
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Agent Loop Evaluation — Batch Inference"
+          echo "  orchestrator       : ${ORCHESTRATOR_URL}"
+          echo "  experiment_case    : ${EXPERIMENT_CASE}"
+          echo "  percolate_version  : ${PERCOLATE_QUERY_VERSION}"
+          echo "  n_samples          : ${N_SAMPLES}  (start=${START_INDEX})"
+          echo "  boundary_only      : ${BOUNDARY_ONLY}"
+          echo "================================================"
+
+          # 기존 smoke yaml 대비 scikit-learn / matplotlib 추가
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx structlog \
+            scikit-learn matplotlib \
+            google-cloud-storage
+
+          cd /app
+
+          # boundary_only 플래그 처리
+          BOUNDARY_FLAG=""
+          if [ "${BOUNDARY_ONLY}" = "true" ]; then
+            BOUNDARY_FLAG="--boundary-only"
+          fi
+
+          python agent_batch_inference.py \
+            --experiment-case    ${EXPERIMENT_CASE} \
+            --percolate-version  ${PERCOLATE_QUERY_VERSION} \
+            --coreset-percentage ${CORESET_PERCENTAGE} \
+            --n-samples          ${N_SAMPLES} \
+            --start-index        ${START_INDEX} \
+            --timeout            ${TIMEOUT} \
+            --output-dir         /results \
+            --eval-source ${EVAL_SOURCE:-eval_set} \
+            # --gcs-upload ${AGENT_EVAL_GCS_PREFIX}
+            ${BOUNDARY_FLAG}
+
+          # 결과 확인
+          echo "--- agent_eval_report.json (summary) ---"
+          [ -f /results/agent_eval_report.json ] && \
+            python3 -c "
+          import json
+          r = json.load(open('/results/agent_eval_report.json'))
+          s = r.get('agent_summary', {})
+          print('distance_auroc :', r.get('dist_auroc',{}).get('distance_auroc'))
+          print('agent_auroc    :', r.get('anomaly_auroc',{}).get('auroc'))
+          print('boundary_fnr   :', s.get('boundary_fnr'))
+          print('expand_rate    :', s.get('expand_rate'))
+          print('latency_p95_ms :', s.get('latency_total_p95_ms'))
+          "
+
+          # GCS 업로드 (google-cloud-storage로 직접 업로드)
+          python3 -c "
+          import os
+          from google.cloud import storage
+          bucket_url = os.environ.get('GCS_OUTPUT_BUCKET', '')
+          if not bucket_url.startswith('gs://'):
+              print('[skip] GCS_OUTPUT_BUCKET 미설정')
+              exit(0)
+          bucket_url = bucket_url.replace('gs://', '')
+          bucket_name, *prefix_parts = bucket_url.split('/')
+          prefix = '/'.join(prefix_parts)
+          client = storage.Client()
+          bucket = client.bucket(bucket_name)
+          for fname in ['agent_predictions.json', 'agent_eval_report.json']:
+              fpath = f'/results/{fname}'
+              if os.path.exists(fpath):
+                  blob = bucket.blob(f'{prefix}/{fname}')
+                  blob.upload_from_filename(fpath)
+                  print(f'[GCS] uploaded: gs://{bucket_name}/{prefix}/{fname}')
+          "
+
+        # resources: 기존 agent-loop-batch.yaml 패턴 유지
+        resources:
+          requests:
+            cpu: 100m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        # 기존 evaluation-code: gt_loader.py + evaluation_metrics.py
+        - name: code-volume
+          mountPath: /app/gt_loader.py
+          subPath: gt_loader.py
+        - name: code-volume
+          mountPath: /app/evaluation_metrics.py
+          subPath: evaluation_metrics.py
+        # 신규 evaluation-agent-eval-code: 새 4개 파일
+        - name: agent-eval-code-volume
+          mountPath: /app/agent_batch_inference.py
+          subPath: agent_batch_inference.py
+        - name: agent-eval-code-volume
+          mountPath: /app/agent_eval_metrics.py
+          subPath: agent_eval_metrics.py
+        - name: agent-eval-code-volume
+          mountPath: /app/agent_latency.py
+          subPath: agent_latency.py
+
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code            # 기존 — gt_loader.py / evaluation_metrics.py
+      - name: agent-eval-code-volume
+        configMap:
+          name: evaluation-agent-eval-code  # 신규 — 새 4개 파일
+
+# ---
+# # ===========================
+# # Job 2: Agent Eval Report
+# #   agent_eval_report.py 실행
+# #   → CSV 2개 + PNG 4개 생성 → GCS 저장
+# #
+# #   ★ Job 1 완료 후 수동 실행이 기본.
+# #     자동화가 필요하면 Argo Workflow 또는 initContainer 패턴 사용.
+# #     현재는 단순하게 GCS에서 report.json을 다운로드해서 그래프만 생성.
+# # ===========================
+# apiVersion: batch/v1
+# kind: Job
+# metadata:
+#   name: agent-eval-report-pca64-k100-v14
+#   namespace: elastic
+#   labels:
+#     app: evaluation
+#     version: agentic-eval
+#     pipeline: agent-loop
+#     step: report
+# spec:
+#   ttlSecondsAfterFinished: 604800
+#   backoffLimit: 2
+#   template:
+#     metadata:
+#       labels:
+#         app: evaluation
+#         pipeline: agent-loop
+#         step: report
+#     spec:
+#       restartPolicy: OnFailure
+#       serviceAccountName: evaluation-sa
+
+#       affinity:
+#         nodeAffinity:
+#           requiredDuringSchedulingIgnoredDuringExecution:
+#             nodeSelectorTerms:
+#             - matchExpressions:
+#               - key: node-role
+#                 operator: In
+#                 values: ["batch-node"]
+#         podAntiAffinity:
+#           preferredDuringSchedulingIgnoredDuringExecution:
+#           - weight: 100
+#             podAffinityTerm:
+#               labelSelector:
+#                 matchLabels:
+#                   app: evaluation-sa
+#               topologyKey: kubernetes.io/hostname
+
+#       containers:
+#       - name: agent-eval-report
+#         image: python:3.10-slim
+
+#         env:
+#         - name: EXPERIMENT_CASE
+#           valueFrom:
+#             configMapKeyRef:
+#               name: anomaly-config
+#               key: EXPERIMENT_CASE
+#         - name: GCS_OUTPUT_BUCKET
+#           value: "gs://fraud_ecomm/evaluation/agent-eval"
+
+#         command:
+#         - /bin/bash
+#         - -c
+#         - |
+#           set -e
+#           echo "================================================"
+#           echo " Agent Eval Report — 수치/표/그래프 생성"
+#           echo "  experiment_case : ${EXPERIMENT_CASE}"
+#           echo "  GCS 경로        : ${GCS_OUTPUT_BUCKET}"
+#           echo "================================================"
+
+#           pip install --no-cache-dir \
+#             numpy pandas pyarrow \
+#             scikit-learn matplotlib \
+#             google-cloud-storage
+
+#           cd /app
+
+#           # GCS에서 추론 결과 다운로드
+#           python3 -c "
+#           import os
+#           from google.cloud import storage
+#           bucket_url = os.environ.get('GCS_OUTPUT_BUCKET', '').replace('gs://', '')
+#           bucket_name, *prefix_parts = bucket_url.split('/')
+#           prefix = '/'.join(prefix_parts)
+#           client = storage.Client()
+#           bucket = client.bucket(bucket_name)
+#           os.makedirs('/results', exist_ok=True)
+#           for fname in ['agent_eval_report.json']:
+#               blob = bucket.blob(f'{prefix}/{fname}')
+#               blob.download_to_filename(f'/results/{fname}')
+#               print(f'[GCS] downloaded: {fname}')
+#           "
+
+#           # 리포트 생성 (수치 출력 + CSV + PNG 4종)
+#           python agent_eval_report.py \
+#             --report-path /results/agent_eval_report.json \
+#             --output-dir  /results/plots
+
+#           echo "--- 생성된 파일 ---"
+#           ls -lh /results/plots/ 2>/dev/null || echo "(plots 디렉토리 없음)"
+#           ls -lh /results/*.csv  2>/dev/null || echo "(csv 없음)"
+
+#           # 그래프/CSV GCS 업로드
+#           python3 -c "
+#           import os
+#           from google.cloud import storage
+#           bucket_url = os.environ.get('GCS_OUTPUT_BUCKET', '').replace('gs://', '')
+#           bucket_name, *prefix_parts = bucket_url.split('/')
+#           prefix = '/'.join(prefix_parts)
+#           client = storage.Client()
+#           bucket = client.bucket(bucket_name)
+#           upload_paths = []
+#           for d, _, files in os.walk('/results'):
+#               for f in files:
+#                   if f.endswith(('.png', '.csv')):
+#                       upload_paths.append(os.path.join(d, f))
+#           for fpath in upload_paths:
+#               rel = os.path.relpath(fpath, '/results')
+#               blob = bucket.blob(f'{prefix}/{rel}')
+#               blob.upload_from_filename(fpath)
+#               print(f'[GCS] uploaded: {rel}')
+#           "
+
+#         resources:
+#           requests:
+#             cpu: 100m
+#             memory: 512Mi
+#           limits:
+#             cpu: 500m
+#             memory: 1Gi
+
+#         volumeMounts:
+#         - name: results
+#           mountPath: /results
+#         - name: agent-eval-code-volume
+#           mountPath: /app/agent_eval_report.py
+#           subPath: agent_eval_report.py
+#         - name: agent-eval-code-volume
+#           mountPath: /app/agent_eval_metrics.py
+#           subPath: agent_eval_metrics.py
+#         - name: agent-eval-code-volume
+#           mountPath: /app/agent_latency.py
+#           subPath: agent_latency.py
+
+#       volumes:
+#       - name: results
+#         emptyDir: {}
+#       - name: agent-eval-code-volume
+#         configMap:
+#           name: evaluation-agent-eval-code
+
+# ===========================
+# 배포 절차
+# ===========================
+#
+# 1. ConfigMap 등록 (최초 1회 + 파일 변경 시)
+#
+#    # 신규 — 새 4개 파일
+#    kubectl create configmap evaluation-agent-eval-code \
+#      --from-file=agent_batch_inference.py \
+#      --from-file=agent_eval_metrics.py \
+#      --from-file=agent_eval_report.py \
+#      --from-file=agent_latency.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+#    # 기존 evaluation-code 에 gt_loader.py / evaluation_metrics.py 있는지 확인
+#    kubectl get configmap evaluation-code -n elastic -o yaml | grep "  [a-z].*\.py"
+#
+# 2. Job 1 실행 (추론)
+#    kubectl apply -f agent-eval-batch.yaml
+#    kubectl get job agent-eval-inference-pca64-k100-v14 -n elastic -w
+#    kubectl logs -n elastic job/agent-eval-inference-pca64-k100-v14 --follow
+#
+# 3. Job 1 완료 후 Job 2 실행 (리포트)
+#    # Job 1 완료 확인
+#    kubectl wait --for=condition=complete job/agent-eval-inference-pca64-k100-v14 \
+#      -n elastic --timeout=3600s
+#    # Job 2 적용 (yaml에서 Job 2 부분만 apply, 또는 --field-selector로)
+#    kubectl apply -f agent-eval-batch.yaml
+#    kubectl logs -n elastic job/agent-eval-report-pca64-k100-v14 --follow
+#
+# 4. GCS에서 결과 확인
+#    gsutil ls gs://fraudecom/evaluation/agent-eval/
+#    gsutil cp gs://fraudecom/evaluation/agent-eval/plots/*.png ./
+#
+# ===========================
+# 파라미터 변경 방법
+# ===========================
+#
+# N_SAMPLES 늘리기 (정식 평가):
+#   yaml에서 N_SAMPLES: "1000" 으로 수정 후 재apply
+#
+# boundary-only 실행:
+#   BOUNDARY_ONLY: "true" 로 변경 후 재apply
+#
+# Job 재실행 (같은 이름 Job이 남아있으면 삭제 후 apply):
+#   kubectl delete job agent-eval-inference-pca64-k100-v14 -n elastic
+#   kubectl apply -f agent-eval-batch.yaml

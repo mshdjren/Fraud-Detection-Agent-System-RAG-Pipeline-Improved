@@ -13,26 +13,34 @@ metadata:
 data:
   # ── 실험 설정 ──────────────────────────────────────────────────
   EXPERIMENT_CASE:  "pca_64_k100"
-  TEACHER_PROVIDER: "hf"
-  ADAPTER_TYPE:     "mined"        # mined | distance
+  TEACHER_PROVIDER: "hf_0629"
+  ADAPTER_TYPE:     "sft"        # mined | distance
 
   # ── GCS 설정 ───────────────────────────────────────────────────
-  GCS_BUCKET:  "fraudecom"
+  GCS_BUCKET:  "fraud_ecomm"
   GCS_FT_BASE: "tree-search/analyzer_ft"
 
   # ── 로컬 저장 경로 (init → main container 공유) ────────────────
   ADAPTER_LOCAL_DIR: "/data/adapter"
 
   # ── Base 모델 ──────────────────────────────────────────────────
-  BASE_MODEL_ID: "Qwen/Qwen2.5-0.5B-Instruct"
+  # BASE_MODEL_ID: "Qwen/Qwen2.5-0.5B-Instruct"
+  BASE_MODEL_ID: "Qwen/Qwen2.5-3B-Instruct"
 
   # ── 추론 설정 ──────────────────────────────────────────────────
-  MAX_NEW_TOKENS:  "1536"
+  MAX_NEW_TOKENS:  "64"
   DEVICE:          "cpu"
   # TORCH_DTYPE:     "float32"
   # OMP_NUM_THREADS: "2"
-  TORCH_DTYPE:     "bfloat16"
-  OMP_NUM_THREADS: "4"
+  TORCH_DTYPE:     "float32"
+  OMP_NUM_THREADS: "2"
+
+ # ── 서빙 백엔드 스위치 ───────────────────────────────────────
+ # hf   : 기존 방식 (AutoModelForCausalLM + PeftModel merge, float32)
+ # gguf : llama-cpp-python + Q4_K_M (NB02 Section 14 산출물)
+  MODEL_BACKEND:  "gguf"
+  GGUF_FILENAME:  "model_q4.gguf"
+  N_CTX:          "2048"
 
   # ── Distance 분포 (colab Section 5 실측값: pca_64_k100) ────────
   DIST_P25: "1.264"
@@ -57,7 +65,7 @@ metadata:
   labels:
     app: local-analyzer
   annotations:
-    iam.gke.io/gcp-service-account: anomaly-analyzer@project-fcd52ffc-8b8b-4557-858.iam.gserviceaccount.com
+    iam.gke.io/gcp-service-account: anomaly-analyzer@kakaoo-501107.iam.gserviceaccount.com
 
 ---
 # ===========================
@@ -118,16 +126,32 @@ spec:
             echo "[init] TEACHER_PROVIDER: ${TEACHER_PROVIDER}"
             echo "[init] ADAPTER_TYPE    : ${ADAPTER_TYPE}"
             echo "[init] GCS_BUCKET      : ${GCS_BUCKET}"
+            echo "[init] MODEL_BACKEND   : ${MODEL_BACKEND}"
 
-            GCS_ADAPTER="gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/${TEACHER_PROVIDER}/adapter_${ADAPTER_TYPE}"
+            # gs://{GCS_BUCKET}/{GCS_FT_BASE}/{EXPERIMENT_CASE}/{TEACHER_PROVIDER}/adapter_{ADAPTER_TYPE}/
+            #   ├── README.md, adapter_config.json, adapter_model.safetensors, ... (hf 서빙용)
+            #   └── gguf/
+            #        ├── model_q4.gguf
+            #        └── gguf_meta.json
+            METHOD_PATH="gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/${TEACHER_PROVIDER}/adapter_${ADAPTER_TYPE}"
             DEST="${ADAPTER_LOCAL_DIR}"
 
-            echo "[init] GCS path  : ${GCS_ADAPTER}"
+            echo "[init] GCS path  : ${METHOD_PATH}"
             echo "[init] Local dest: ${DEST}"
             mkdir -p "${DEST}"
 
-            echo "[init] Downloading adapter files..."
-            gsutil -m cp -r "${GCS_ADAPTER}/*" "${DEST}/"
+            if [ "${MODEL_BACKEND}" = "gguf" ]; then
+              # gguf/ 서브폴더 2개 파일만 받는다 (model_q4.gguf 1.9GB + gguf_meta.json)
+              GCS_GGUF_DIR="${METHOD_PATH}/gguf"
+              echo "[init] Downloading GGUF: ${GCS_GGUF_DIR}/${GGUF_FILENAME}"
+              gsutil cp "${GCS_GGUF_DIR}/${GGUF_FILENAME}" "${DEST}/"
+              gsutil cp "${GCS_GGUF_DIR}/gguf_meta.json" "${DEST}/" || true
+            else
+              # hf 백엔드는 adapter 파일만 필요 — gguf/ 서브폴더(model_q4.gguf,
+              # 1.9GB)는 hf 서빙에 안 쓰이므로 제외하고 받는다.
+              echo "[init] Downloading HF adapter (excluding gguf/)"
+              gsutil -m rsync -r -x '^gguf/' "${METHOD_PATH}" "${DEST}"
+            fi
 
             echo "[init] Download complete."
             ls -lh "${DEST}/"
@@ -145,7 +169,7 @@ spec:
       # ── Main Container ─────────────────────────────────────────
       containers:
       - name: local-analyzer
-        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/local-analyzer:2.0
+        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/local-analyzer:3.0
         imagePullPolicy: Always
 
         ports:
@@ -173,6 +197,12 @@ spec:
         - name: code-volume
           mountPath: /app/local_analyzer.py
           subPath: local_analyzer.py
+        - name: code-volume
+          mountPath: /app/prompts.py
+          subPath: prompts.py
+        # - name: code-volume
+        #   mountPath: /app/config.py
+        #   subPath: config.py
 
         lifecycle:
           preStop:
@@ -184,16 +214,18 @@ spec:
             path: /health
             port: 8080
           initialDelaySeconds: 120
-          periodSeconds: 20
+          periodSeconds: 300
           timeoutSeconds: 5
+          failureThreshold: 3 
 
         readinessProbe:
           httpGet:
             path: /health
             port: 8080
           initialDelaySeconds: 120
-          periodSeconds: 10
+          periodSeconds: 300
           timeoutSeconds: 3
+          failureThreshold: 3 
 
         # resources:
         #   requests:
@@ -209,7 +241,7 @@ spec:
             cpu: "100m"      # 500m에서 하향 (Elasticsearch에 양보)
             memory: "512Mi"    # 모델 로딩 안정성을 위해 상향 (OOM 방지)
           limits:
-            cpu: "1000m"     # 2000m에서 하향
+            cpu: "2000m"     # 2000m에서 하향
             memory: "6Gi"    # 6Gi에서 하향 (클러스터 여유분 확보)
 
       volumes:
@@ -247,13 +279,15 @@ spec:
 # 배포 절차
 # ===========================
 #
-# 1. 코드 ConfigMap 생성/갱신:
+# 1. 코드 ConfigMap 생성/갱신 (local_analyzer.py + prompts.py + config.py):
 #    kubectl create configmap local-analyzer-code \
 #      --from-file=local_analyzer.py=apps/local_analyzer.py \
+#      --from-file=prompts.py=apps/prompts.py \
+#      --from-file=config.py=apps/config.py \
 #      -n elastic --dry-run=client -o yaml | kubectl apply -f -
 #
 # 2. Deployment 적용:
-#    kubectl apply -f 06-local-analyzer.yaml
+#    kubectl apply -f 04-local-analyzer.yaml
 #
 # 3. init container 다운로드 로그 확인:
 #    kubectl logs -n elastic -l app=local-analyzer -c download-adapter --follow
@@ -271,6 +305,16 @@ spec:
 #    kubectl patch configmap local-analyzer-config -n elastic \
 #      --type merge -p '{"data":{"ADAPTER_TYPE":"distance"}}'
 #    kubectl rollout restart deployment/local-analyzer -n elastic
+#
+# ===========================
+# 서빙 백엔드 전환 (hf ↔ gguf)
+# ===========================
+#
+#    kubectl patch configmap local-analyzer-config -n elastic \
+#      --type merge -p '{"data":{"MODEL_BACKEND":"hf"}}'
+#    kubectl rollout restart deployment/local-analyzer -n elastic
+#    # ※ init container가 재실행되며 emptyDir(/data)이 초기화되므로
+#    #    백엔드에 맞는 파일만 다시 받는다 (gguf<->hf 전환 시 재다운로드 발생)
 #
 # ===========================
 # orchestrator 전환

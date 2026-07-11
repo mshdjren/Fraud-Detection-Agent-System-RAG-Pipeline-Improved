@@ -1,0 +1,88 @@
+"""
+schema.py — analyzer I/O Pydantic 스키마 (agent + forwardRAG 공통 보관).
+
+GKE 서비스(controller.py / orchestrator_agentic.py)와 동일한 schema를 노트북
+검증에서도 재사용하기 위한 모듈. 두 변형을 함께 둬서 두 노트북이 공유한다.
+"""
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field
+
+
+# ============================================================
+# forwardRAG analyzer
+# ============================================================
+class AnalysisRequest(BaseModel):
+    test_transaction:     Dict           = Field(..., description="원본 거래 데이터")
+    cluster_id:           int            = Field(..., description="매칭된 클러스터 ID")
+    top_k_normal_results: List[Dict]     = Field(..., description="Retriever top-K 결과")
+    top1_distance:        float          = Field(0.0, description="Retriever top-1 cosine distance")
+    persona:              Optional[Dict] = Field(None)
+    tree_features:        Optional[Dict] = Field(None)
+
+
+class AnalysisResponse(BaseModel):
+    classification:  str            # NORMAL | ABNORMAL
+    confidence:      int            # 0-100
+    reasoning:       str
+    key_evidence:    List[str]
+    final_verdict:   str
+    latency_ms:      float
+    persona_used:    bool = False
+    tree_rules_used: bool = False
+    experiment_case: str = ""
+
+
+# ============================================================
+# agent loop analyzer (sufficiency evaluator)
+# ============================================================
+class AnalyzeRequest(BaseModel):
+    test_transaction:     Dict[str, Any]
+    cluster_id:           int
+    top_k_normal_results: List[Dict[str, Any]]
+    top1_distance:        float
+    persona:              Optional[Dict[str, Any]] = None
+    tree_features:        Optional[Dict[str, Any]] = None
+
+
+class AnalyzeResponse(BaseModel):
+    cls:          str                  # "NORMAL" | "ABNORMAL"
+    sufficiency:  str                  # "confident" | "ambiguous"
+    next_action:  Optional[str] = None # "none" | "expand" | "reroute"
+    what_missing: Optional[str] = None
+    retrieval_reliability: Optional[str] = None
+    persona_used:    bool = False
+    tree_rules_used: bool = False
+
+
+# ── agent 출력 검증 (NB1 parser / NB3 eval 공통 사용) ──────────
+# 옛 _REQUIRED_KEYS(["cls","conf","driver","agree","reason"]) 대체.
+AGENT_REQUIRED_KEYS = {"cls", "sufficiency"}
+AGENT_OPTIONAL_KEYS = {"next_action": "none", "what_missing": None,
+                       "retrieval_reliability": None, "reason": ""}
+
+
+def validate_agent_output(d: dict) -> dict:
+    """agent analyzer 출력 dict 검증 + optional 키 채움. 누락 시 ValueError."""
+    missing = AGENT_REQUIRED_KEYS - set(d.keys())
+    if missing:
+        raise ValueError(f"Missing key: {', '.join(sorted(missing))}")
+    for k, default in AGENT_OPTIONAL_KEYS.items():
+        d.setdefault(k, default)
+    return d
+
+
+# ── deterministic sufficiency / next_action 규칙 ──────────────
+# cls 는 GT(라벨)로, sufficiency/next_action 은 아래 규칙으로 결정.
+# LLM(teacher/student)은 what_missing/reason 서술만 담당.
+def deterministic_suff_action(nd, spread, persona_dev=None,
+                              ND_LO=0.3, ND_AB=0.5, SPREAD_HI=0.10, PDEV_HI=2.0):
+    """nd·spread(·persona_dev)로 sufficiency·next_action 을 규칙으로 산출."""
+    ambiguous = (ND_LO <= nd < ND_AB) or (spread is not None and spread > SPREAD_HI)
+    sufficiency = "ambiguous" if ambiguous else "confident"
+    if not ambiguous:
+        next_action = "none"
+    elif persona_dev is not None and persona_dev > PDEV_HI:
+        next_action = "reroute"          # cluster 배정 의심
+    else:
+        next_action = "expand"           # 이웃 부족/퍼짐
+    return sufficiency, next_action

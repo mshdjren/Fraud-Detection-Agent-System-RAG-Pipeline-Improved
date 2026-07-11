@@ -1,0 +1,544 @@
+import os, time, math, json, asyncio, uuid
+from typing import Dict, List, Optional, Literal, Any
+
+import httpx
+import numpy as np
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel, Field, field_validator
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+
+
+import structlog
+from pybreaker import CircuitBreaker, CircuitBreakerError
+from controller import PlanLRUCache, build_plan_key, fallback_plan, PlanResponse
+
+ROUTER_URL = os.getenv("ROUTER_URL", "http://anomaly-router:80")
+RETRIEVER_URL = os.getenv("RETRIEVER_URL", "http://anomaly-retriever:80")
+ANALYZER_URL = os.getenv("ANALYZER_URL", "http://local-analyzer:80")
+
+CONTROLLER_URL = os.getenv("CONTROLLER_URL", "")
+CONTROLLER_TIMEOUT = int(os.getenv("CONTROLLER_TIMEOUT", "8"))
+CONTROLLER_MAX_RETRIES = int(os.getenv("CONTROLLER_MAX_RETRIES", "2"))
+CONTROLLER_RPS = float(os.getenv("CONTROLLER_RPS", "5"))
+
+CONF_GAP_THRESHOLD = float(os.getenv("CONF_GAP_THRESHOLD", "0.25"))
+MAX_EXPANSION_ITER = int(os.getenv("MAX_EXPANSION_ITER", "1"))
+GLOBAL_CENTROID_PATH = os.getenv("GLOBAL_CENTROID_PATH", "/data/global_centroid.npy")
+TRANSPORT_MODE = os.getenv("TRANSPORT_MODE", "rest")  # rest | mcp_wrapper
+PLAN_CACHE_SIZE = int(os.getenv("PLAN_CACHE_SIZE", "256"))
+
+VALID_EXPERIMENT_CASES = [
+    "emb_vectors",
+    "pca_32", "pca_64", "pca_128", "pca_256",
+    "k50", "k100", "k200",
+    "pca_64_k100", "pca_64_k200",
+]
+VALID_PERCOLATE_VERSIONS = ["v1", "v2", "v3", "v4", "v5","v6","v7","v8","v9","v10","v11","v12","v13","v11a","v11b","v11c","v14"]
+
+
+
+# ===========================
+# FastAPI & Logger
+# ===========================
+
+app = FastAPI(title="Anomaly Orchestrator Agentic", version="6.0.0-agentic")
+logger = structlog.get_logger()
+
+controller_calls = Counter("controller_calls_total", "controller calls", ["status"])
+controller_latency = Histogram("controller_latency_seconds", "controller latency")
+controller_cache_hits = Counter("controller_plan_cache_hits_total", "controller plan cache hits")
+feedback_loop_triggered = Counter("feedback_loop_triggered_total", "feedback triggered")
+feedback_iteration_total = Counter("feedback_iteration_total", "feedback iterations")
+
+plan_cache = PlanLRUCache(max_size=PLAN_CACHE_SIZE)
+global_centroid: Optional[np.ndarray] = None
+
+# ===========================
+# Pydantic Models
+# ===========================
+# class TestCase(BaseModel):
+#     purchase_value: float
+#     age: float
+#     sex: Literal["M", "F"]
+#     source: Literal["Direct", "Ads", "SEO"]
+#     browser: Literal["Chrome", "IE", "Safari", "FireFox", "Opera"]
+#     embedding: List[float] = Field(..., min_length=576, max_length=576)
+validation_errors = Counter(
+    "validation_errors_total", "Validation errors", ["field"]
+)
+class TestCase(BaseModel):
+    """
+    파이프라인 입력 모델.
+    embedding: AnoLLM 576-dim. Router 내부에서 PCA/전처리 수행.
+    """
+    purchase_value: float = Field(description="구매 금액 (z-score 정규화)")
+    age:            float = Field(description="나이 (z-score 정규화)")
+    sex:            Literal["M", "F"]
+    source:         Literal["Direct", "Ads", "SEO"]
+    browser:        Literal["Chrome", "IE", "Safari", "FireFox", "Opera"]
+
+    weekday_purchase: Optional[Literal[
+        "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
+    ]] = None
+    month_purchase: Optional[Literal[
+        "January","February","March","April","May","June",
+        "July","August","September","October","November","December"
+    ]] = None
+    IP_country: Optional[str] = None
+
+    embedding: List[float] = Field(
+        ..., description="AnoLLM 576-dim 임베딩 벡터"
+    )
+
+    experiment_case: Optional[str] = Field(
+        default=None,
+        description=f"실험 케이스 Override. 가능: {VALID_EXPERIMENT_CASES}"
+    )
+    percolate_version: Optional[Literal["v1","v2","v3","v4","v5","v6","v7","v8","v9","v10"]] = Field(
+        default=None, description="Percolate query 버전 Override"
+    )
+
+    @field_validator("embedding")
+    @classmethod
+    def validate_embedding(cls, v):
+        if len(v) != 576:
+            validation_errors.labels(field="embedding").inc()
+            raise ValueError(f"embedding must be 576-dim, got {len(v)}")
+        return v
+
+    @field_validator("experiment_case")
+    @classmethod
+    def validate_experiment_case(cls, v):
+        if v is not None and v not in VALID_EXPERIMENT_CASES:
+            validation_errors.labels(field="experiment_case").inc()
+            raise ValueError(f"Invalid experiment_case '{v}'. Valid: {VALID_EXPERIMENT_CASES}")
+        return v
+
+    class Config:
+        extra = "ignore"
+
+class ClusterCandidate(BaseModel):
+    cluster_id: int
+    rank: int
+    score: float
+
+class PipelineResponse(BaseModel):
+    # ── 분류 결과 ──────────────────────────────────────────────
+    classification:  str
+    confidence:      int
+    reasoning:       Optional[str]   # SKIP_ANALYZER=true면 None
+    key_evidence:    List[str]
+    final_verdict:   Optional[str]   # SKIP_ANALYZER=true면 None
+
+    # ── Router 결과 (v5) ───────────────────────────────────────
+    primary_cluster_id: int
+    top_5_clusters:     List[ClusterCandidate]
+    vec_index:          str           # ★ 신규: router가 결정한 vec 인덱스
+    match_type:         str
+    match_score:        float
+
+    # ── Retriever 결과 ─────────────────────────────────────────
+    top_1_distance:   float
+    top_k:            int
+    page_fault_delta: int             # ★ 신규: retriever page fault delta
+
+    # ── 메타데이터 ─────────────────────────────────────────────
+    is_hot:            bool
+    skip_analyzer:     bool           # ★ 신규
+    latency_ms:        Dict[str, float]
+    experiment_case:   str
+    percolate_version: str
+    persona_used:      bool
+    tree_rules_used:   bool
+
+# ===========================
+# HTTP Client with Retry
+# ===========================
+MAX_RETRIES          = int(os.getenv("MAX_RETRIES",          "5"))
+RETRY_BACKOFF_FACTOR = int(os.getenv("RETRY_BACKOFF_FACTOR", "4"))
+RETRY_INITIAL_WAIT   = int(os.getenv("RETRY_INITIAL_WAIT",   "2"))
+retry_attempts = Counter(
+    "retry_attempts_total", "Total retry attempts", ["service", "attempt"]
+)
+async def call_with_retry(
+    client:       httpx.AsyncClient,
+    method:       str,
+    url:          str,
+    timeout:      int,
+    service_name: str = "unknown",
+    **kwargs
+) -> httpx.Response:
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = await client.request(method=method, url=url, timeout=timeout, **kwargs)
+            resp.raise_for_status()
+            return resp
+        except httpx.HTTPError as e:
+            last_error = e
+            if hasattr(e, "response") and e.response and e.response.status_code < 500:
+                raise
+            if attempt < MAX_RETRIES - 1:
+                wait = RETRY_INITIAL_WAIT * (RETRY_BACKOFF_FACTOR ** attempt)
+                retry_attempts.labels(service=service_name, attempt=str(attempt + 1)).inc()
+                logger.warning("retry", service=service_name, attempt=attempt + 1, wait=wait)
+                await asyncio.sleep(wait)
+            else:
+                raise last_error
+    raise last_error
+
+def distance_to_score(distance: float, threshold: float = 0.5) -> float:
+    x = (distance - threshold) * 5
+    return round(1 / (1 + math.exp(-x)), 4)
+
+
+def compute_global_distance(embedding: List[float]) -> float:
+    if global_centroid is None:
+        return min(2.0, math.sqrt(sum(v*v for v in embedding[:64])) / 8.0)
+    v = np.array(embedding, dtype=np.float32)
+    denom = (np.linalg.norm(v) * np.linalg.norm(global_centroid) + 1e-8)
+    cos = float(np.dot(v, global_centroid) / denom)
+    return float(1.0 - cos)
+
+
+# ===========================
+# Service Call Functions
+# ===========================
+MCP_WRAPPER_ENABLED = os.getenv("MCP_WRAPPER_ENABLED", "false").lower() == "true"
+ROUTER_TIMEOUT    = int(os.getenv("ROUTER_TIMEOUT",    "5"))
+RETRIEVER_TIMEOUT = int(os.getenv("RETRIEVER_TIMEOUT", "10"))
+ANALYZER_TIMEOUT  = int(os.getenv("ANALYZER_TIMEOUT",  "300"))
+TOTAL_TIMEOUT     = int(os.getenv("TOTAL_TIMEOUT",     "600"))
+
+service_latency = Histogram(
+    "service_latency_seconds", "Individual service latency",
+    ["service"],
+    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0]
+)
+
+# ===========================
+# Circuit Breakers
+# ===========================
+CB_FAILURE_THRESHOLD = int(os.getenv("CB_FAILURE_THRESHOLD", "10"))
+CB_RECOVERY_TIMEOUT  = int(os.getenv("CB_RECOVERY_TIMEOUT",  "60"))
+
+router_breaker    = CircuitBreaker(fail_max=CB_FAILURE_THRESHOLD, reset_timeout=CB_RECOVERY_TIMEOUT, name="router")
+retriever_breaker = CircuitBreaker(fail_max=CB_FAILURE_THRESHOLD, reset_timeout=CB_RECOVERY_TIMEOUT, name="retriever")
+analyzer_breaker  = CircuitBreaker(fail_max=CB_FAILURE_THRESHOLD, reset_timeout=CB_RECOVERY_TIMEOUT, name="analyzer")
+
+multi_cluster_search = Counter(
+    "multi_cluster_search_total", "Multi-cluster search requests"
+)
+@router_breaker
+async def call_router(
+    client:            httpx.AsyncClient,
+    embedding:         List[float],
+    experiment_case:   str,
+    percolate_version: str,
+) -> Dict:
+    """
+    Router v5 호출.
+
+    Request:  POST /route  body={"embedding": [...576-dim...]}
+    Headers:  X-Router-Case, X-Router-Version
+
+    Response (v5):
+      primary_cluster_id, top_k_clusters [{cluster_id, rank, score}],
+      vec_index, match_type, match_score, is_hot,
+      persona, skip_analyzer, latency_ms
+      ★ purity / support / leaf_id 없음
+    """
+    start = time.time()
+    try:
+        if MCP_WRAPPER_ENABLED:
+            resp = await call_with_retry(
+                client, "POST", f"{ROUTER_URL}/mcp/execute",
+                timeout=ROUTER_TIMEOUT,
+                service_name="router",
+                json={
+                    "tool": "router.route",
+                    "arguments": {"embedding": embedding},
+                },
+                headers={"Content-Type": "application/json"},
+            )
+            result = resp.json().get("result", {})
+        else:
+            resp = await call_with_retry(
+                client, "POST", f"{ROUTER_URL}/route",
+                timeout=ROUTER_TIMEOUT,
+                service_name="router",
+                json={"embedding": embedding},
+                headers={
+                    "Content-Type":     "application/json",
+                    "X-Router-Case":    experiment_case,
+                    "X-Router-Version": percolate_version,
+                }
+            )
+            result = resp.json()
+        service_latency.labels(service="router").observe(time.time() - start)
+        logger.info(
+            "router_success",
+            primary_cluster_id=result.get("primary_cluster_id"),
+            vec_index=result.get("vec_index"),
+            top_k=[c["cluster_id"] for c in result.get("top_k_clusters", [])],
+            match_type=result.get("match_type"),
+        )
+        return result
+    except Exception as e:
+        logger.error("router_failed", error=str(e))
+        raise
+
+
+@retriever_breaker
+async def call_retriever(
+    client:      httpx.AsyncClient,
+    embedding:   List[float],
+    cluster_ids: List[int],
+    vec_index:   str,
+    top_k:       int = 5,
+) -> Dict:
+    """
+    Retriever v5 호출.
+
+    Request:  POST /retrieve
+    Body: {embedding (576-dim), cluster_ids, vec_index, top_k}
+      - SKIP_ANALYZER=true: cluster_ids=[] → 전체 인덱스 순수 vec 검색
+
+    Response:
+      results [{es_doc_id, original_index, cluster_id, distance, score}],
+      top1_distance, page_fault_delta, search_mode, skip_analyzer
+    """
+    start = time.time()
+    try:
+        payload = {
+            "embedding":   embedding,
+            "cluster_ids": cluster_ids,
+            "vec_index":   vec_index,
+            "top_k":       top_k,
+        }
+        if MCP_WRAPPER_ENABLED:
+            resp = await call_with_retry(
+                client, "POST", f"{RETRIEVER_URL}/mcp/execute",
+                timeout=RETRIEVER_TIMEOUT,
+                service_name="retriever",
+                json={"tool": "retriever.retrieve", "arguments": payload},
+                headers={"Content-Type": "application/json"},
+            )
+            result = resp.json().get("result", {})
+        else:
+            resp = await call_with_retry(
+                client, "POST", f"{RETRIEVER_URL}/retrieve",
+                timeout=RETRIEVER_TIMEOUT,
+                service_name="retriever",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            result = resp.json()
+        service_latency.labels(service="retriever").observe(time.time() - start)
+        multi_cluster_search.inc()
+        logger.info(
+            "retriever_success",
+            vec_index=vec_index,
+            cluster_ids=cluster_ids,
+            n_results=len(result.get("results", [])),
+            top1_distance=result.get("top1_distance"),
+            page_fault_delta=result.get("page_fault_delta", 0),
+        )
+        return result
+    except Exception as e:
+        logger.error("retriever_failed", error=str(e))
+        raise
+
+
+@analyzer_breaker
+async def call_analyzer(
+    client:               httpx.AsyncClient,
+    test_transaction:     Dict,
+    cluster_id:           int,
+    top_k_normal_results: List[Dict],
+    top1_distance:        float,
+    experiment_case:      str,
+    persona:              Optional[Dict] = None,
+    tree_features:        Optional[Dict] = None,
+) -> Dict:
+    """
+    Analyzer v3.0 호출.
+
+    ★ V5: query_id / leaf_id / support 제거
+    Body:
+      test_transaction, cluster_id,
+      top_k_normal_results [{es_doc_id, original_index, cluster_id, distance, score}],
+      top1_distance (LLM 컨텍스트용),
+      persona (Optional), tree_features (Optional)
+    Headers: X-Experiment-Case
+    """
+    start = time.time()
+    try:
+        body: Dict = {
+            "test_transaction":     test_transaction,
+            "cluster_id":           cluster_id,
+            "top_k_normal_results": top_k_normal_results,
+            "top1_distance":        top1_distance,
+        }
+        if persona is not None:
+            body["persona"] = persona
+        if tree_features is not None:
+            body["tree_features"] = tree_features
+
+        resp = await call_with_retry(
+            client, "POST", f"{ANALYZER_URL}/analyze",
+            timeout=ANALYZER_TIMEOUT,
+            service_name="analyzer",
+            json=body,
+            headers={
+                "Content-Type":      "application/json",
+                "X-Experiment-Case": experiment_case,
+            }
+        )
+        result = resp.json()
+        service_latency.labels(service="analyzer").observe(time.time() - start)
+        logger.info(
+            "analyzer_success",
+            classification=result.get("classification"),
+            confidence=result.get("confidence"),
+            persona_used=result.get("persona_used"),
+            tree_rules_used=result.get("tree_rules_used"),
+        )
+        return result
+    except Exception as e:
+        logger.error("analyzer_failed", error=str(e))
+        raise
+
+
+async def call_controller_plan(client: httpx.AsyncClient, signal: Dict[str, Any], system_state: Dict[str, Any]) -> PlanResponse:
+    key = build_plan_key(distance_hint=signal["global_distance"], resource_degraded=system_state["resource_degraded"], cache_hot=False)
+    cached = plan_cache.get(key)
+    if cached:
+        controller_cache_hits.inc()
+        cached.source = "lru_cache"
+        return cached
+
+    t0 = time.time()
+    if CONTROLLER_URL:
+        payload = {
+            "query_signal": signal,
+            "system_state": system_state,
+            "schema": {"track": ["fast", "deep"], "sub_agents": ["distance", "evidence", "persona"], "expansion_budget": "int<=1"}
+        }
+        err = None
+        for _ in range(CONTROLLER_MAX_RETRIES):
+            try:
+                resp = await client.post(f"{CONTROLLER_URL}/plan", json=payload, timeout=CONTROLLER_TIMEOUT)
+                resp.raise_for_status()
+                data = resp.json()
+                plan = PlanResponse(
+                    track=data.get("track", "deep"),
+                    sub_agents=data.get("sub_agents", ["distance", "evidence", "persona"]),
+                    expansion_enabled=bool(data.get("expansion_enabled", True)),
+                    expansion_budget=min(1, int(data.get("expansion_budget", 1))),
+                    tie_break_enabled=bool(data.get("tie_break_enabled", False)),
+                    source="llm",
+                )
+                plan_cache.put(key, plan)
+                controller_calls.labels(status="success").inc()
+                controller_latency.observe(time.time() - t0)
+                return plan
+            except Exception as e:
+                err = e
+                await asyncio.sleep(0.05)
+        controller_calls.labels(status="fallback").inc()
+    plan = fallback_plan(distance_hint=signal["global_distance"], resource_degraded=system_state["resource_degraded"])
+    plan_cache.put(key, plan)
+    controller_latency.observe(time.time() - t0)
+    return plan
+
+# async def call_router(client: httpx.AsyncClient, embedding: List[float]) -> Dict:
+#     return (await client.post(f"{ROUTER_URL}/route", json={"embedding": embedding}, timeout=15)).json()
+
+# async def call_retriever(client: httpx.AsyncClient, embedding: List[float], cluster_ids: List[int], vec_index: str) -> Dict:
+#     endpoint = "/retrieve" if TRANSPORT_MODE == "rest" else "/mcp/execute"
+#     if endpoint == "/retrieve":
+#         payload = {"embedding": embedding, "cluster_ids": cluster_ids, "vec_index": vec_index, "top_k": 5}
+#     else:
+#         payload = {"tool": "retriever.retrieve", "arguments": {"embedding": embedding, "cluster_ids": cluster_ids, "vec_index": vec_index, "top_k": 5}}
+#     out = (await client.post(f"{RETRIEVER_URL}{endpoint}", json=payload, timeout=20)).json()
+#     return out.get("result", out)
+
+# async def call_analyzer(client: httpx.AsyncClient, tx: Dict, cluster_id: int, results: List[Dict], top1_distance: float, persona: Optional[Dict]) -> Dict:
+#     body = {"test_transaction": tx, "cluster_id": cluster_id, "top_k_normal_results": results, "top1_distance": top1_distance}
+#     if persona is not None:
+#         body["persona"] = persona
+#     return (await client.post(f"{ANALYZER_URL}/analyze", json=body, timeout=180)).json()
+
+
+@app.post("/detect", response_model=PipelineResponse)
+async def detect(tc: TestCase):
+    start = time.time()
+    lat: Dict[str, float] = {}
+    tx = {"purchase_value": tc.purchase_value, "age": tc.age, "sex": tc.sex, "source": tc.source, "browser": tc.browser}
+    async with httpx.AsyncClient() as client:
+        signal = {"global_distance": compute_global_distance(tc.embedding)}
+        system_state = {"resource_degraded": False, "transport_mode": TRANSPORT_MODE}
+        plan = await call_controller_plan(client, signal, system_state)
+
+        if plan.track == "fast":
+            score = distance_to_score(signal["global_distance"])
+            total = (time.time() - start) * 1000
+            return PipelineResponse(
+                classification="ABNORMAL" if score >= 0.5 else "NORMAL", confidence=int(score*100), reasoning="fast_track", key_evidence=[f"global_distance={signal['global_distance']:.4f}"], final_verdict=None,
+                primary_cluster_id=-1, top_5_clusters=[], vec_index="", match_type="fast", match_score=0.0,
+                top_1_distance=signal["global_distance"], top_k=0, page_fault_delta=0, is_hot=False, skip_analyzer=True,
+                latency_ms={"total": total}, experiment_case="agentic", percolate_version="v14", persona_used=False, tree_rules_used=False
+            )
+
+        r0 = await call_router(client, tc.embedding)
+        clusters = [c["cluster_id"] for c in r0.get("top_k_clusters", [])]
+        rr = await call_retriever(client, tc.embedding, clusters, r0["vec_index"])
+        top1 = rr.get("top1_distance", 999.0)
+        results = rr.get("results", [])
+
+        ar = await call_analyzer(client, tx, r0["primary_cluster_id"], results, top1, r0.get("persona"))
+
+        # confidence gap loop (max_iter=1)
+        loop_count = 0
+        r_conf = max(0.0, min(1.0, 1.0 - min(1.0, top1)))
+        a_conf = max(0.0, min(1.0, float(ar.get("confidence", 50)) / 100.0))
+        gap = abs(r_conf - a_conf)
+        if plan.expansion_enabled and gap >= CONF_GAP_THRESHOLD and loop_count < MAX_EXPANSION_ITER:
+            feedback_loop_triggered.inc()
+            feedback_iteration_total.inc()
+            loop_count += 1
+            expanded = [c["cluster_id"] for c in r0.get("top_k_clusters", [])][:5]
+            rr2 = await call_retriever(client, tc.embedding, expanded, r0["vec_index"])
+            top1 = rr2.get("top1_distance", top1)
+            results = rr2.get("results", results)
+            ar = await call_analyzer(client, tx, r0["primary_cluster_id"], results, top1, r0.get("persona"))
+
+        total = (time.time() - start) * 1000
+        lat["total"] = total
+        return PipelineResponse(
+            classification=ar.get("classification", "NORMAL"), confidence=int(ar.get("confidence", 50)), reasoning=ar.get("reasoning"), key_evidence=ar.get("key_evidence", []) + [f"plan_source={plan.source}", f"confidence_gap={gap:.3f}"],
+            final_verdict=ar.get("final_verdict"),
+            primary_cluster_id=r0["primary_cluster_id"], top_5_clusters=[ClusterCandidate(**c) for c in r0.get("top_k_clusters", [])], vec_index=r0["vec_index"],
+            match_type=r0.get("match_type", "strict"), match_score=r0.get("match_score", 1.0),
+            top_1_distance=top1, top_k=len(results), page_fault_delta=rr.get("page_fault_delta", 0), is_hot=r0.get("is_hot", False), skip_analyzer=False,
+            latency_ms=lat, experiment_case="agentic", percolate_version="v14", persona_used=ar.get("persona_used", False), tree_rules_used=ar.get("tree_rules_used", False)
+        )
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "service": "orchestrator-agentic", "transport_mode": TRANSPORT_MODE}
+
+@app.get("/metrics")
+async def metrics():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+@app.on_event("startup")
+async def startup_event():
+    global global_centroid
+    if os.path.exists(GLOBAL_CENTROID_PATH):
+        try:
+            global_centroid = np.load(GLOBAL_CENTROID_PATH).astype(np.float32)
+        except Exception:
+            global_centroid = None

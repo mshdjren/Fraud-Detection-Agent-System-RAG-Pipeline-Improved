@@ -1,9 +1,20 @@
 # ===========================
 # GKE Managed Prometheus PodMonitoring
-# Updated for V3 Pipeline
+# Updated for Agent Loop Pipeline (controller.py LangGraph + GGUF local-analyzer)
 # ===========================
+#
+# V3(구버전) 대비 변경 사항:
+#   - anomaly-analyzer → local-analyzer로 서비스 자체가 교체됨 (GGUF/HF 백엔드,
+#     port 8080). PodMonitoring도 app: local-analyzer로 갱신.
+#   - controller(신규) 추가 — LangGraph StateGraph 기반 agent loop 서비스.
+#     V3엔 없던 컴포넌트라 PodMonitoring 자체가 없었음.
+#   - Locust는 로드테스트 시에만 뜨는 job이라 "optional" 명시, 상시 배포 아님.
+#   - 하단 ClusterPodMonitoring(tier: fraud-detection 라벨 기반)은 제거함 —
+#     실제 배포 yaml들의 tier 라벨이 서비스마다 제각각(inference/routing/search/api)
+#     이라 매칭이 안 됐음. 라벨을 통일하기 전까진 아래 개별 PodMonitoring들이
+#     사실상 동일 효과를 이미 커버하므로 중복 제거.
 
-# Elasticsearch PodMonitoring
+# Elasticsearch PodMonitoring (변경 없음)
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring
@@ -21,10 +32,10 @@ spec:
     path: /metrics
 
 # ===========================
-# Fraud Detection Services
+# Fraud Detection Agent Pipeline
 # ===========================
 
-# 1. Router PodMonitoring
+# 1. Router PodMonitoring (변경 없음 — router.py 메트릭 그대로 유지됨)
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring
@@ -39,16 +50,21 @@ spec:
     matchLabels:
       app: anomaly-router
   endpoints:
-  - port: http  # Named port from service definition
+  - port: http
     interval: 30s
     path: /metrics
-    # V3 metrics to collect:
-    # - router_requests_total
-    # - percolate_query_latency_seconds
-    # - fallback_strategy_used_total
-    # - partial_match_score_distribution
+    # 실제 수집되는 메트릭 (router.py 기준):
+    # - percolate_requests_total{experiment_case, version}
+    # - percolate_matching_time_ms_bucket{experiment_case, version}
+    # - preprocessing_latency_ms_bucket{experiment_case}
+    # - cluster_hits_total{cluster_id, experiment_case, version}
+    # - hot_clusters_count (gauge)
+    # - match_type_total{experiment_case, version, match_type}
+    # - centroid_fallback_latency_ms_bucket{experiment_case, version}
+    # - persona_delivered_total{has_persona}
+    # - skip_analyzer_requests{experiment_case, cluster_id}
 
-# 2. Retriever PodMonitoring
+# 2. Retriever PodMonitoring (변경 없음 — retriever.py 메트릭 그대로 유지됨)
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring
@@ -66,38 +82,69 @@ spec:
   - port: http
     interval: 30s
     path: /metrics
-    # V3 metrics to collect:
-    # - retriever_requests_total
-    # - vector_search_latency_seconds
-    # - coreset_enabled_requests_total
-    # - top_k_results_distribution
+    # 실제 수집되는 메트릭 (retriever.py 기준):
+    # - retriever_search_latency_ms_bucket{search_mode, index_name, experiment_label}
+    # - retriever_page_fault_delta_bucket{index_name}
+    # - retriever_es_fielddata_bytes / retriever_es_query_cache_bytes (gauge)
+    # - retriever_es_jvm_heap_percent (gauge)
+    # - retriever_top1_distance_bucket{index_name, experiment_label}  ← raw L2, 정규화 전 값
+    # - retriever_skip_analyzer_total{index_name, experiment_label}
 
-# 3. Analyzer PodMonitoring
+# 3. Local Analyzer PodMonitoring (★ anomaly-analyzer에서 이름/라벨 교체됨)
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring
 metadata:
-  name: anomaly-analyzer-monitoring
+  name: local-analyzer-monitoring
   namespace: elastic
   labels:
-    app: anomaly-analyzer
-    tier: analysis
+    app: local-analyzer
+    tier: inference
 spec:
   selector:
     matchLabels:
-      app: anomaly-analyzer
+      app: local-analyzer
   endpoints:
   - port: http
     interval: 30s
     path: /metrics
-    # V3 metrics to collect:
-    # - analysis_requests_total
-    # - llm_inference_latency_seconds
-    # - llm_retry_attempts_total
-    # - rate_limit_waits_total
-    # - persona_enabled_requests_total
+    # 실제 수집되는 메트릭 (local_analyzer.py 기준):
+    # - analyzer_requests_total{status, mode}        # mode: single | batched | batch
+    # - analyzer_latency_seconds_bucket               # GGUF 추론 latency (CPU라 60~100s대까지 봐야 함)
+    # - analyzer_parse_errors_total{mode}
+    # - analyzer_batch_inference_size_bucket           # continuous batching 실측 배치 크기
 
-# 4. Orchestrator PodMonitoring
+# 4. Controller PodMonitoring (★ 신규 — V3엔 없던 agent loop 서비스)
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: controller-monitoring
+  namespace: elastic
+  labels:
+    app: anomaly-controller
+    tier: agent
+spec:
+  selector:
+    matchLabels:
+      app: anomaly-controller
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+    # 실제 수집되는 메트릭 (controller.py 기준):
+    # - plan_requests_total{status}
+    # - plan_action_total{action}                      # accept_verdict | expand_within_cluster | reroute_cross_cluster
+    # - plan_lat4ency_seconds_bucket
+    # - mcp_transport_latency_seconds_bucket{mode, tool, status}   # direct vs mcp vs mcp_native 비교
+    # - detect_requests_total{status, track}
+    # - detect_latency_seconds_bucket                  # end-to-end agent loop latency
+    # - agent_round_total{action}
+    # - agent_path_total{path}                          # fast+none / deep+expand / deep+reroute 등
+    # - agent_loop_budget_exceeded_total
+    # - agent_rounds_per_request_bucket
+
+# 5. Orchestrator PodMonitoring (메트릭 목록 갱신 — pipeline_* 계열은 실제로 없음)
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring
@@ -115,18 +162,15 @@ spec:
   - port: http
     interval: 30s
     path: /metrics
-    # V3 metrics to collect:
-    # - pipeline_requests_total (with case label)
-    # - pipeline_latency_seconds
-    # - service_latency_seconds
-    # - circuit_breaker_state
-    # - cache_hits_total / cache_misses_total
-    # - retry_attempts_total
-    # - case_override_used_total (V3)
-    # - embedding_override_used_total (V3)
-    # - validation_errors_total (V3)
+    # 실제 수집되는 메트릭 (orchestrator_agentic.py 기준):
+    # - track_total{track}                              # fast | deep
+    # - planner_calls_total{status}                      # success | timeout | http_error | fallback | no_url
+    #     ★ status!="success" 비율이 controller 장애/폴백 오염 여부의 핵심 지표
+    # - service_latency_seconds_bucket{service}
+    # - retry_attempts_total{service, attempt}
+    # - validation_errors_total{field}
 
-# 5. Locust PodMonitoring (optional - for load testing metrics)
+# 6. Locust PodMonitoring — 로드테스트 시에만 배포되는 job, 상시 아님
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring
@@ -144,79 +188,38 @@ spec:
   endpoints:
   - port: 8089
     interval: 30s
-    path: /stats/requests  # Locust stats endpoint
-    # Locust metrics:
-    # - locust_users
-    # - locust_requests
-    # - locust_failures
-    # - locust_response_time_percentiles
+    path: /stats/requests
 
 # ===========================
-# ClusterPodMonitoring (cross-namespace)
-# ===========================
-
-# For monitoring pods across all namespaces
----
-apiVersion: monitoring.googleapis.com/v1
-kind: ClusterPodMonitoring
-metadata:
-  name: anomaly-detection-cluster-monitoring
-spec:
-  selector:
-    matchLabels:
-      tier: fraud-detection
-  endpoints:
-  - port: http
-    interval: 30s
-    path: /metrics
-
-# ===========================
-# Deployment Instructions
+# 배포 / 확인 명령어
 # ===========================
 #
-# Apply all PodMonitoring resources:
-# kubectl apply -f servicemonitors-v3.yaml
+# 적용:
+#   kubectl apply -f servicemonitors.yaml
 #
-# Verify deployment:
-# kubectl get podmonitoring -n elastic
-# kubectl describe podmonitoring anomaly-orchestrator-monitoring -n elastic
+# 등록 확인:
+#   kubectl get podmonitoring -n elastic
+#   kubectl describe podmonitoring local-analyzer-monitoring -n elastic
+#   kubectl describe podmonitoring controller-monitoring -n elastic
 #
-# Check metrics collection:
-# kubectl port-forward -n elastic svc/anomaly-orchestrator 8080:80 &
-# curl http://localhost:8080/metrics
+# GMP collector가 실제로 스크랩하고 있는지 (가장 먼저 볼 로그):
+#   kubectl logs -n gmp-system -l app.kubernetes.io/name=collector --tail=100 | grep -E "local-analyzer|controller"
 #
-# Query in Cloud Monitoring (Prometheus):
-# # V3 metrics
-# pipeline_requests_total{case="case1"}
-# case_override_used_total
-# embedding_override_used_total
-# validation_errors_total
+# 엔드포인트 자체가 살아있는지 직접 확인 (PodMonitoring 문제인지 앱 문제인지 분리):
+#   kubectl port-forward -n elastic svc/local-analyzer 8080:80 &
+#   curl http://localhost:8080/metrics | head -30
+#   kubectl port-forward -n elastic svc/controller 8080:80 &   # 서비스 이름은 실제 Service manifest 기준으로 조정
+#   curl http://localhost:8080/metrics | head -30
 #
-# # Performance by case
-# histogram_quantile(0.95, 
-#   sum by (le, case) (rate(pipeline_latency_seconds_bucket[5m]))
-# )
+# Cloud Monitoring(Metrics Explorer / PromQL)에서 수집 확인:
+#   gcloud monitoring time-series list \
+#     --filter='metric.type="prometheus.googleapis.com/analyzer_latency_seconds/histogram"' \
+#     --format=json
 #
-# # Cache performance
-# sum(rate(cache_hits_total[5m])) 
-# / 
-# (sum(rate(cache_hits_total[5m])) + sum(rate(cache_misses_total[5m])))
-#
-# Troubleshooting:
-# # Check if metrics are being scraped
-# kubectl logs -n gmp-system -l app.kubernetes.io/name=collector
-#
-# # Verify PodMonitoring targets
-# kubectl get podmonitoring -n elastic -o yaml
-#
-# # Test metrics endpoint manually
-# kubectl exec -it <pod-name> -n elastic -- curl localhost:8080/metrics
-#
-# Notes:
-# - Interval: 30s (default for GKE Managed Prometheus)
-# - Port: Use named port "http" from service definition
-# - Path: /metrics (Prometheus standard)
-# - Labels: Added tier labels for better organization
-# - V3 metrics are automatically collected from /metrics endpoint
-# - Recording rules in prometheus-rules-v3.yaml optimize dashboard queries
-# - Cloud Monitoring retention: 24 months for Prometheus metrics
+# PromQL 예시 (Grafana/Cloud Monitoring 쿼리창에서 바로 사용):
+#   # agent 경로 분포
+#   sum by (path) (rate(agent_path_total[5m]))
+#   # controller 폴백 비율 (가장 중요 — 최근 사고의 핵심 지표)
+#   sum(rate(planner_calls_total{status!="success"}[5m])) / sum(rate(planner_calls_total[5m]))
+#   # analyzer P95 latency
+#   histogram_quantile(0.95, sum by (le) (rate(analyzer_latency_seconds_bucket[5m])))

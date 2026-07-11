@@ -1,0 +1,40 @@
+# ===========================
+# Local Analyzer Service Requirements
+# Python 3.12 / CPU-only
+# ===========================
+# 기존 analyzer requirements.txt에서:
+#   - 공통 Web/Monitoring 블록 그대로 유지
+#   - Vertex AI / LangChain 블록 제거
+#   - PyTorch (CPU-only) + 추론 라이브러리 블록 추가
+
+# ── Web Framework (기존 analyzer와 동일) ──────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+
+# ── Monitoring (기존 analyzer와 동일) ─────────────────────
+prometheus-client==0.21.0
+
+# ── Utilities (기존 analyzer와 동일) ──────────────────────
+python-dotenv==1.0.1
+pydantic==2.9.2
+pydantic-settings==2.6.1
+structlog==24.4.0
+
+# ── Config ────────────────────────────────────────────────
+pyyaml==6.0.2
+
+# ── PyTorch CPU-only ──────────────────────────────────────
+# CUDA 제거 → 이미지 크기 ~2GB 절감 (GPU 빌드 대비)
+# torch CPU wheel: ~200MB / torchvision 불필요
+torch==2.5.1+cpu            # --index-url 별도 지정 (Dockerfile 참고)
+
+# ── HuggingFace 추론 스택 ─────────────────────────────────
+transformers==4.46.3
+tokenizers==0.20.3
+peft==0.14.0                # LoRA adapter 로드 + merge_and_unload
+accelerate==1.1.1           # from_pretrained 내부에서 참조
+safetensors==0.4.5          # adapter_model.safetensors 로드
+
+# ── 기타 ──────────────────────────────────────────────────
+requests==2.32.3            # streamlit_app.py에서 orchestrator 호출용

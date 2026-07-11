@@ -83,8 +83,12 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
       - name: orchestrator
-        image: us-central1-docker.pkg.dev/project-fcd52ffc-8b8b-4557-858/elasticsearch-images/anomaly-orchestrator:1.0
+        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/anomaly-orchestrator:1.0
         imagePullPolicy: Always
+
+        #for agentic_loop
+        # command: ["python", "-m", "uvicorn", "orchestrator_agentic:app", "--host", "0.0.0.0", "--port", "8080"]
+
         ports:
         - containerPort: 8080
           name: http
@@ -185,7 +189,16 @@ spec:
         - name: code-volume
           mountPath: /app/orchestrator.py
           subPath: orchestrator.py
-        
+        # - name: code-volume                                   # 추가
+        #   mountPath: /app/orchestrator_agentic.py             # 추가
+        #   subPath: orchestrator_agentic.py                    # 추가
+        # - name: code-volume                                   # 추가
+        #   mountPath: /app/agent_tools.py                      # 추가
+        #   subPath: agent_tools.py                             # 추가
+        # - name: code-volume                                   # 추가
+        #   mountPath: /app/controller.py                       # 추가
+        #   subPath: controller.py                              # 추가
+
         livenessProbe:
           httpGet:
             path: /health

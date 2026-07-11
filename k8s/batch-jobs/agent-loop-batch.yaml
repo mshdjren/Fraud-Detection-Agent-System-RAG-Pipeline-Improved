@@ -1,0 +1,147 @@
+# ===========================
+# ServiceAccount (처음 한 번만 apply, 이후 생략 가능)
+#   router-retriever-batch.yaml 과 동일한 evaluation-sa 재사용
+# ===========================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evaluation-sa
+  namespace: elastic
+  annotations:
+    iam.gke.io/gcp-service-account: evaluation-sa@kakaoo-501107.iam.gserviceaccount.com
+
+# ★ agent 전용 ConfigMap 등록 (기존 evaluation-code 와 분리):
+# kubectl create configmap evaluation-agent-code \
+#   --from-file=agent_smoke_inference.py \
+#   --from-file=gt_loader.py \
+#   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#   ※ evaluation_metrics.py / batch_inference.py 는 불필요 (스모크엔 평가 없음)
+
+---
+# ===========================
+# [Agent Loop] Smoke Inference (scratch)
+#     용도: /detect 단건/소량으로 agent loop가 의도대로 끝까지 도는지 확인
+#     ★ router-retriever batch와 달리 단일 진입점(/detect) 호출
+#     ★ 평가 없음 — agent_trace / track / planner_used 출력 검증이 목적
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-loop-smoke-pca64-k100-v14-0709
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: agentic-min
+    pipeline: agent-loop
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        pipeline: agent-loop
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: evaluation-sa
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: agent-smoke
+        image: python:3.10-slim
+        env:
+        # ★ agent orchestrator 진입점 (배포된 agentic orchestrator 서비스명에 맞춰 조정)
+        - name: ORCHESTRATOR_URL
+          value: "http://anomaly-orchestrator:80"
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        # FORCE_BOUNDARY 제거됨 — orchestrator_agentic.py의 구버전 디버그
+        # 오버라이드(analyzer 결과를 강제로 ABNORMAL/low-confidence로 덮어써
+        # boundary zone을 흉내내던 코드)가 agent loop 이전 작업에서 함께
+        # 제거되었다. planner의 expand/reroute 분기를 강제로 트리거하려면:
+        #   (a) local_analyzer.py가 sufficiency="ambiguous"를 반환하는 입력
+        #       (top1_distance가 0.3~0.55 boundary band)을 사용하거나,
+        #   (b) controller.py의 ANALYZER_URL을 일시적으로 mock 서비스로
+        #       돌려 {"cls":"ABNORMAL","sufficiency":"ambiguous",
+        #       "what_missing":"only top-1 seen"} 같은 응답을 주입한다.
+        # planner가 expand/reroute 선택하도록 controller url 확인
+        - name: CONTROLLER_URL
+          value: "http://anomaly-controller:80"
+
+        # 스모크: 우선 단건(1)으로 의도된 1회 loop 확인. 소량 확인 시 값만 상향.
+        - name: N_SAMPLES
+          value: "10"
+        - name: START_INDEX
+          value: "100"
+        - name: CORESET_PERCENTAGE
+          value: "100"
+        - name: TIMEOUT
+          value: "1200"
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Agent Loop Smoke Inference (scratch)"
+          echo "  orchestrator       : ${ORCHESTRATOR_URL}"
+          echo "  experiment_case    : ${EXPERIMENT_CASE}"
+          echo "  percolate_version  : ${PERCOLATE_QUERY_VERSION}"
+          echo "  n_samples          : ${N_SAMPLES}  (start_index=${START_INDEX})"
+          echo "  [no evaluation — agent_trace/track/planner_used 검증]"
+          echo "================================================"
+          # 스모크엔 평가/sklearn 불필요 → 최소 의존성만 설치
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx structlog google-cloud-storage
+          cd /app
+          python batch_inference_agent.py \
+            --experiment-case    ${EXPERIMENT_CASE} \
+            --percolate-version  ${PERCOLATE_QUERY_VERSION} \
+            --coreset-percentage ${CORESET_PERCENTAGE} \
+            --n-samples          ${N_SAMPLES} \
+            --start-index        ${START_INDEX} \
+            --timeout            ${TIMEOUT} \
+            --output-dir         /results
+          [ -f /results/agent_predictions.json ] && \
+            echo "--- agent_predictions.json (head) ---" && \
+            head -c 2000 /results/agent_predictions.json
+        resources:
+          requests:
+            cpu: 100m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code
