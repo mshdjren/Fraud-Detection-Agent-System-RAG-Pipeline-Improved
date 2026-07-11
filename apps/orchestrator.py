@@ -1,6 +1,5 @@
 """
 orchestrator.py — Pipeline Orchestrator V5.0
-==============================================
 
 Base: orchestrator.py V4.0
   ✅ Circuit Breaker (pybreaker) — router / retriever / analyzer 3중 보호
@@ -51,10 +50,7 @@ import structlog
 import httpx
 from pybreaker import CircuitBreaker, CircuitBreakerError
 from agent_tools import AgentTool, choose_tool, list_enabled_tools
-<<<<<<< ours
-=======
 from controller import PlanLRUCache, build_plan_key, fallback_plan
->>>>>>> theirs
 
 # ===========================
 # Configuration
@@ -90,11 +86,8 @@ FAST_TRACK_ENABLED = os.getenv("FAST_TRACK_ENABLED", "true").lower() == "true"
 DEEP_TRACK_ENABLED = os.getenv("DEEP_TRACK_ENABLED", "true").lower() == "true"
 COMPARE_TRACK_ENABLED = os.getenv("COMPARE_TRACK_ENABLED", "false").lower() == "true"
 FAST_TRACK_DISTANCE_THRESHOLD = float(os.getenv("FAST_TRACK_DISTANCE_THRESHOLD", "0.85"))
-<<<<<<< ours
-=======
 RESOURCE_DEGRADED_CPU_THRESHOLD = float(os.getenv("RESOURCE_DEGRADED_CPU_THRESHOLD", "0.85"))
 CONTROLLER_LRU_SIZE = int(os.getenv("CONTROLLER_LRU_SIZE", "256"))
->>>>>>> theirs
 
 VALID_EXPERIMENT_CASES = [
     "emb_vectors",
@@ -420,8 +413,6 @@ async def call_retriever(
             "vec_index":   vec_index,
             "top_k":       top_k,
         }
-<<<<<<< ours
-<<<<<<< ours
         if MCP_WRAPPER_ENABLED:
             resp = await call_with_retry(
                 client, "POST", f"{RETRIEVER_URL}/mcp/execute",
@@ -440,18 +431,6 @@ async def call_retriever(
                 headers={"Content-Type": "application/json"},
             )
             result = resp.json()
-=======
-=======
->>>>>>> theirs
-        resp = await call_with_retry(
-            client, "POST", f"{RETRIEVER_URL}/retrieve",
-            timeout=RETRIEVER_TIMEOUT,
-            service_name="retriever",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        result = resp.json()
->>>>>>> theirs
         service_latency.labels(service="retriever").observe(time.time() - start)
         multi_cluster_search.inc()
         logger.info(
@@ -765,29 +744,6 @@ async def detect_anomaly(test_case: TestCase):
                 experiment_case=exp_case,
                 percolate_version=pv,
             )
-<<<<<<< ours
-            selected_tool = choose_tool(
-                fast_track_enabled=FAST_TRACK_ENABLED or SKIP_ANALYZER,
-                deep_track_enabled=DEEP_TRACK_ENABLED,
-                compare_track_enabled=COMPARE_TRACK_ENABLED,
-                distance_hint=top1_dist,
-                fast_threshold=FAST_TRACK_DISTANCE_THRESHOLD,
-            )
-
-            if selected_tool == "anomaly.fast_track_distance_gate":
-                skip_analyzer_hits.inc()
-                result = await _run_fast_track(top1_dist=top1_dist, response_payload=response_payload)
-            elif selected_tool == "anomaly.compare_track_raw_es":
-                result = await _run_compare_track(
-                    client=client,
-                    response_payload=response_payload,
-                    persona=persona,
-                    results_raw=results_raw,
-                    tx=tx_dict,
-                )
-            else:
-                result = await _run_deep_track(
-=======
             # Controller plan 우선, 없을 때 choose_tool fallback
             if plan.track == "fast":
                 selected_tool = "anomaly.fast_track_distance_gate"
@@ -807,14 +763,11 @@ async def detect_anomaly(test_case: TestCase):
                 result = await _run_fast_track(top1_dist=top1_dist, response_payload=response_payload)
             elif selected_tool == "anomaly.compare_track_raw_es":
                 result = await _run_compare_track(
->>>>>>> theirs
                     client=client,
                     response_payload=response_payload,
                     persona=persona,
                     results_raw=results_raw,
                     tx=tx_dict,
-<<<<<<< ours
-=======
                 )
             else:
                 result = await _run_deep_track(
@@ -823,7 +776,6 @@ async def detect_anomaly(test_case: TestCase):
                     persona=persona,
                     results_raw=results_raw,
                     tx=tx_dict,
->>>>>>> theirs
                 )
 
         total_ms = (time.time() - pipeline_start) * 1000
