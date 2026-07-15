@@ -47,23 +47,180 @@ Test Transaction
 
 ---
 
-## 🔬 핵심 기술
 
-### 1️⃣ 검색 파이프라인 최적화
+## 🔬 핵심 기술 (Core Technologies)
 
-**Percolate Query 3단계 고도화** — Strict AND(v1) → Centroid-Augmented(v1+aug) → Bucketization(v1+aug+bucket):
+### 1️⃣ Percolate Query-based Cluster Routing
 
-| query version | Cluster acc / Recall@5 | Router MRR | Latency p99 (ms) | Recall@5 (knn) / AUROC |
+최근접 정상 클러스터의 매칭 정확도 및 검색 속도 개선을 위해, 라우팅 쿼리를 **3단계에 걸쳐 고도화**했습니다.
+
+---
+
+#### **Version 1: Strict AND**
+
+Decision Tree의 리프 노드 경로를 `bool.filter`의 range 조건으로 직접 변환하여 정밀 매칭합니다.
+
+```python
+# 예시: feature v1 ∈ [0.8, ∞) AND v3 ∈ [-1.2, ∞) → Cluster 63
+{
+  "query": {
+    "bool": {
+      "filter": [
+        {"range": {"v1": {"gte": 0.8}}},
+        {"range": {"v3": {"gte": -1.2}}}
+      ]
+    }
+  }
+}
+```
+
+- **의도**: Decision tree의 leaf 정보를 각 클러스터의 rules로 표현하고, 이를 직관적으로 percolate query로 매칭 
+- **한계**: Strict AND 다수 결합으로 인해, Top-5 클러스터 매칭의 다양성이 떨어짐 (같은 1개의 클러스터만 매칭)
+
+---
+
+#### **Version 2: Centroid-Augmented Diversity**
+
+Version1의 Top-1 매칭 결과에 **벡터 유사도 기반 Top-4 클러스터**를 추가하여 다양성을 보완합니다.
+
+```python
+# Phase 1: Strict AND로 Top-1 확보
+top_1 = percolate_strict_and(test_vec)
+
+# Phase 2: Centroid cosine distance로 Top-4 보완
+top_4_nearest = sorted(
+    cluster_centroids, 
+    key=lambda c: 1 - cosine_similarity(test_vec, c)
+)[:4]
+
+# 최종 Top-5
+candidates = [top_1] + top_4_nearest
+```
+
+- **의도**: Recall@5 및 Top-5 매칭 다양성 ↑
+- **한계**: Strict AND에 비해 검색 지연 ↑
+
+---
+
+#### **Version 3: Optimized Bucketization**
+
+Range 조건을 **Bucket index + Term filter**로 변환하여 후보군 pruning을 최적화합니다.
+
+````python
+# 1. Ingest: Range → Bucket index
+split_points["v1"] = [-2.5, -1.0, 0.0, 1.0, 2.5]
+# Rule: v1 ≤ 0.8 → bucket_3, direction="lte"
+
+# 2. Query: Test vector → Candidate buckets
+test_vec["v1"] = 0.05  # → bucket_3
+tolerance = ±1         # → [2, 3, 4]
+````
+
+##### **최종 Query 구조**
+
+````python
+{
+  "bool": {
+    "must": [
+      # 기존 percolate (range 매칭)
+      {"percolate": {"field": "query", "document": {...}}},
+      
+      # Bucket pre-filter (term 매칭)
+      {
+        "bool": {
+          "should": [
+            # v1 feature
+            {
+              "must": [
+                {"term": {"v1_direction": "lte"}},
+                {"terms": {"v1_bucket": [2, 3, 4]}}
+              ]
+            },
+            # ... 총 9개 features
+          ],
+          "minimum_should_match": 3  # 9개 중 3개
+        }
+      }
+    ]
+  }
+}
+````
+
+- **의도**: Range 부동소수점 비교 → Term filter bitset 연산
+- **한계**: Percolate query index ↑ 및 rules 수가 늘어났을때의 검색 지연 가능성
+
+---
+
+#### 📊 실험 결과 (Percoalte query routing)
+
+Percolate query version에 따른 클러스터 정확도, 리콜, 단건 검색 지연 시간 및 AUROC 지표를 비교합니다.
+
+| query version | Cluster acc / Recall@5 (Router) | Router MRR | Latency p99 (ms) |  Recall@5 (knn) / AUROC |
 | :--- | :---: | :---: | :---: | :---: |
-| Strict AND (v1) | 0.816 / 0.816 | 0.941 | 420.25 | 0.786 / 0.8726 |
-| **v1 + aug** | **0.823 / 0.905** | **1.00** | 430.01 | **0.956 / 0.9125** |
-| v1 + aug + bucket | 0.823 / 0.897 | 0.988 | **409.25** | 0.956 / 0.9037 |
+| **Strict AND (v1)** | 0.816 / 0.816 | 0.941 | 420.25 | 0.786 / 0.8726 |
+| **V1 + aug** | **0.823 / 0.905** | **1.00** | 430.01 | **0.956 / 0.9125** |
+| **V1 + aug + bucket** | 0.823 / 0.897 | 0.988 | **409.25** | 0.956 / 0.9037 |
 
-**Coreset Sampling 운영점** — 1,000만 건 인덱스에 page fault를 의도적으로 유발해 메모리 병목을 재현하고, 압축률-AUROC-latency trade-off에서 10%를 운영점으로 채택 (메모리 −89%, AUROC 손실 0.4%p 이내, median latency −46%). HNSW 파라미터(m, ef_construction) sweep과 벡터 quantization(int8/BBQ)을 직교 축으로 결합해 벡터 인덱스 메모리 추가 −25%, Recall 손실 0.5%p 이내.
-# README 교체 섹션 — 학습 데이터 생성 / 모델 학습 / 평가 체계
+---
 
-> 기존 README의 `2️⃣ 학습 데이터 생성`, `5️⃣ LLM Analyzer 경량화 및 평가 체계` 를 대체하는 섹션입니다.
-> 표의 **빈칸 = 미실행**(실험 후 채움), 각 수치에는 측정 출처(run/노트북)를 명시했습니다.
+### 2️⃣ Filtered KNN (Coreset Sampling 검증)
+Coreset Sampling 최적 운영점 검증: 메모리-이상탐지 성능-검색 latency trade-off 분석을 통해, coreset sampling 비율 10%의 최적점을 도출하고자 하였습니다.
+
+<table>
+<tr>
+<td width="50%" align="center">
+
+<img src="picture/coreset_explain.jpg" width="100%">
+
+**Coreset Sampling Algorithm**<br>[(from https://kmhana.tistory.com/6)](https://kmhana.tistory.com/6)
+
+</td>
+<td width="50%" align="center">
+
+<img src="picture/coreset_tsne.jpg" width="100%">
+
+**Cluster Distribution with coreset sampling ratio**<br>(t-SNE)
+
+</td>
+</tr>
+</table>
+
+---
+
+#### 📊 실험 결과 (Coreset Sampling 검증)
+
+**Croreset Sampling 비율 vs AUROC vs 검색 지연**
+
+| Coreset % | Index Size (GB) | Docs Count | AUROC | Recall@5 (knn) | Median Latency (ms) |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| 100 | 2.8 | 140,128 | 0.956 | **0.956** | 125 |
+| **10** | 0.31 | 14,012 | **0.952** | 0.947 | 68 |
+| 1 | 0.035 | 1,401 | 0.901 | 0.882 | **52** |
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**Coreset Sampling 유무에 따른 Page Faults 발생 정도**<br>
+*(Memory 2GB로 Node 제한 시)*
+
+| Index sharding | 100% Index<br>(Page Faults/sec) | 10% Index<br>(Page Faults/sec) |
+| :---: | :---: | :---: |
+| **X** | 45.2 | 38.7 |
+| **O** | 52.3 | **8.1** |
+
+</td>
+<td width="50%" valign="top" align="center">
+
+<img src="picture/coreset_tradeoff.jpg" width="100%">
+<p align="center"><i>AUROC and Inference Speed vs. Coreset Sampling Ratio</i></p>
+
+</td>
+</tr>
+</table>
+
+<br>
+
 
 ---
 
