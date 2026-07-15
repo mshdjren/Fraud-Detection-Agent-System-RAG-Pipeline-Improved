@@ -2,7 +2,7 @@
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster mean",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.362",
@@ -35,9 +35,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 1340.0022983551025,
-      "controller_agent_loop": 104411.12017631531,
-      "total": 105751.704454422
+      "base_retrieve": 262.2230052947998,
+      "controller_agent_loop": 18023.293256759644,
+      "total": 18285.97092628479
     },
     "agent_rounds": [
       {
@@ -47,7 +47,7 @@
         "cluster_id": 63,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster mean",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -61,19 +61,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 105781.98718989734,
+    "_client_latency_ms": 18362.886919000004,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 25481,
     "_gt_label": 0,
     "_category": "boundary",
     "_nb_nd": 0.433488036641099,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"IP_country, sex, browser\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.201",
@@ -106,9 +106,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 602.2648811340332,
-      "controller_agent_loop": 68929.19921875,
-      "total": 69532.00888633728
+      "base_retrieve": 182.40952491760254,
+      "controller_agent_loop": 15593.064785003662,
+      "total": 15776.017427444458
     },
     "agent_rounds": [
       {
@@ -118,7 +118,7 @@
         "cluster_id": 6,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -132,14 +132,14 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 69543.26062800828,
+    "_client_latency_ms": 15783.946377000007,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 25686,
     "_gt_label": 0,
     "_category": "boundary",
     "_nb_nd": 0.4960999278938859,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"IP_country, weekday_purchase, month_purchase\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": \"cluster_mismatch: IP_country=China absent from profile\"}"
   },
   {
     "classification": "NORMAL",
@@ -172,14 +172,14 @@
       "deep_retrieve",
       "pre_router",
       "retrieve:base_reused",
-      "analyze",
+      "analyze:skipped_confident(nd=0.296)",
       "plan:accept_verdict",
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 361.5231513977051,
-      "controller_agent_loop": 65918.40076446533,
-      "total": 66280.32350540161
+      "base_retrieve": 167.89793968200684,
+      "controller_agent_loop": 25.925636291503906,
+      "total": 194.1361427307129
     },
     "agent_rounds": [
       {
@@ -203,19 +203,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 66288.6584160151,
+    "_client_latency_ms": 201.38545700001487,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 25723,
     "_gt_label": 0,
     "_category": "boundary",
     "_nb_nd": 0.36902797424819583,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"boundary distance; expand evidence\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster mean",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.335",
@@ -248,9 +248,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 252.52819061279297,
-      "controller_agent_loop": 70559.72051620483,
-      "total": 70812.88480758667
+      "base_retrieve": 144.03271675109863,
+      "controller_agent_loop": 15357.686519622803,
+      "total": 15502.08854675293
     },
     "agent_rounds": [
       {
@@ -260,7 +260,7 @@
         "cluster_id": 98,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster mean",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -274,19 +274,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 70820.90903096832,
+    "_client_latency_ms": 15509.008534999992,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 25798,
     "_gt_label": 1,
     "_category": "boundary",
     "_nb_nd": 0.47430266660239057,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"ABNORMAL\", \"what_missing\": \"age, purchase_value, IP_country\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.382",
@@ -333,9 +333,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 491.32513999938965,
-      "controller_agent_loop": 132572.02196121216,
-      "total": 133064.34440612793
+      "base_retrieve": 181.80561065673828,
+      "controller_agent_loop": 30041.42117500305,
+      "total": 30223.59561920166
     },
     "agent_rounds": [
       {
@@ -345,7 +345,7 @@
         "cluster_id": 33,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "reroute_cross_cluster",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -362,7 +362,7 @@
         "cluster_id": 53,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -376,19 +376,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 133074.78471903596,
+    "_client_latency_ms": 30231.390457000005,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 25944,
     "_gt_label": 1,
     "_category": "easy_high",
     "_nb_nd": 0.6911012498785267,
-    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": \"neighbor_insufficient: weekday_purchase=Monday, month_purchase=August\"}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.347",
@@ -426,9 +426,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 212.48245239257812,
-      "controller_agent_loop": 70006.2026977539,
-      "total": 70218.994140625
+      "base_retrieve": 161.83137893676758,
+      "controller_agent_loop": 15516.409158706665,
+      "total": 15678.789615631104
     },
     "agent_rounds": [
       {
@@ -438,7 +438,7 @@
         "cluster_id": 76,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -452,19 +452,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 70227.0614389563,
+    "_client_latency_ms": 15686.266687,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 26263,
     "_gt_label": 1,
     "_category": "boundary",
     "_nb_nd": 0.5481859352396938,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"purchase_value, weekday_purchase\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=age, source",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.229",
@@ -506,9 +506,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 200.95109939575195,
-      "controller_agent_loop": 136025.46739578247,
-      "total": 136227.25105285645
+      "base_retrieve": 171.57745361328125,
+      "controller_agent_loop": 30498.932600021362,
+      "total": 30671.088695526123
     },
     "agent_rounds": [
       {
@@ -518,7 +518,7 @@
         "cluster_id": 14,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "reroute_cross_cluster",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -535,7 +535,7 @@
         "cluster_id": 77,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "age, source",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -549,19 +549,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 136237.95726604294,
+    "_client_latency_ms": 30679.131595999992,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 26321,
     "_gt_label": 1,
     "_category": "boundary",
     "_nb_nd": 0.5254665995154201,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"purchase_value, IP_country, month_purchase\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.240",
@@ -608,9 +608,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 176.21970176696777,
-      "controller_agent_loop": 136126.29222869873,
-      "total": 136302.8883934021
+      "base_retrieve": 256.62755966186523,
+      "controller_agent_loop": 30290.08936882019,
+      "total": 30547.195196151733
     },
     "agent_rounds": [
       {
@@ -620,7 +620,7 @@
         "cluster_id": 89,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "reroute_cross_cluster",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -637,7 +637,7 @@
         "cluster_id": 62,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -651,19 +651,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 136320.67921198905,
+    "_client_latency_ms": 30554.290025000002,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 26354,
     "_gt_label": 0,
     "_category": "boundary",
     "_nb_nd": 0.4786074347543915,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"ABNORMAL\", \"what_missing\": \"age, purchase_value, IP_country\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.292",
@@ -696,9 +696,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 159.2097282409668,
-      "controller_agent_loop": 69672.62077331543,
-      "total": 69832.31663703918
+      "base_retrieve": 143.84889602661133,
+      "controller_agent_loop": 15422.797203063965,
+      "total": 15567.000150680542
     },
     "agent_rounds": [
       {
@@ -708,7 +708,7 @@
         "cluster_id": 3,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -722,19 +722,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 69846.20906191412,
+    "_client_latency_ms": 15574.400541999978,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 26519,
     "_gt_label": 0,
     "_category": "boundary",
     "_nb_nd": 0.40298166283379655,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"IP_country mismatch, age close but within range\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.267",
@@ -781,9 +781,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 180.21202087402344,
-      "controller_agent_loop": 135697.829246521,
-      "total": 135878.4646987915
+      "base_retrieve": 163.88225555419922,
+      "controller_agent_loop": 30782.12308883667,
+      "total": 30946.488857269287
     },
     "agent_rounds": [
       {
@@ -793,7 +793,7 @@
         "cluster_id": 80,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "reroute_cross_cluster",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -810,7 +810,7 @@
         "cluster_id": 20,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -824,19 +824,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 135890.08341403678,
+    "_client_latency_ms": 30954.961414000023,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 26653,
     "_gt_label": 1,
     "_category": "boundary",
     "_nb_nd": 0.47003567380212913,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"ABNORMAL\", \"what_missing\": \"age far above mean, IP_country mismatch\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.164",
@@ -869,9 +869,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 173.22087287902832,
-      "controller_agent_loop": 69851.06015205383,
-      "total": 70025.4213809967
+      "base_retrieve": 142.6258087158203,
+      "controller_agent_loop": 15559.09776687622,
+      "total": 15702.422857284546
     },
     "agent_rounds": [
       {
@@ -881,7 +881,7 @@
         "cluster_id": 46,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -895,19 +895,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 70036.94377210923,
+    "_client_latency_ms": 15712.977307000017,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 26676,
     "_gt_label": 1,
     "_category": "boundary",
     "_nb_nd": 0.43962439384663143,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"sex, weekday, month\"}"
+    "_teacher": "{\"cls\": \"NORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.262",
@@ -949,9 +949,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 195.14155387878418,
-      "controller_agent_loop": 133181.03694915771,
-      "total": 133376.56712532043
+      "base_retrieve": 197.42083549499512,
+      "controller_agent_loop": 31256.565809249878,
+      "total": 31454.371690750122
     },
     "agent_rounds": [
       {
@@ -961,7 +961,7 @@
         "cluster_id": 90,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value, age",
+        "what_missing": "boundary distance; expand evidence",
         "action": "reroute_cross_cluster",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -978,7 +978,7 @@
         "cluster_id": 21,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -992,19 +992,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 133386.45486498717,
+    "_client_latency_ms": 31467.368235000038,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 26756,
     "_gt_label": 0,
     "_category": "easy_low",
     "_nb_nd": 0.14611317654639314,
-    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+    "_teacher": "{\"cls\": \"NORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.278",
@@ -1046,9 +1046,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 144.14429664611816,
-      "controller_agent_loop": 133710.22486686707,
-      "total": 133854.99930381775
+      "base_retrieve": 166.69583320617676,
+      "controller_agent_loop": 30524.29986000061,
+      "total": 30691.88928604126
     },
     "agent_rounds": [
       {
@@ -1058,7 +1058,7 @@
         "cluster_id": 73,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "reroute_cross_cluster",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -1075,7 +1075,7 @@
         "cluster_id": 19,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -1089,19 +1089,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 133863.7330540223,
+    "_client_latency_ms": 30698.844692000024,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 26864,
     "_gt_label": 0,
     "_category": "boundary",
     "_nb_nd": 0.36071731392821543,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"boundary distance; expand evidence\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.382",
@@ -1149,9 +1149,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 252.84123420715332,
-      "controller_agent_loop": 67143.01133155823,
-      "total": 67396.28386497498
+      "base_retrieve": 145.91717720031738,
+      "controller_agent_loop": 16176.234006881714,
+      "total": 16322.554588317871
     },
     "agent_rounds": [
       {
@@ -1161,7 +1161,7 @@
         "cluster_id": 28,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -1175,19 +1175,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 67406.35488799307,
+    "_client_latency_ms": 16329.843580000044,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 27132,
     "_gt_label": 1,
     "_category": "easy_high",
     "_nb_nd": 0.7671471275745375,
-    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "ABNORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.519",
@@ -1233,9 +1233,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 152.84419059753418,
-      "controller_agent_loop": 75357.2428226471,
-      "total": 75510.83898544312
+      "base_retrieve": 198.0726718902588,
+      "controller_agent_loop": 23561.676025390625,
+      "total": 23761.033296585083
     },
     "agent_rounds": [
       {
@@ -1245,7 +1245,7 @@
         "cluster_id": 92,
         "cls": "ABNORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "age, purchase_value far above range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "expand_within_cluster",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -1262,7 +1262,7 @@
         "cluster_id": 92,
         "cls": "ABNORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 5,
@@ -1276,19 +1276,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 75521.81918697897,
+    "_client_latency_ms": 23797.030140999992,
     "_round0_classification": "ABNORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 27405,
     "_gt_label": 1,
     "_category": "easy_high",
     "_nb_nd": 0.6255938935899218,
-    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": \"neighbor_insufficient: source=SEO, browser=IE\"}"
   },
   {
     "classification": "ABNORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.514",
@@ -1324,9 +1324,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 137.2356414794922,
-      "controller_agent_loop": 76170.16625404358,
-      "total": 76307.7745437622
+      "base_retrieve": 158.5242748260498,
+      "controller_agent_loop": 18983.41965675354,
+      "total": 19142.30251312256
     },
     "agent_rounds": [
       {
@@ -1336,7 +1336,7 @@
         "cluster_id": 56,
         "cls": "ABNORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "expand_within_cluster",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -1353,7 +1353,7 @@
         "cluster_id": 56,
         "cls": "ABNORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 5,
@@ -1367,19 +1367,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 76318.3147450909,
+    "_client_latency_ms": 19185.13672300003,
     "_round0_classification": "ABNORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 27778,
     "_gt_label": 1,
     "_category": "easy_high",
     "_nb_nd": 0.6449548249553245,
-    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.369",
@@ -1412,9 +1412,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 137.59565353393555,
-      "controller_agent_loop": 69495.61262130737,
-      "total": 69633.52847099304
+      "base_retrieve": 166.37635231018066,
+      "controller_agent_loop": 16019.946098327637,
+      "total": 16187.285423278809
     },
     "agent_rounds": [
       {
@@ -1424,7 +1424,7 @@
         "cluster_id": 32,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -1438,19 +1438,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 69643.25864298735,
+    "_client_latency_ms": 16194.568489000005,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 27881,
     "_gt_label": 0,
     "_category": "boundary",
     "_nb_nd": 0.3799687628224395,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"IP_country, month_purchase, weekday_purchase\"}"
+    "_teacher": "{\"cls\": \"NORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.394",
@@ -1483,9 +1483,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 135.18643379211426,
-      "controller_agent_loop": 70000.46420097351,
-      "total": 70136.14797592163
+      "base_retrieve": 141.4487361907959,
+      "controller_agent_loop": 15644.594192504883,
+      "total": 15786.383867263794
     },
     "agent_rounds": [
       {
@@ -1495,7 +1495,7 @@
         "cluster_id": 58,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -1509,19 +1509,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 70143.97225202993,
+    "_client_latency_ms": 15793.530892999912,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 27892,
     "_gt_label": 0,
     "_category": "easy_high",
     "_nb_nd": 0.6562218447500976,
-    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": \"neighbor_insufficient: source=Ads differs from profile\"}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.359",
@@ -1554,9 +1554,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 130.17821311950684,
-      "controller_agent_loop": 69189.28742408752,
-      "total": 69320.54424285889
+      "base_retrieve": 169.85487937927246,
+      "controller_agent_loop": 15542.45924949646,
+      "total": 15712.734460830688
     },
     "agent_rounds": [
       {
@@ -1566,7 +1566,7 @@
         "cluster_id": 3,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -1580,19 +1580,19 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 69329.67459701467,
+    "_client_latency_ms": 15720.449781999945,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 27949,
     "_gt_label": 0,
     "_category": "boundary",
     "_nb_nd": 0.4343356222749925,
-    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"age slightly above cluster mean, IP_country match\"}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   },
   {
     "classification": "NORMAL",
     "confidence": 55,
-    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "reasoning": "sufficiency=ambiguous; what_missing=boundary distance; expand evidence",
     "key_evidence": [
       "track=deep",
       "top1=1.274",
@@ -1625,9 +1625,9 @@
       "finalize"
     ],
     "latency_ms": {
-      "base_retrieve": 136.6133689880371,
-      "controller_agent_loop": 67854.71272468567,
-      "total": 67991.78647994995
+      "base_retrieve": 134.1085433959961,
+      "controller_agent_loop": 15379.147291183472,
+      "total": 15513.747215270996
     },
     "agent_rounds": [
       {
@@ -1637,7 +1637,7 @@
         "cluster_id": 94,
         "cls": "NORMAL",
         "sufficiency": "ambiguous",
-        "what_missing": "purchase_value and age close to cluster range",
+        "what_missing": "boundary distance; expand evidence",
         "action": "accept_verdict",
         "planner_backend": "deterministic",
         "evidence_top_k": 3,
@@ -1651,13 +1651,13 @@
     "termination": "accept_verdict",
     "experiment_case": "pca_64_k100",
     "percolate_version": "v1",
-    "_client_latency_ms": 68001.40384095721,
+    "_client_latency_ms": 15521.43873,
     "_round0_classification": "NORMAL",
     "_distance_band": "abnormal_clear",
     "idx": 28045,
     "_gt_label": 1,
     "_category": "easy_high",
     "_nb_nd": 0.6118677228394002,
-    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+    "_teacher": "{\"cls\": \"ABNORMAL\", \"what_missing\": null}"
   }
 ]

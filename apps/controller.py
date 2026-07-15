@@ -113,6 +113,13 @@ DIST_P50      = float(os.getenv("DIST_P50", "1.448"))
 DIST_IQR      = float(os.getenv("DIST_IQR", "0.387"))
 BOUNDARY_LOW  = float(os.getenv("SUFFICIENCY_BOUNDARY_LOW",  "0.3"))
 BOUNDARY_HIGH = float(os.getenv("SUFFICIENCY_BOUNDARY_HIGH", "0.55"))
+# ★ [confident-skip] det 모드에서 sufficiency=confident(밴드 밖) 케이스는
+#   analyzer LLM 호출 산출물이 없다 — cls는 nd threshold로 결정되고 wm=null이
+#   정답이므로. 호출 자체를 생략해 "LLM은 필요한 곳(ambiguous의 wm)에서만"
+#   이라는 agent 시스템의 효율 논지를 실현한다. forwardRAG(전수 LLM 호출)
+#   대비 차별점의 구조적 근거. llm 모드 비교실험 시에는 반드시 false.
+SKIP_ANALYZER_ON_CONFIDENT = os.getenv("SKIP_ANALYZER_ON_CONFIDENT", "true").lower() == "true"
+CLS_ND_THRESHOLD = float(os.getenv("CLS_ND_THRESHOLD", "0.5"))   # analyzer와 동일 키 공유
 
 
 def _normalize_dist_fallback(d: float) -> float:
@@ -861,6 +868,28 @@ async def node_analyze(state: AgentState) -> AgentState:
     FORCE_MOCK_ANALYZER=true 시 실제 호출 없이 mock 응답 반환.
     """
     current_round = state.get("round", 0)
+
+    # ── [confident-skip] det 정합: nd가 밴드 밖이면 LLM 없이 종결 ──────
+    # sufficiency(밴드)와 cls(threshold)는 어차피 deterministic으로 결정되고
+    # confident 케이스의 wm 정답은 null — LLM 호출은 정보량 0에 latency만
+    # 지불한다. ambiguous 케이스만 analyzer로 보내 wm(재검색 명세)을 얻는다.
+    if SKIP_ANALYZER_ON_CONFIDENT and not FORCE_MOCK_ANALYZER:
+        _nd_skip = _normalize_dist_fallback(float(state.get("top1_distance", 0.5)))
+        if not (BOUNDARY_LOW <= _nd_skip < BOUNDARY_HIGH):
+            raw = {
+                "cls": "ABNORMAL" if _nd_skip >= CLS_ND_THRESHOLD else "NORMAL",
+                "sufficiency": "confident",
+                "what_missing": None,
+            }
+            logger.info("node_analyze_skipped_confident",
+                        request_id=state.get("request_id", "?"),
+                        round=current_round, nd=round(_nd_skip, 4))
+            return {
+                "analyzer": raw,
+                "analyzer_history": [{"round": current_round,
+                                      **normalize_analyzer_output(raw).model_dump()}],
+                "history": [f"analyze:skipped_confident(nd={_nd_skip:.3f})"],
+            }
 
     # ── [검증용] Mock Analyzer ──────────────────────────────────────────
     # local analyzer 재튜닝 전 agent loop 자체를 검증하기 위한 임시 분기.

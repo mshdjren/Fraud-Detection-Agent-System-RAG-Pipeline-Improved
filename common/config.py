@@ -17,7 +17,7 @@ __all__ = [n for n in dir() if not n.startswith("_")]
 # ============================================================
 # PHASE — 실행 목적
 # ============================================================
-PHASE = "train"                      # "generate" | "train"
+PHASE = "generate"                      # "generate" | "train"
 
 # ============================================================
 # Teacher Provider (PHASE="generate" 시에만 사용)
@@ -39,9 +39,11 @@ HF_TEACHER_MODEL   = "Qwen/Qwen2.5-14B-Instruct"   # 7B→14B: z-score 산술비
 # HF_TEACHER_MODEL = "Qwen/QwQ-32B"
 # HF_TEACHER_MODEL = "Qwen/Qwen3-4B-Thinking-2507"
 HF_FALLBACK_MODELS = ["Qwen/Qwen2.5-7B-Instruct"]
-HF_TOKEN           = "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"
+HF_TOKEN           = "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"
 HF_USE_4BIT        = True
 HF_BATCH_SIZE      = 50
+
+# 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
 
 max_new_tokens     = 64
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
@@ -70,7 +72,7 @@ EVAL_RATIO  = 0.1
 
 EVAL_MAX_NUM               = 50
 MEASURE_TEACHER_COMPLIANCE = True
-EVAL_SAMPLE_N              = 1000
+EVAL_SAMPLE_N              = 200
 
 # 1000개를 세 갈래로 명시 배분 (합=1.0)
 MINING_FRAC   = 0.5     # hard negative (mining type1/2)  → 500
@@ -82,8 +84,8 @@ EASY_FRAC     = 0.3     # easy nd 양끝(<0.2, >0.6)        → 300
 # MINING_RATIO               = 0.2
 # SAMPLE_N    = 12
 
-EVIDENCE_TOPK_CHOICES = [1, 3]
-EVIDENCE_TOPK_DEFAULT = 1
+EVIDENCE_TOPK_CHOICES = [3, 5]
+EVIDENCE_TOPK_DEFAULT = 3
 
 # ============================================================
 # 학습 방법론 (비교 실험용)
@@ -130,7 +132,7 @@ TRAIN_EMB_PATH    = f"{GCS_ROOT}/tree-search/embeddings_fraudecom/anollm_lr5e-05
 TEST_PARQUET_PATH = f"{GCS_ROOT}/tree-search/tree_fraudecom/{EXPERIMENT_CASE}/test_with_gt.parquet"
 TEST_EMB_PATH     = f"{GCS_ROOT}/tree-search/embeddings_fraudecom/anollm_lr5e-05_standard_smolLM_test_embeddings_merged.npy"
 
-DATE = "0629"
+DATE = "0713"
 MINED_PARQUET_PATH = (
     f"{GCS_ROOT}/tree-search/analyzer_ft/{EXPERIMENT_CASE}/"
     "hard_negatives/query_v14_pct_100/hard_negatives_0414.parquet"
@@ -141,10 +143,29 @@ OUT_BASE           = f"{GCS_ROOT}/tree-search/analyzer_ft/{EXPERIMENT_CASE}/{_pt
 OUT_JSONL_DISTANCE = f"{OUT_BASE}/training_data_distance.jsonl"
 OUT_JSONL_MINED    = f"{OUT_BASE}/training_data_mined.jsonl"
 OUT_ADAPTER_PATH   = f"{OUT_BASE}/adapter"
+TRAINING_JSONL_PATH = ""
 
-TRAINING_JSONL_PATH = (OUT_JSONL_MINED
-                       if TRAIN_ON in ("mined", "mining_only")
-                       else OUT_JSONL_DISTANCE)
+def set_data(mode: str = "agent"):
+    global TRAINING_JSONL_PATH, OUT_JSONL_MINED  # 둘 다 전역(global) 바인딩
+    
+    if mode == "agent":
+        OUT_JSONL_MINED     = f"{OUT_BASE}/training_data_mined.jsonl"
+        TRAINING_JSONL_PATH = (OUT_JSONL_MINED
+                                if TRAIN_ON in ("mined", "mining_only")
+                                else OUT_JSONL_DISTANCE)
+    else:
+        OUT_JSONL_MINED     = f"{OUT_BASE}/training_data_forward.jsonl"
+        # OUT_JSONL_MINED    = f"{OUT_BASE}/training_data_forward_capped.jsonl"
+        TRAINING_JSONL_PATH = (OUT_JSONL_MINED
+                                if TRAIN_ON in ("mined", "mining_only")
+                                else OUT_JSONL_DISTANCE)
+        
+    # 💡 [핵심] 노트북의 globals().update()가 인식할 수 있도록 딕셔너리로 반환합니다.
+    return {
+        "TRAINING_JSONL_PATH": TRAINING_JSONL_PATH,
+        "OUT_JSONL_MINED": OUT_JSONL_MINED
+    }
+
 LOCAL_ADAPTER = f"/content/adapter-{EXPERIMENT_CASE}"
 
 if TEACHER_PROVIDER == "groq":

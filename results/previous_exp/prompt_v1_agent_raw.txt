@@ -1,0 +1,1502 @@
+====================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: 0.3
+  - age: -0.4
+
+[Categorical Features]
+  - sex: M
+  - source: Direct
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Thursday
+  - month_purchase: March
+  - IP_country: United Kingdom
+
+## CLUSTER #3
+**Cluster**: Cluster 3 (1414 samples), mid-value
+  - purchase_value: within range (+0.4σ)
+  - age: within range (-0.3σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.36  (close match ✓)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=0.7, age=-0.5, sex=M, source=Direct, browser=Chrome, IP_country=United States, month_purchase=February, weekday_purchase=Saturday
+Neighbor 2: purchase_value=0.3, age=-0.4, sex=M, source=Direct, browser=Chrome, IP_country=Unknown, month_purchase=March, weekday_purchase=Tuesday
+Neighbor 3: purchase_value=0.4, age=-0.7, sex=M, source=Ads, browser=Chrome, IP_country=China, month_purchase=August, weekday_purchase=Monday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.361
+  gt_label: 0  (NORMAL)
+  category: hard_negative_type2
+  topk_spread: 0.025058642003899477
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 2809ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -0.3
+  - age: -0.7
+
+[Categorical Features]
+  - sex: M
+  - source: SEO
+  - browser: IE
+
+[Additional Context]
+  - weekday_purchase: Sunday
+  - month_purchase: May
+  - IP_country: United States
+
+## CLUSTER #59
+**Cluster**: Cluster 59 (1283 samples), mid-value, sex=M
+  - purchase_value: within range (-0.3σ)
+  - age: within range (-0.7σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.35  (close match ✓)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=-0.4, age=-0.8, sex=M, source=SEO, browser=IE, IP_country=United States, month_purchase=April, weekday_purchase=Thursday
+Neighbor 2: purchase_value=-0.8, age=-0.7, sex=M, source=SEO, browser=IE, IP_country=United States, month_purchase=March, weekday_purchase=Monday
+Neighbor 3: purchase_value=-0.5, age=-0.7, sex=F, source=Direct, browser=IE, IP_country=United States, month_purchase=May, weekday_purchase=Sunday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.348
+  gt_label: 0  (NORMAL)
+  category: boundary_distance
+  topk_spread: 0.11893284946457314
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "purchase_value and age within range, source matches"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1775ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -0.1
+  - age: 0.6
+
+[Categorical Features]
+  - sex: M
+  - source: SEO
+  - browser: FireFox
+
+[Additional Context]
+  - weekday_purchase: Thursday
+  - month_purchase: June
+  - IP_country: United States
+
+## CLUSTER #16
+**Cluster**: Cluster 16 (1406 samples), mid-value, sex=M
+  - purchase_value: within range (-0.3σ)
+  - age: within range (+0.5σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.40  (moderate match)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=0.5, age=-0.7, sex=M, source=SEO, browser=FireFox, IP_country=United Kingdom, month_purchase=August, weekday_purchase=Saturday
+Neighbor 2: purchase_value=0.7, age=-0.1, sex=F, source=SEO, browser=FireFox, IP_country=United Kingdom, month_purchase=August, weekday_purchase=Saturday
+Neighbor 3: purchase_value=-0.3, age=0.2, sex=M, source=SEO, browser=FireFox, IP_country=United States, month_purchase=April, weekday_purchase=Tuesday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.396
+  gt_label: 0  (NORMAL)
+  category: hard_negative_type2
+  topk_spread: 0.05275278371301881
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "purchase_value and age within range, source matches"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1768ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -1.2
+  - age: 0.8
+
+[Categorical Features]
+  - sex: M
+  - source: SEO
+  - browser: IE
+
+[Additional Context]
+  - weekday_purchase: Sunday
+  - month_purchase: January
+  - IP_country: Unknown
+
+## CLUSTER #33
+**Cluster**: Cluster 33 (1482 samples), mid-value
+  - purchase_value: mildly off (-1.3σ below mean)
+  - age: within range (+0.6σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-1)
+Top-1 distance(norm): 0.80  (distant match ⚠)
+Neighbor spread: n/a (only top-1)
+
+Neighbor 1: purchase_value=1.9, age=0.7, sex=M, source=SEO, browser=IE, IP_country=China, month_purchase=August, weekday_purchase=Saturday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.797
+  gt_label: 1  (ABNORMAL)
+  category: hard_negative_type1
+  topk_spread: 0.009740580854338064
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "confident", "cls": "ABNORMAL", "what_missing": null}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "ABNORMAL", "what_missing": "purchase_value, source"}'
+
+  (추론 1738ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: ABNORMAL
+{
+  "cls": "ABNORMAL",
+  "what_missing": "purchase_value, source"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: 0.6
+  - age: -1.1
+
+[Categorical Features]
+  - sex: F
+  - source: SEO
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Wednesday
+  - month_purchase: September
+  - IP_country: Unknown
+
+## CLUSTER #33
+**Cluster**: Cluster 33 (1482 samples), mid-value
+  - purchase_value: within range (+0.4σ)
+  - age: mildly off (-1.1σ below mean)
+
+## RETRIEVED NORMAL NEIGHBORS (top-1)
+Top-1 distance(norm): 0.35  (close match ✓)
+Neighbor spread: n/a (only top-1)
+
+Neighbor 1: purchase_value=-0.7, age=-1.3, sex=F, source=SEO, browser=Chrome, IP_country=Japan, month_purchase=September, weekday_purchase=Tuesday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.346
+  gt_label: 0  (NORMAL)
+  category: boundary_distance
+  topk_spread: 0.04991503509899033
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "purchase_value and age close to cluster range, source matches"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1747ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: 0.7
+  - age: -1.3
+
+[Categorical Features]
+  - sex: F
+  - source: Ads
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Wednesday
+  - month_purchase: June
+  - IP_country: United States
+
+## CLUSTER #97
+**Cluster**: Cluster 97 (1020 samples), mid-value
+  - purchase_value: within range (+0.6σ)
+  - age: mildly off (-1.3σ below mean)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.39  (moderate match)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=0.3, age=-1.8, sex=F, source=SEO, browser=Chrome, IP_country=United States, month_purchase=July, weekday_purchase=Thursday
+Neighbor 2: purchase_value=2.0, age=-0.9, sex=F, source=Direct, browser=Chrome, IP_country=United States, month_purchase=April, weekday_purchase=Thursday
+Neighbor 3: purchase_value=-0.3, age=0.1, sex=F, source=Ads, browser=IE, IP_country=United States, month_purchase=April, weekday_purchase=Thursday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.395
+  gt_label: 0  (NORMAL)
+  category: hard_negative_type2
+  topk_spread: 0.023097844919946736
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "age and purchase_value close to mean, source matches"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1764ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: 1.3
+  - age: 2.9
+
+[Categorical Features]
+  - sex: M
+  - source: SEO
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Tuesday
+  - month_purchase: January
+  - IP_country: India
+
+## CLUSTER #78
+**Cluster**: Cluster 78 (828 samples), mid-value, IP_country=Unknown
+  - purchase_value: mildly off (+1.2σ above mean)
+  - age: EXTREME (+2.8σ above mean)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.85  (distant match ⚠)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=1.3, age=2.2, sex=M, source=SEO, browser=Chrome, IP_country=United States, month_purchase=May, weekday_purchase=Tuesday
+Neighbor 2: purchase_value=-0.7, age=1.4, sex=F, source=Direct, browser=Chrome, IP_country=India, month_purchase=May, weekday_purchase=Tuesday
+Neighbor 3: purchase_value=0.1, age=-1.2, sex=M, source=SEO, browser=Chrome, IP_country=India, month_purchase=September, weekday_purchase=Friday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.853
+  gt_label: 1  (ABNORMAL)
+  category: hard_negative_type2
+  topk_spread: 0.053544031362508085
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "confident", "cls": "ABNORMAL", "what_missing": null}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "ABNORMAL", "what_missing": "age far above range, IP_country mismatch"}'
+
+  (추론 2054ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: ABNORMAL
+{
+  "cls": "ABNORMAL",
+  "what_missing": "age far above range, IP_country mismatch"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -0.8
+  - age: -0.1
+
+[Categorical Features]
+  - sex: F
+  - source: Ads
+  - browser: IE
+
+[Additional Context]
+  - weekday_purchase: Wednesday
+  - month_purchase: February
+  - IP_country: United States
+
+## CLUSTER #71
+**Cluster**: Cluster 71 (1303 samples), mid-value
+  - purchase_value: within range (-0.8σ)
+  - age: within range (-0.1σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.38  (close match ✓)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=-0.1, age=-0.1, sex=F, source=Ads, browser=IE, IP_country=Brazil, month_purchase=July, weekday_purchase=Thursday
+Neighbor 2: purchase_value=-0.8, age=-0.5, sex=F, source=Ads, browser=IE, IP_country=Unknown, month_purchase=June, weekday_purchase=Thursday
+Neighbor 3: purchase_value=-1.0, age=-0.8, sex=M, source=SEO, browser=IE, IP_country=United States, month_purchase=March, weekday_purchase=Monday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.382
+  gt_label: 0  (NORMAL)
+  category: hard_negative_type1
+  topk_spread: 0.03553872128187618
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1741ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: 1.1
+  - age: -0.0
+
+[Categorical Features]
+  - sex: M
+  - source: Ads
+  - browser: Safari
+
+[Additional Context]
+  - weekday_purchase: Thursday
+  - month_purchase: August
+  - IP_country: Japan
+
+## CLUSTER #11
+**Cluster**: Cluster 11 (1125 samples), mid-value, browser=Safari, sex=M
+  - purchase_value: mildly off (+1.2σ above mean)
+  - age: within range (+0.1σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.44  (moderate match)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=1.7, age=-0.1, sex=F, source=Ads, browser=Safari, IP_country=United States, month_purchase=April, weekday_purchase=Wednesday
+Neighbor 2: purchase_value=0.8, age=-0.9, sex=M, source=SEO, browser=Safari, IP_country=Finland, month_purchase=August, weekday_purchase=Monday
+Neighbor 3: purchase_value=-0.1, age=1.1, sex=F, source=Ads, browser=Safari, IP_country=Unknown, month_purchase=August, weekday_purchase=Saturday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.445
+  gt_label: 0  (NORMAL)
+  category: boundary_distance
+  topk_spread: 0.024877101218527212
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "purchase_value and age close to mean, source matches"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1784ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -1.0
+  - age: -0.4
+
+[Categorical Features]
+  - sex: M
+  - source: Ads
+  - browser: IE
+
+[Additional Context]
+  - weekday_purchase: Thursday
+  - month_purchase: May
+  - IP_country: United States
+
+## CLUSTER #58
+**Cluster**: Cluster 58 (1250 samples), mid-value, source=Ads, sex=M
+  - purchase_value: within range (-0.9σ)
+  - age: within range (-0.2σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.42  (moderate match)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=-1.3, age=-0.9, sex=F, source=Ads, browser=Chrome, IP_country=United States, month_purchase=February, weekday_purchase=Friday
+Neighbor 2: purchase_value=-0.6, age=-1.5, sex=M, source=Ads, browser=IE, IP_country=United States, month_purchase=July, weekday_purchase=Monday
+Neighbor 3: purchase_value=0.8, age=-0.5, sex=M, source=Ads, browser=Chrome, IP_country=United States, month_purchase=March, weekday_purchase=Sunday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.421
+  gt_label: 0  (NORMAL)
+  category: hard_negative_type2
+  topk_spread: 0.035970358055254684
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1763ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -1.1
+  - age: -0.7
+
+[Categorical Features]
+  - sex: M
+  - source: SEO
+  - browser: FireFox
+
+[Additional Context]
+  - weekday_purchase: Saturday
+  - month_purchase: September
+  - IP_country: Romania
+
+## CLUSTER #84
+**Cluster**: Cluster 84 (1109 samples), mid-value
+  - purchase_value: mildly off (-1.2σ below mean)
+  - age: within range (-0.6σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.31  (close match ✓)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=-1.3, age=-0.2, sex=M, source=SEO, browser=FireFox, IP_country=Russian Federation, month_purchase=August, weekday_purchase=Saturday
+Neighbor 2: purchase_value=-1.3, age=-1.3, sex=M, source=SEO, browser=FireFox, IP_country=Unknown, month_purchase=April, weekday_purchase=Friday
+Neighbor 3: purchase_value=0.0, age=-0.9, sex=M, source=SEO, browser=FireFox, IP_country=Austria, month_purchase=June, weekday_purchase=Sunday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.311
+  gt_label: 0  (NORMAL)
+  category: hard_negative_type1
+  topk_spread: 0.06023171815857284
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "purchase_value, age within range; source, browser match"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1775ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: 0.3
+  - age: 0.2
+
+[Categorical Features]
+  - sex: F
+  - source: Direct
+  - browser: IE
+
+[Additional Context]
+  - weekday_purchase: Saturday
+  - month_purchase: September
+  - IP_country: Unknown
+
+## CLUSTER #33
+**Cluster**: Cluster 33 (1482 samples), mid-value
+  - purchase_value: within range (+0.1σ)
+  - age: within range (+0.1σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-1)
+Top-1 distance(norm): 0.68  (distant match ⚠)
+Neighbor spread: n/a (only top-1)
+
+Neighbor 1: purchase_value=0.5, age=0.6, sex=F, source=Direct, browser=IE, IP_country=Unknown, month_purchase=March, weekday_purchase=Tuesday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.682
+  gt_label: 1  (ABNORMAL)
+  category: boundary_distance
+  topk_spread: 0.10436226471596793
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "confident", "cls": "ABNORMAL", "what_missing": null}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "ABNORMAL", "what_missing": "purchase_value, age, source"}'
+
+  (추론 1888ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: ABNORMAL
+{
+  "cls": "ABNORMAL",
+  "what_missing": "purchase_value, age, source"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -0.8
+  - age: -0.0
+
+[Categorical Features]
+  - sex: F
+  - source: Direct
+  - browser: IE
+
+[Additional Context]
+  - weekday_purchase: Friday
+  - month_purchase: March
+  - IP_country: China
+
+## CLUSTER #34
+**Cluster**: Cluster 34 (1333 samples), mid-value, browser=FireFox, sex=M
+  - purchase_value: within range (-0.7σ)
+  - age: within range (+0.1σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-1)
+Top-1 distance(norm): 0.62  (moderate match)
+Neighbor spread: n/a (only top-1)
+
+Neighbor 1: purchase_value=0.3, age=-0.0, sex=M, source=Direct, browser=IE, IP_country=China, month_purchase=May, weekday_purchase=Monday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.617
+  gt_label: 1  (ABNORMAL)
+  category: hard_negative_type1
+  topk_spread: 0.038469438214262394
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "confident", "cls": "ABNORMAL", "what_missing": null}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "ABNORMAL", "what_missing": "purchase_value, sex"}'
+
+  (추론 1729ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: ABNORMAL
+{
+  "cls": "ABNORMAL",
+  "what_missing": "purchase_value, sex"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: 1.0
+  - age: 0.7
+
+[Categorical Features]
+  - sex: F
+  - source: Ads
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Sunday
+  - month_purchase: January
+  - IP_country: Brazil
+
+## CLUSTER #27
+**Cluster**: Cluster 27 (1046 samples), mid-value, source=Ads
+  - purchase_value: mildly off (+1.6σ above mean)
+  - age: within range (+0.9σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-1)
+Top-1 distance(norm): 0.63  (distant match ⚠)
+Neighbor spread: n/a (only top-1)
+
+Neighbor 1: purchase_value=1.3, age=1.0, sex=M, source=Ads, browser=IE, IP_country=United States, month_purchase=July, weekday_purchase=Monday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.635
+  gt_label: 1  (ABNORMAL)
+  category: boundary_distance
+  topk_spread: 0.0801986337902556
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "confident", "cls": "ABNORMAL", "what_missing": null}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "ABNORMAL", "what_missing": "purchase_value, source, browser, IP_country"}'
+
+  (추론 2111ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: ABNORMAL
+{
+  "cls": "ABNORMAL",
+  "what_missing": "purchase_value, source, browser, IP_country"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: 0.7
+  - age: -0.0
+
+[Categorical Features]
+  - sex: F
+  - source: SEO
+  - browser: IE
+
+[Additional Context]
+  - weekday_purchase: Wednesday
+  - month_purchase: May
+  - IP_country: Unknown
+
+## CLUSTER #48
+**Cluster**: Cluster 48 (1223 samples), mid-value
+  - purchase_value: within range (+0.8σ)
+  - age: within range (+0.0σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.51  (moderate match)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=0.9, age=-0.7, sex=M, source=SEO, browser=FireFox, IP_country=Brazil, month_purchase=September, weekday_purchase=Monday
+Neighbor 2: purchase_value=-0.4, age=-1.3, sex=F, source=SEO, browser=IE, IP_country=Unknown, month_purchase=October, weekday_purchase=Monday
+Neighbor 3: purchase_value=-0.7, age=-0.8, sex=M, source=SEO, browser=IE, IP_country=Unknown, month_purchase=September, weekday_purchase=Tuesday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.511
+  gt_label: 0  (NORMAL)
+  category: hard_negative_type1
+  topk_spread: 0.0302931443108544
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1762ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -0.4
+  - age: 0.3
+
+[Categorical Features]
+  - sex: M
+  - source: SEO
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Wednesday
+  - month_purchase: January
+  - IP_country: Unknown
+
+## CLUSTER #3
+**Cluster**: Cluster 3 (1414 samples), mid-value
+  - purchase_value: within range (-0.4σ)
+  - age: within range (+0.5σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-1)
+Top-1 distance(norm): 0.53  (moderate match)
+Neighbor spread: n/a (only top-1)
+
+Neighbor 1: purchase_value=0.3, age=0.9, sex=M, source=SEO, browser=IE, IP_country=Switzerland, month_purchase=June, weekday_purchase=Tuesday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.526
+  gt_label: 1  (ABNORMAL)
+  category: hard_negative_type1
+  topk_spread: 0.04746688966974646
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "ABNORMAL", "what_missing": "purchase_value, browser, IP_country"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "ABNORMAL", "what_missing": "purchase_value, source"}'
+
+  (추론 1730ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: ABNORMAL
+{
+  "cls": "ABNORMAL",
+  "what_missing": "purchase_value, source"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -1.0
+  - age: 0.3
+
+[Categorical Features]
+  - sex: F
+  - source: SEO
+  - browser: IE
+
+[Additional Context]
+  - weekday_purchase: Thursday
+  - month_purchase: January
+  - IP_country: United States
+
+## CLUSTER #9
+**Cluster**: Cluster 9 (1591 samples), mid-value
+  - purchase_value: mildly off (-1.1σ below mean)
+  - age: within range (+0.3σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-1)
+Top-1 distance(norm): 0.67  (distant match ⚠)
+Neighbor spread: n/a (only top-1)
+
+Neighbor 1: purchase_value=-0.9, age=0.2, sex=F, source=SEO, browser=IE, IP_country=United States, month_purchase=July, weekday_purchase=Friday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.675
+  gt_label: 1  (ABNORMAL)
+  category: boundary_distance
+  topk_spread: 0.04139583730027742
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "confident", "cls": "ABNORMAL", "what_missing": null}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "ABNORMAL", "what_missing": "purchase_value far below range, IP_country mismatch"}'
+
+  (추론 2125ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: ABNORMAL
+{
+  "cls": "ABNORMAL",
+  "what_missing": "purchase_value far below range, IP_country mismatch"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -0.8
+  - age: 1.4
+
+[Categorical Features]
+  - sex: F
+  - source: Ads
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Saturday
+  - month_purchase: July
+  - IP_country: South Africa
+
+## CLUSTER #53
+**Cluster**: Cluster 53 (1079 samples), mid-value
+  - purchase_value: within range (-0.8σ)
+  - age: mildly off (+1.2σ above mean)
+
+## RETRIEVED NORMAL NEIGHBORS (top-1)
+Top-1 distance(norm): 0.53  (moderate match)
+Neighbor spread: n/a (only top-1)
+
+Neighbor 1: purchase_value=-1.3, age=-0.0, sex=F, source=Ads, browser=Chrome, IP_country=Viet Nam, month_purchase=August, weekday_purchase=Monday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.528
+  gt_label: 0  (NORMAL)
+  category: hard_negative_type2
+  topk_spread: 0.016300425469613373
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "ambiguous", "cls": "NORMAL", "what_missing": "purchase_value, age, source, browser"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "purchase_value and age within range, source matches"}'
+
+  (추론 2062ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "purchase_value and age within range, source matches"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: 0.6
+  - age: -0.6
+
+[Categorical Features]
+  - sex: F
+  - source: SEO
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Thursday
+  - month_purchase: November
+  - IP_country: Russian Federation
+
+## CLUSTER #50
+**Cluster**: Cluster 50 (1047 samples), mid-value, browser=Chrome
+  - purchase_value: within range (+0.6σ)
+  - age: within range (-0.6σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-3)
+Top-1 distance(norm): 0.17  (close match ✓)
+Neighbor spread: neighbors tightly agree ✓
+
+Neighbor 1: purchase_value=0.3, age=-0.9, sex=F, source=SEO, browser=Chrome, IP_country=United States, month_purchase=September, weekday_purchase=Friday
+Neighbor 2: purchase_value=-0.8, age=0.4, sex=M, source=SEO, browser=Chrome, IP_country=Unknown, month_purchase=September, weekday_purchase=Tuesday
+Neighbor 3: purchase_value=0.8, age=-1.5, sex=F, source=SEO, browser=Chrome, IP_country=United States, month_purchase=June, weekday_purchase=Monday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.174
+  gt_label: 0  (NORMAL)
+  category: boundary_distance
+  topk_spread: 0.12266816685255659
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "confident", "cls": "NORMAL", "what_missing": null}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1789ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================
+======================================================================
+[DEBUG] eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -0.5
+  - age: -0.4
+
+[Categorical Features]
+  - sex: M
+  - source: SEO
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Tuesday
+  - month_purchase: April
+  - IP_country: China
+
+## CLUSTER #76
+**Cluster**: Cluster 76 (967 samples), mid-value, source=Ads, sex=M
+  - purchase_value: within range (-0.4σ)
+  - age: within range (-0.4σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-1)
+Top-1 distance(norm): 0.13  (close match ✓)
+Neighbor spread: n/a (only top-1)
+
+Neighbor 1: purchase_value=-0.5, age=-0.2, sex=M, source=SEO, browser=Chrome, IP_country=Unknown, month_purchase=June, weekday_purchase=Friday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.134
+  gt_label: 0  (NORMAL)
+  category: boundary_distance
+  topk_spread: 0.27102044387804614
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "confident", "cls": "NORMAL", "what_missing": null}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1757ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================

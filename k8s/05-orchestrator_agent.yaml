@@ -22,6 +22,7 @@ data:
   ROUTER_TIMEOUT: "15"
   # RETRIEVER_TIMEOUT: "10"
   RETRIEVER_TIMEOUT: "15"
+  ANALYZER_TIMEOUT: "600"
   # ANALYZER_TIMEOUT 제거됨 — orchestrator_agentic.py는 더 이상 analyzer를
   # 직접 호출하지 않는다(controller.py가 직접 호출). PLANNER_TIMEOUT이
   # router+retriever base call 이후 controller.py(/detect, agent loop 전체)
@@ -53,6 +54,7 @@ data:
   # 응답의 key_evidence/agent_trace 표기가 일치한다 (orchestrator 자신은
   # tool을 실행하지 않으므로 동작에는 영향 없음, 표기 일관성용).
   TOOL_EXECUTION_MODE: "mcp_navtive"
+  PIPELINE_MODE: "agent"    #forward, agent
 ---
 # Deployment (Orchestrator)
 apiVersion: apps/v1

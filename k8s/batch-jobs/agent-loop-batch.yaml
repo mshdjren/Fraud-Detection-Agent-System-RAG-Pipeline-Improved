@@ -27,7 +27,7 @@ metadata:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: agent-loop-smoke-pca64-k100-v14-0709
+  name: agent-loop-smoke-0714forward
   namespace: elastic
   labels:
     app: evaluation

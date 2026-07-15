@@ -89,6 +89,9 @@ ENABLE_CONTINUOUS_BATCHING = os.getenv("ENABLE_CONTINUOUS_BATCHING", "false").lo
 
 ADAPTER_PATH = os.getenv("ADAPTER_LOCAL_DIR", "/data/adapter")
 
+ENABLE_KV_CACHE = os.getenv("ENABLE_KV_CACHE", "false").lower() == "true"
+KV_CACHE_MB     = int(os.getenv("KV_CACHE_MB", "256"))
+
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
 
@@ -146,6 +149,11 @@ def _load_model_gguf(t0: float):
         n_threads=n_threads,
         verbose=False,
     )
+    if ENABLE_KV_CACHE:                                    # ★ 추가
+        from llama_cpp import LlamaRAMCache
+        _model.set_cache(LlamaRAMCache(capacity_bytes=KV_CACHE_MB * 1024 * 1024))
+        logger.info("kv_cache_enabled", cap_mb=KV_CACHE_MB)
+    # logger.info("gguf_model_loaded", elapsed_s=f"{time.time()-t0:.1f}", path=gguf_pa
     logger.info("gguf_model_loaded", elapsed_s=f"{time.time()-t0:.1f}", path=gguf_path)
 
 
@@ -255,6 +263,10 @@ ANALYZER_DECISION_MODE = os.getenv("ANALYZER_DECISION_MODE", "det").lower()
 #   배포 단위 스위치라 per-request 플러밍 없음 — forward 전용 어댑터
 #   (GCS_FT_BASE의 forward 학습분)와 함께 configmap으로 전환한다.
 ANALYZER_TASK = os.getenv("ANALYZER_TASK", "evaluator").lower()
+# ★ [PROMPT v2] 프롬프트 레이아웃 스위치 — v2 = z-table + 합의 다이제스트 +
+#   정적 instruction 선두(KV prefix cache 정합). v2 어댑터(재학습분) 배포와
+#   반드시 함께 전환 (train-serve 정합). 기본 v1 = 현행 어댑터 포맷.
+PROMPT_VERSION = os.getenv("PROMPT_VERSION", "v1").lower()
 CLS_ND_THRESHOLD       = float(os.getenv("CLS_ND_THRESHOLD", "0.5"))   # nd>=0.5 → ABNORMAL
 
 SUFFICIENCY_BOUNDARY_LOW  = float(os.getenv("SUFFICIENCY_BOUNDARY_LOW",  "0.3"))
@@ -291,6 +303,30 @@ def build_user_prompt(
     반환값: (user_prompt, sufficiency) — sufficiency는 모델 출력이 아니라
     여기서 계산한 deterministic 값 (AnalyzeResponse.sufficiency로 그대로 사용).
     """
+    # ★ [PROMPT v2] 신 레이아웃 — prompts.py v2 빌더 재사용 (단일 소스).
+    #   top-1 feature는 retriever 결과 dict에서 직접 추출 (coreset_map 불필요,
+    #   retriever가 feature 미반환이면 합의 라인이 자동 생략됨).
+    if PROMPT_VERSION == "v2":
+        _nb = top_k_normal_results[:3]
+        # _t1 = {k: v for k, v in (_nb[0] if _nb else {}).items()
+            #    if k not in _NON_FEATURE_KEYS and v is not None} or None
+        _tk = [{k:v for k,v in nb.items() if k not in _NON_FEATURE_KEYS 
+                and v is not None} for nb in _nb[:3]]
+        _oi = [int(r.get("original_index", -1)) for r in _nb]
+        _ds = [float(r.get("distance", 0.0)) for r in _nb]
+        _builder = (prompts.build_analyzer_user_prompt_forward_v2
+                    if ANALYZER_TASK == "forward"
+                    else prompts.build_evaluator_user_prompt_v2)
+        _up = _builder(test_features=test_transaction, cluster_id=cluster_id,
+                       top5_orig_indices=_oi, distances=_ds,
+                       persona=persona, topk_feats=_tk)
+        nd = prompts.normalize_dist(top1_distance)
+        suf = _suf_from_nd(nd)
+        if ANALYZER_TASK != "forward" and ANALYZER_DECISION_MODE == "det":
+            # 주입은 가변 후미(캐시 무영향) — v2 evaluator 학습도 동일 위치
+            _up += f"\n\n[SYSTEM-COMPUTED] retrieval_sufficiency = {suf.upper()}"
+        return _up, suf, nd
+
     # ★ forward task: NB04와 동일한 프롬프트 빌더 사용 (단일 소스).
     #   SearchResult(dict) → (orig_indices, distances) 어댑터만 거친다.
     #   sufficiency/nd 반환값은 evaluator와 시그니처를 맞추기 위한 계산값

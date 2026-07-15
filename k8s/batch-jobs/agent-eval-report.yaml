@@ -1,0 +1,153 @@
+# ===========================
+# Job 2: Agent Eval Report
+#   agent_eval_report.py 실행
+#   → CSV 2개 + PNG 4개 생성 → GCS 저장
+#
+#   ★ Job 1 완료 후 수동 실행이 기본.
+#     자동화가 필요하면 Argo Workflow 또는 initContainer 패턴 사용.
+#     현재는 단순하게 GCS에서 report.json을 다운로드해서 그래프만 생성.
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agent-eval-report-0714forward
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: agentic-eval
+    pipeline: agent-loop
+    step: report
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        pipeline: agent-loop
+        step: report
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: evaluation-sa
+              topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: agent-eval-report
+        image: python:3.10-slim
+
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: GCS_OUTPUT_BUCKET
+          value: "gs://fraud_ecomm/evaluation/agent-eval"
+
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Agent Eval Report — 수치/표/그래프 생성"
+          echo "  experiment_case : ${EXPERIMENT_CASE}"
+          echo "  GCS 경로        : ${GCS_OUTPUT_BUCKET}"
+          echo "================================================"
+
+          pip install --no-cache-dir \
+            numpy pandas pyarrow \
+            scikit-learn matplotlib \
+            google-cloud-storage
+
+          cd /app
+
+          # GCS에서 추론 결과 다운로드
+          python3 -c "
+          import os
+          from google.cloud import storage
+          bucket_url = os.environ.get('GCS_OUTPUT_BUCKET', '').replace('gs://', '')
+          bucket_name, *prefix_parts = bucket_url.split('/')
+          prefix = '/'.join(prefix_parts)
+          client = storage.Client()
+          bucket = client.bucket(bucket_name)
+          os.makedirs('/results', exist_ok=True)
+          for fname in ['agent_eval_report.json']:
+              blob = bucket.blob(f'{prefix}/{fname}')
+              blob.download_to_filename(f'/results/{fname}')
+              print(f'[GCS] downloaded: {fname}')
+          "
+
+          # 리포트 생성 (수치 출력 + CSV + PNG 4종)
+          python agent_eval_report.py \
+            --report-path /results/agent_eval_report.json \
+            --output-dir  /results/plots
+
+          echo "--- 생성된 파일 ---"
+          ls -lh /results/plots/ 2>/dev/null || echo "(plots 디렉토리 없음)"
+          ls -lh /results/*.csv  2>/dev/null || echo "(csv 없음)"
+
+          # 그래프/CSV GCS 업로드
+          python3 -c "
+          import os
+          from google.cloud import storage
+          bucket_url = os.environ.get('GCS_OUTPUT_BUCKET', '').replace('gs://', '')
+          bucket_name, *prefix_parts = bucket_url.split('/')
+          prefix = '/'.join(prefix_parts)
+          client = storage.Client()
+          bucket = client.bucket(bucket_name)
+          upload_paths = []
+          for d, _, files in os.walk('/results'):
+              for f in files:
+                  if f.endswith(('.png', '.csv')):
+                      upload_paths.append(os.path.join(d, f))
+          for fpath in upload_paths:
+              rel = os.path.relpath(fpath, '/results')
+              blob = bucket.blob(f'{prefix}/{rel}')
+              blob.upload_from_filename(fpath)
+              print(f'[GCS] uploaded: {rel}')
+          "
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: agent-eval-code-volume
+          mountPath: /app/agent_eval_report.py
+          subPath: agent_eval_report.py
+        - name: agent-eval-code-volume
+          mountPath: /app/agent_eval_metrics.py
+          subPath: agent_eval_metrics.py
+        - name: agent-eval-code-volume
+          mountPath: /app/agent_latency.py
+          subPath: agent_latency.py
+
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: agent-eval-code-volume
+        configMap:
+          name: evaluation-agent-eval-code

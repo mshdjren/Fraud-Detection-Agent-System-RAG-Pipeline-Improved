@@ -10,7 +10,7 @@ metadata:
 
 ---
 # ConfigMap (환경 변수용)
-apiVersion: v1
+apiVersion: v1  
 kind: ConfigMap
 metadata:
   name: anomaly-orchestrator-config

@@ -1,0 +1,4058 @@
+[
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.365",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 19,
+    "top_5_clusters": [
+      {
+        "cluster_id": 19,
+        "rank": 1,
+        "score": 0.6787488460540771
+      },
+      {
+        "cluster_id": 66,
+        "rank": 2,
+        "score": 0.6086248159408569
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.6787488460540771,
+    "top_1_distance": 1.3649460091934704,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 138.61727714538574,
+      "controller_agent_loop": 81854.7248840332,
+      "total": 81993.82281303406
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.3649460091934704,
+        "cluster_id": 19,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4466,
+        "gate_plateau": 0.0489,
+        "gate_ratio": 0.8967,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 82018.93559796736,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 25525,
+    "_gt_label": 1,
+    "_category": "boundary",
+    "_nb_nd": 0.4863212266781089,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"IP_country, source mismatch\"}"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.494",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 63,
+    "top_5_clusters": [
+      {
+        "cluster_id": 63,
+        "rank": 1,
+        "score": 0.6424961686134338
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.6424961686134338,
+    "top_1_distance": 1.4937399172846593,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp_navtive",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 122.45655059814453,
+      "controller_agent_loop": 91182.45577812195,
+      "total": 91305.29403686523
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.4937399172846593,
+        "cluster_id": 63,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.5295,
+        "gate_plateau": 0.0361,
+        "gate_ratio": 0.0,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.4937399172846593,
+        "cluster_id": 63,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 91346.66552697308,
+    "_round0_classification": "ABNORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 25535,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.6376569518143205,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=null",
+    "key_evidence": [
+      "track=deep",
+      "top1=0.802",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 13,
+    "top_5_clusters": [
+      {
+        "cluster_id": 13,
+        "rank": 1,
+        "score": 3.6697252
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 3.6697252,
+    "top_1_distance": 0.802152698164286,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 365.38100242614746,
+      "controller_agent_loop": 67184.31329727173,
+      "total": 67550.07433891296
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 0.802152698164286,
+        "cluster_id": 13,
+        "cls": "NORMAL",
+        "sufficiency": "confident",
+        "what_missing": "null",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 67559.20982197858,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 25630,
+    "_gt_label": 0,
+    "_category": "easy_low",
+    "_nb_nd": 0.11141256307461946,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.068",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 77,
+    "top_5_clusters": [
+      {
+        "cluster_id": 77,
+        "rank": 1,
+        "score": 0.816412627696991
+      },
+      {
+        "cluster_id": 14,
+        "rank": 2,
+        "score": 0.7935856580734253
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.816412627696991,
+    "top_1_distance": 1.0676158686805375,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 123.59809875488281,
+      "controller_agent_loop": 67104.46763038635,
+      "total": 67228.39093208313
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.0676158686805375,
+        "cluster_id": 77,
+        "cls": "NORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 67236.84437200427,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 25633,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.37983406714273643,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"boundary distance; expand evidence\"}"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.497",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 65,
+    "top_5_clusters": [
+      {
+        "cluster_id": 65,
+        "rank": 1,
+        "score": 4.099077
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 4.099077,
+    "top_1_distance": 1.4968821892980546,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp_navtive",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 128.1263828277588,
+      "controller_agent_loop": 75587.36157417297,
+      "total": 75716.17031097412
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.4968821892980546,
+        "cluster_id": 65,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.5315,
+        "gate_plateau": 0.0252,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.4968821892980546,
+        "cluster_id": 65,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 75724.40622397698,
+    "_round0_classification": "ABNORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 25658,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.8794404714500059,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range, source matches",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.336",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 33,
+    "top_5_clusters": [
+      {
+        "cluster_id": 53,
+        "rank": 1,
+        "score": 0.7974985837936401
+      },
+      {
+        "cluster_id": 33,
+        "rank": 2,
+        "score": 0.7969242334365845
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.7974985837936401,
+    "top_1_distance": 1.33598762465216,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_53->33",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 127.30288505554199,
+      "controller_agent_loop": 132768.77427101135,
+      "total": 132896.50654792786
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.33598762465216,
+        "cluster_id": 53,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4281,
+        "gate_plateau": 0.0495,
+        "gate_ratio": 0.9993,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.33598762465216,
+        "cluster_id": 33,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range, source matches",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 132904.4710160233,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 25786,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.6150884235777889,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.424",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 10,
+    "top_5_clusters": [
+      {
+        "cluster_id": 31,
+        "rank": 1,
+        "score": 0.8684872388839722
+      },
+      {
+        "cluster_id": 10,
+        "rank": 2,
+        "score": 0.8093076944351196
+      },
+      {
+        "cluster_id": 22,
+        "rank": 3,
+        "score": 0.7988712787628174
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8684872388839722,
+    "top_1_distance": 1.4240572123456081,
+    "top_k": 3,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_31->10",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 122.24030494689941,
+      "controller_agent_loop": 132404.3161869049,
+      "total": 132526.91054344177
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.3430492513683572,
+        "cluster_id": 31,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range, source matches",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4326,
+        "gate_plateau": 0.0367,
+        "gate_ratio": 0.9319,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.4240572123456081,
+        "cluster_id": 10,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 132535.34475900233,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 25835,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.5818922277666534,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.318",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 9,
+    "top_5_clusters": [
+      {
+        "cluster_id": 9,
+        "rank": 1,
+        "score": 5.381857
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 5.381857,
+    "top_1_distance": 1.3180986407016875,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 126.58500671386719,
+      "controller_agent_loop": 67978.34897041321,
+      "total": 68105.51333427429
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.3180986407016875,
+        "cluster_id": 9,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4169,
+        "gate_plateau": 0.0394,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 68114.28937397432,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 25937,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.6786473256176763,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close, source matches",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.264",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 43,
+    "top_5_clusters": [
+      {
+        "cluster_id": 43,
+        "rank": 1,
+        "score": 0.7479928731918335
+      },
+      {
+        "cluster_id": 54,
+        "rank": 2,
+        "score": 0.6782119870185852
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.7479928731918335,
+    "top_1_distance": 1.2637857215216024,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 120.95475196838379,
+      "controller_agent_loop": 68125.61464309692,
+      "total": 68247.05576896667
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2637857215216024,
+        "cluster_id": 43,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close, source matches",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3832,
+        "gate_plateau": 0.0382,
+        "gate_ratio": 0.9067,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 68255.35946898162,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26040,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.309129651013277,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"browser mismatch, weekday and month different\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.295",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 1,
+    "top_5_clusters": [
+      {
+        "cluster_id": 1,
+        "rank": 1,
+        "score": 0.7165305614471436
+      },
+      {
+        "cluster_id": 56,
+        "rank": 2,
+        "score": 0.6235106587409973
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.7165305614471436,
+    "top_1_distance": 1.2952664887690004,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 124.53150749206543,
+      "controller_agent_loop": 68456.55107498169,
+      "total": 68581.47692680359
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2952664887690004,
+        "cluster_id": 1,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4026,
+        "gate_plateau": 0.0493,
+        "gate_ratio": 0.8702,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 68589.5397439599,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26055,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.6441745055241814,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.089",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 21,
+    "top_5_clusters": [
+      {
+        "cluster_id": 21,
+        "rank": 1,
+        "score": 0.8032370209693909
+      },
+      {
+        "cluster_id": 90,
+        "rank": 2,
+        "score": 0.7791366577148438
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8032370209693909,
+    "top_1_distance": 1.0887212540291842,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 117.30027198791504,
+      "controller_agent_loop": 66701.00617408752,
+      "total": 66818.65859031677
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.0887212540291842,
+        "cluster_id": 21,
+        "cls": "NORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 66827.9919240158,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26075,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.3090247021601787,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"boundary distance; expand evidence\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range, source matches",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.311",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 29,
+    "top_5_clusters": [
+      {
+        "cluster_id": 95,
+        "rank": 1,
+        "score": 0.8246768712997437
+      },
+      {
+        "cluster_id": 29,
+        "rank": 2,
+        "score": 0.8030570149421692
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8246768712997437,
+    "top_1_distance": 1.3111657607402458,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_95->29",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 142.00997352600098,
+      "controller_agent_loop": 152569.75626945496,
+      "total": 152771.77572250366
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.3111657607402458,
+        "cluster_id": 95,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range, source matches",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4125,
+        "gate_plateau": 0.0395,
+        "gate_ratio": 0.9738,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.3111657607402458,
+        "cluster_id": 29,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range, source matches",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 152783.99850206915,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26111,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.302431243616852,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"boundary distance; expand evidence\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.283",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 75,
+    "top_5_clusters": [
+      {
+        "cluster_id": 75,
+        "rank": 1,
+        "score": 4.2859426
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 4.2859426,
+    "top_1_distance": 1.2831117135439942,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 236.50169372558594,
+      "controller_agent_loop": 67446.50554656982,
+      "total": 67683.84194374084
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2831117135439942,
+        "cluster_id": 75,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3951,
+        "gate_plateau": 0.0133,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 67695.90028596576,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26156,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.6254221844334058,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=null",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.087",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 29,
+    "top_5_clusters": [
+      {
+        "cluster_id": 29,
+        "rank": 1,
+        "score": 3.836029
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 3.836029,
+    "top_1_distance": 1.087299667718205,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 197.84951210021973,
+      "controller_agent_loop": 66357.59735107422,
+      "total": 66555.79948425293
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.087299667718205,
+        "cluster_id": 29,
+        "cls": "NORMAL",
+        "sufficiency": "confident",
+        "what_missing": "null",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 66564.72650996875,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26299,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.3350186136476523,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"sex, weekday, month\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=age, source",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.229",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 77,
+    "top_5_clusters": [
+      {
+        "cluster_id": 14,
+        "rank": 1,
+        "score": 0.8488389253616333
+      },
+      {
+        "cluster_id": 77,
+        "rank": 2,
+        "score": 0.8253065347671509
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8488389253616333,
+    "top_1_distance": 1.228655076421399,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_14->77",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 117.29240417480469,
+      "controller_agent_loop": 132684.81421470642,
+      "total": 132802.44851112366
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.228655076421399,
+        "cluster_id": 14,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.362,
+        "gate_plateau": 0.0605,
+        "gate_ratio": 0.9723,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.228655076421399,
+        "cluster_id": 77,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "age, source",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 132811.58449291252,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26321,
+    "_gt_label": 1,
+    "_category": "boundary",
+    "_nb_nd": 0.5254665995154201,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"purchase_value, IP_country, month_purchase\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.126",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 56,
+    "top_5_clusters": [
+      {
+        "cluster_id": 56,
+        "rank": 1,
+        "score": 0.8150389194488525
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8150389194488525,
+    "top_1_distance": 1.1256898252592429,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 128.1299591064453,
+      "controller_agent_loop": 69085.98232269287,
+      "total": 69214.73574638367
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.1256898252592429,
+        "cluster_id": 56,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.303,
+        "gate_plateau": 0.1363,
+        "gate_ratio": 0.0,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 69226.38850507792,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26322,
+    "_gt_label": 1,
+    "_category": "boundary",
+    "_nb_nd": 0.38550196488704386,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"purchase_value, weekday_purchase, month_purchase\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.183",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 81,
+    "top_5_clusters": [
+      {
+        "cluster_id": 81,
+        "rank": 1,
+        "score": 4.6557775
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 4.6557775,
+    "top_1_distance": 1.1828503573554752,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 113.88015747070312,
+      "controller_agent_loop": 69697.43657112122,
+      "total": 69812.02244758606
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.1828503573554752,
+        "cluster_id": 81,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3351,
+        "gate_plateau": 0.0425,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 69819.63250401895,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26324,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.4686372995019123,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"ABNORMAL\", \"what_missing\": \"boundary distance; expand evidence\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.203",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 91,
+    "top_5_clusters": [
+      {
+        "cluster_id": 91,
+        "rank": 1,
+        "score": 6.383217
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 6.383217,
+    "top_1_distance": 1.202916490189496,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 116.38212203979492,
+      "controller_agent_loop": 65537.22977638245,
+      "total": 65654.09302711487
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.202916490189496,
+        "cluster_id": 91,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3468,
+        "gate_plateau": 0.0376,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 65663.2764399983,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26325,
+    "_gt_label": 1,
+    "_category": "boundary",
+    "_nb_nd": 0.47444753581871724,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"month_purchase, weekday_purchase, IP_country\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=0.961",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 46,
+    "top_5_clusters": [
+      {
+        "cluster_id": 46,
+        "rank": 1,
+        "score": 6.8238845
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 6.8238845,
+    "top_1_distance": 0.9608258930545759,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 112.95461654663086,
+      "controller_agent_loop": 63136.378049850464,
+      "total": 63249.75943565369
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 0.9608258930545759,
+        "cluster_id": 46,
+        "cls": "NORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 63256.65994908195,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26329,
+    "_gt_label": 0,
+    "_category": "easy_low",
+    "_nb_nd": 0.20517467729371278,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and source close to cluster median",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.304",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 83,
+    "top_5_clusters": [
+      {
+        "cluster_id": 83,
+        "rank": 1,
+        "score": 4.099077
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 4.099077,
+    "top_1_distance": 1.3040928209140854,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 139.37878608703613,
+      "controller_agent_loop": 69283.91933441162,
+      "total": 69423.8440990448
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.3040928209140854,
+        "cluster_id": 83,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and source close to cluster median",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4081,
+        "gate_plateau": 0.0286,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 69431.68966297526,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26366,
+    "_gt_label": 0,
+    "_category": "easy_high",
+    "_nb_nd": 0.6576311449432642,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=age, source",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.234",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 61,
+    "top_5_clusters": [
+      {
+        "cluster_id": 61,
+        "rank": 1,
+        "score": 0.8448869585990906
+      },
+      {
+        "cluster_id": 80,
+        "rank": 2,
+        "score": 0.739180862903595
+      },
+      {
+        "cluster_id": 0,
+        "rank": 3,
+        "score": 0.738714873790741
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8448869585990906,
+    "top_1_distance": 1.2337422234961657,
+    "top_k": 3,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 406.84008598327637,
+      "controller_agent_loop": 69635.40840148926,
+      "total": 70042.74201393127
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2337422234961657,
+        "cluster_id": 61,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "age, source",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.365,
+        "gate_plateau": 0.077,
+        "gate_ratio": 0.8749,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 70053.50165697746,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26382,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.36680517359660003,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"boundary distance; expand evidence\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.228",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 67,
+    "top_5_clusters": [
+      {
+        "cluster_id": 67,
+        "rank": 1,
+        "score": 3.5301032
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 3.5301032,
+    "top_1_distance": 1.2276912579419763,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 114.19081687927246,
+      "controller_agent_loop": 70094.74682807922,
+      "total": 70209.45596694946
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2276912579419763,
+        "cluster_id": 67,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3614,
+        "gate_plateau": 0.1508,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 70217.59013296105,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26420,
+    "_gt_label": 1,
+    "_category": "boundary",
+    "_nb_nd": 0.5382791413835127,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"sex, weekday, month\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.248",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 44,
+    "top_5_clusters": [
+      {
+        "cluster_id": 44,
+        "rank": 1,
+        "score": 0.8329168558120728
+      },
+      {
+        "cluster_id": 74,
+        "rank": 2,
+        "score": 0.6257335543632507
+      },
+      {
+        "cluster_id": 86,
+        "rank": 3,
+        "score": 0.554343581199646
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8329168558120728,
+    "top_1_distance": 1.2484059643046814,
+    "top_k": 3,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 149.75786209106445,
+      "controller_agent_loop": 68782.2847366333,
+      "total": 68932.39188194275
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2484059643046814,
+        "cluster_id": 44,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3738,
+        "gate_plateau": 0.0343,
+        "gate_ratio": 0.7513,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 68940.19889400806,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26426,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.5709735197767694,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close, source matches",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.202",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 84,
+    "top_5_clusters": [
+      {
+        "cluster_id": 84,
+        "rank": 1,
+        "score": 0.6867289543151855
+      },
+      {
+        "cluster_id": 73,
+        "rank": 2,
+        "score": 0.5949695110321045
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.6867289543151855,
+    "top_1_distance": 1.2022931945118738,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 116.44220352172852,
+      "controller_agent_loop": 68708.00757408142,
+      "total": 68824.82838630676
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2022931945118738,
+        "cluster_id": 84,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close, source matches",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3464,
+        "gate_plateau": 0.1158,
+        "gate_ratio": 0.8664,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 68833.80760496948,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26460,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.3114460026258797,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"purchase_value, weekday_purchase, month_purchase\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.080",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 43,
+    "top_5_clusters": [
+      {
+        "cluster_id": 43,
+        "rank": 1,
+        "score": 6.7160206
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 6.7160206,
+    "top_1_distance": 1.0797231005393382,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 113.18826675415039,
+      "controller_agent_loop": 65060.1487159729,
+      "total": 65173.688650131226
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.0797231005393382,
+        "cluster_id": 43,
+        "cls": "NORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 65182.26018501446,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26646,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.325643156813858,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"boundary distance; expand evidence\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.282",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 58,
+    "top_5_clusters": [
+      {
+        "cluster_id": 58,
+        "rank": 1,
+        "score": 3.708789
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 3.708789,
+    "top_1_distance": 1.2822470989158339,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 106.53805732727051,
+      "controller_agent_loop": 70036.0701084137,
+      "total": 70143.07880401611
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2822470989158339,
+        "cluster_id": 58,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3945,
+        "gate_plateau": 0.0871,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 70150.86021006573,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26665,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.5643426105215223,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.161",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 36,
+    "top_5_clusters": [
+      {
+        "cluster_id": 36,
+        "rank": 1,
+        "score": 3.5853627
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 3.5853627,
+    "top_1_distance": 1.1609980726158493,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 98.48380088806152,
+      "controller_agent_loop": 69703.4912109375,
+      "total": 69802.34980583191
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.1609980726158493,
+        "cluster_id": 36,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3227,
+        "gate_plateau": 0.0543,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 69811.57408701256,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26695,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.435896110517994,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"browser consistency, IP_country\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.212",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 63,
+    "top_5_clusters": [
+      {
+        "cluster_id": 63,
+        "rank": 1,
+        "score": 0.8434954881668091
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8434954881668091,
+    "top_1_distance": 1.2118057412657082,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 113.01255226135254,
+      "controller_agent_loop": 68182.16562271118,
+      "total": 68295.59016227722
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2118057412657082,
+        "cluster_id": 63,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.352,
+        "gate_plateau": 0.0412,
+        "gate_ratio": 0.0,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 68302.8956099879,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26709,
+    "_gt_label": 1,
+    "_category": "boundary",
+    "_nb_nd": 0.5133413580832353,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"weekday_purchase, month_purchase\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.278",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 19,
+    "top_5_clusters": [
+      {
+        "cluster_id": 73,
+        "rank": 1,
+        "score": 0.6166346073150635
+      },
+      {
+        "cluster_id": 19,
+        "rank": 2,
+        "score": 0.5935501456260681
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.6166346073150635,
+    "top_1_distance": 1.2780676891429814,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_73->19",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 113.09051513671875,
+      "controller_agent_loop": 133685.43195724487,
+      "total": 133799.07655715942
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2780676891429814,
+        "cluster_id": 73,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.392,
+        "gate_plateau": 0.0438,
+        "gate_ratio": 0.9626,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.2780676891429814,
+        "cluster_id": 19,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 133808.00293909851,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26864,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.36071731392821543,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"boundary distance; expand evidence\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close, source matches",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.212",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 63,
+    "top_5_clusters": [
+      {
+        "cluster_id": 63,
+        "rank": 1,
+        "score": 4.9617033
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 4.9617033,
+    "top_1_distance": 1.2123120389013826,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 140.55299758911133,
+      "controller_agent_loop": 69003.08680534363,
+      "total": 69144.00291442871
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2123120389013826,
+        "cluster_id": 63,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close, source matches",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3523,
+        "gate_plateau": 0.0612,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 69152.28286199272,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26924,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.4086890644284992,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"age, IP_country uncertainty; month, weekday minor mismatch\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.368",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 22,
+    "top_5_clusters": [
+      {
+        "cluster_id": 31,
+        "rank": 1,
+        "score": 0.8972314596176147
+      },
+      {
+        "cluster_id": 22,
+        "rank": 2,
+        "score": 0.860733687877655
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8972314596176147,
+    "top_1_distance": 1.3678747085091856,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_31->22",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 141.54887199401855,
+      "controller_agent_loop": 132772.14074134827,
+      "total": 132914.34597969055
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.251191759618238,
+        "cluster_id": 31,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3755,
+        "gate_plateau": 0.0417,
+        "gate_ratio": 0.9593,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.3678747085091856,
+        "cluster_id": 22,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 132926.18034302723,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 26931,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.5025007842573509,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"ABNORMAL\", \"what_missing\": \"sex, purchase_value, IP_country\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.332",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 38,
+    "top_5_clusters": [
+      {
+        "cluster_id": 38,
+        "rank": 1,
+        "score": 5.222527
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 5.222527,
+    "top_1_distance": 1.331883637468137,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 170.48907279968262,
+      "controller_agent_loop": 69112.89286613464,
+      "total": 69283.79845619202
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.331883637468137,
+        "cluster_id": 38,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4255,
+        "gate_plateau": 0.0559,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 69292.15083189774,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27141,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.4185273272785956,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"age, weekday, month\"}"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.521",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 89,
+    "top_5_clusters": [
+      {
+        "cluster_id": 89,
+        "rank": 1,
+        "score": 3.6697252
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 3.6697252,
+    "top_1_distance": 1.520891041591006,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp_navtive",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 117.24114418029785,
+      "controller_agent_loop": 76619.69590187073,
+      "total": 76737.43891716003
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.520891041591006,
+        "cluster_id": 89,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.5469,
+        "gate_plateau": 0.0239,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.520891041591006,
+        "cluster_id": 89,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 76745.38628198206,
+    "_round0_classification": "ABNORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27173,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.6388312340291581,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and source fit cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.433",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 65,
+    "top_5_clusters": [
+      {
+        "cluster_id": 65,
+        "rank": 1,
+        "score": 4.099077
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 4.099077,
+    "top_1_distance": 1.4334491333351178,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp_navtive",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 116.02449417114258,
+      "controller_agent_loop": 74822.82090187073,
+      "total": 74939.15605545044
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.4334491333351178,
+        "cluster_id": 65,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and source fit cluster range",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4906,
+        "gate_plateau": 0.0511,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.4334491333351178,
+        "cluster_id": 65,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and source fit cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 74947.53084797412,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27250,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.7346817999328467,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.280",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 56,
+    "top_5_clusters": [
+      {
+        "cluster_id": 56,
+        "rank": 1,
+        "score": 0.8096296191215515
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8096296191215515,
+    "top_1_distance": 1.2795137982037386,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 114.11786079406738,
+      "controller_agent_loop": 68665.06910324097,
+      "total": 68779.50954437256
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2795137982037386,
+        "cluster_id": 56,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3928,
+        "gate_plateau": 0.0432,
+        "gate_ratio": 0.0,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 68787.0956340339,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27334,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.4280925816213232,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"age, sex, weekday, month\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.132",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 11,
+    "top_5_clusters": [
+      {
+        "cluster_id": 11,
+        "rank": 1,
+        "score": 0.8233407735824585
+      },
+      {
+        "cluster_id": 75,
+        "rank": 2,
+        "score": 0.740854799747467
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8233407735824585,
+    "top_1_distance": 1.1323727455650483,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 131.7305564880371,
+      "controller_agent_loop": 69346.81844711304,
+      "total": 69479.16841506958
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.1323727455650483,
+        "cluster_id": 11,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3067,
+        "gate_plateau": 0.0444,
+        "gate_ratio": 0.8998,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 69487.38675494678,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27384,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.3947703837697589,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"sex mismatch, weekday and month different\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value, age",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.256",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 2,
+    "top_5_clusters": [
+      {
+        "cluster_id": 2,
+        "rank": 1,
+        "score": 0.8441321849822998
+      },
+      {
+        "cluster_id": 75,
+        "rank": 2,
+        "score": 0.7735641598701477
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8441321849822998,
+    "top_1_distance": 1.256278707319442,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 120.56088447570801,
+      "controller_agent_loop": 68249.97854232788,
+      "total": 68370.90468406677
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.256278707319442,
+        "cluster_id": 2,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value, age",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3786,
+        "gate_plateau": 0.0555,
+        "gate_ratio": 0.9164,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 68380.1459899405,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27394,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.583395373238152,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"NORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.470",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 3,
+    "top_5_clusters": [
+      {
+        "cluster_id": 3,
+        "rank": 1,
+        "score": 0.6929616928100586
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.6929616928100586,
+    "top_1_distance": 1.4698517139669462,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp_navtive",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 128.01146507263184,
+      "controller_agent_loop": 75134.55820083618,
+      "total": 75262.93587684631
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.4698517139669462,
+        "cluster_id": 3,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.5141,
+        "gate_plateau": 0.0255,
+        "gate_ratio": 0.0,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.4698517139669462,
+        "cluster_id": 3,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 75271.20024198666,
+    "_round0_classification": "ABNORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27410,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.3827687521559518,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"browser, IP_country, weekday, month\"}"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=null",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.617",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 22,
+    "top_5_clusters": [
+      {
+        "cluster_id": 31,
+        "rank": 1,
+        "score": 0.8228479027748108
+      },
+      {
+        "cluster_id": 22,
+        "rank": 2,
+        "score": 0.7667569518089294
+      },
+      {
+        "cluster_id": 10,
+        "rank": 3,
+        "score": 0.7588444948196411
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8228479027748108,
+    "top_1_distance": 1.6171526242454672,
+    "top_k": 3,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_31->22",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 142.49730110168457,
+      "controller_agent_loop": 130419.42715644836,
+      "total": 130562.71886825562
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.492557149648025,
+        "cluster_id": 31,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster mean",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.5288,
+        "gate_plateau": 0.0207,
+        "gate_ratio": 0.9318,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.6171526242454672,
+        "cluster_id": 22,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": "null",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 130571.90959795844,
+    "_round0_classification": "ABNORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27424,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.6807697980919055,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.125",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 2,
+    "top_5_clusters": [
+      {
+        "cluster_id": 2,
+        "rank": 1,
+        "score": 0.8522113561630249
+      },
+      {
+        "cluster_id": 75,
+        "rank": 2,
+        "score": 0.7642446756362915
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8522113561630249,
+    "top_1_distance": 1.1253153162655674,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 140.31267166137695,
+      "controller_agent_loop": 69183.01129341125,
+      "total": 69323.86112213135
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.1253153162655674,
+        "cluster_id": 2,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3028,
+        "gate_plateau": 0.0697,
+        "gate_ratio": 0.8968,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 69332.20305200666,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27494,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.38498662248266213,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"sex, IP_country, month_purchase, weekday_purchase\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and source fit cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.295",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 62,
+    "top_5_clusters": [
+      {
+        "cluster_id": 89,
+        "rank": 1,
+        "score": 0.7476329803466797
+      },
+      {
+        "cluster_id": 62,
+        "rank": 2,
+        "score": 0.7352869510650635
+      },
+      {
+        "cluster_id": 37,
+        "rank": 3,
+        "score": 0.7088441252708435
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.7476329803466797,
+    "top_1_distance": 1.2947337908408942,
+    "top_k": 3,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_89->62",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 130.3849220275879,
+      "controller_agent_loop": 134137.07494735718,
+      "total": 134267.93479919434
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.1623271922907596,
+        "cluster_id": 89,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3234,
+        "gate_plateau": 0.1173,
+        "gate_ratio": 0.9835,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.2947337908408942,
+        "cluster_id": 62,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and source fit cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 134278.7831389578,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27516,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.43785723387225584,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"source mismatch, IP_country different\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close, source matches",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.151",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 32,
+    "top_5_clusters": [
+      {
+        "cluster_id": 32,
+        "rank": 1,
+        "score": 0.8975000381469727
+      },
+      {
+        "cluster_id": 12,
+        "rank": 2,
+        "score": 0.678153395652771
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8975000381469727,
+    "top_1_distance": 1.1513871075254092,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 117.25711822509766,
+      "controller_agent_loop": 69300.9078502655,
+      "total": 69418.48182678223
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.1513871075254092,
+        "cluster_id": 32,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close, source matches",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3172,
+        "gate_plateau": 0.0927,
+        "gate_ratio": 0.7556,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 69428.06746996939,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27672,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.4218445816923812,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"browser inconsistency, weekday variation\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.376",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 80,
+    "top_5_clusters": [
+      {
+        "cluster_id": 87,
+        "rank": 1,
+        "score": 0.8102774620056152
+      },
+      {
+        "cluster_id": 80,
+        "rank": 2,
+        "score": 0.7683254480361938
+      },
+      {
+        "cluster_id": 14,
+        "rank": 3,
+        "score": 0.7127974033355713
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8102774620056152,
+    "top_1_distance": 1.3764810881591325,
+    "top_k": 3,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_87->80",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 134.79065895080566,
+      "controller_agent_loop": 134518.62263679504,
+      "total": 134654.06918525696
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.1611804715679708,
+        "cluster_id": 87,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3228,
+        "gate_plateau": 0.1081,
+        "gate_ratio": 0.9482,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.3764810881591325,
+        "cluster_id": 80,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 134662.5506679993,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27753,
+    "_gt_label": 1,
+    "_category": "boundary",
+    "_nb_nd": 0.43616490586252854,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"ABNORMAL\", \"what_missing\": \"purchase_value, weekday_purchase, month_purchase\"}"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value, age",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.504",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 49,
+    "top_5_clusters": [
+      {
+        "cluster_id": 49,
+        "rank": 1,
+        "score": 0.6067155599594116
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.6067155599594116,
+    "top_1_distance": 1.50377995727638,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp_navtive",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 139.25766944885254,
+      "controller_agent_loop": 74034.38091278076,
+      "total": 74174.29256439209
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.50377995727638,
+        "cluster_id": 49,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value, age",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.536,
+        "gate_plateau": 0.0347,
+        "gate_ratio": 0.0,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.50377995727638,
+        "cluster_id": 49,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value, age",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 74182.52792407293,
+    "_round0_classification": "ABNORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27837,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.6505252381504721,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value, age",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.283",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 3,
+    "top_5_clusters": [
+      {
+        "cluster_id": 47,
+        "rank": 1,
+        "score": 0.7891437411308289
+      },
+      {
+        "cluster_id": 3,
+        "rank": 2,
+        "score": 0.7506258487701416
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.7891437411308289,
+    "top_1_distance": 1.2832970346921604,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_47->3",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 133.90159606933594,
+      "controller_agent_loop": 132829.75363731384,
+      "total": 132964.07508850098
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2832970346921604,
+        "cluster_id": 47,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster mean",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3952,
+        "gate_plateau": 0.0617,
+        "gate_ratio": 0.9512,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.2832970346921604,
+        "cluster_id": 3,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value, age",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 132973.05896808393,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27851,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.4089038562009713,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"sex, IP_country, month_purchase\"}"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster mean",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.494",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 37,
+    "top_5_clusters": [
+      {
+        "cluster_id": 84,
+        "rank": 1,
+        "score": 0.7027074694633484
+      },
+      {
+        "cluster_id": 37,
+        "rank": 2,
+        "score": 0.6805392503738403
+      },
+      {
+        "cluster_id": 62,
+        "rank": 3,
+        "score": 0.5806827545166016
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.7027074694633484,
+    "top_1_distance": 1.4942601924636079,
+    "top_k": 3,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:reroute_cross_cluster",
+      "reroute_cross_cluster:mcp_navtive",
+      "reroute:cluster_84->37",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 130.9835910797119,
+      "controller_agent_loop": 135356.91714286804,
+      "total": 135488.45291137695
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.3976401464194712,
+        "cluster_id": 84,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "reroute_cross_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4675,
+        "gate_plateau": 0.0724,
+        "gate_ratio": 0.9685,
+        "match_type": "centroid"
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.4942601924636079,
+        "cluster_id": 37,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster mean",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 135498.14682104625,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 27961,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.725986096263158,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.163",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 81,
+    "top_5_clusters": [
+      {
+        "cluster_id": 81,
+        "rank": 1,
+        "score": 6.82166
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 6.82166,
+    "top_1_distance": 1.1628677247512473,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 131.82473182678223,
+      "controller_agent_loop": 70276.59273147583,
+      "total": 70408.83231163025
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.1628677247512473,
+        "cluster_id": 81,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.3237,
+        "gate_plateau": 0.1565,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 70417.06779797096,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 28101,
+    "_gt_label": 1,
+    "_category": "boundary",
+    "_nb_nd": 0.4386559007198085,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"sex, IP_country, weekday, month\"}"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.539",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 86,
+    "top_5_clusters": [
+      {
+        "cluster_id": 86,
+        "rank": 1,
+        "score": 3.9181669
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 3.9181669,
+    "top_1_distance": 1.5388783238160628,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 130.13863563537598,
+      "controller_agent_loop": 66362.44177818298,
+      "total": 66492.91372299194
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.5388783238160628,
+        "cluster_id": 86,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 66500.21461897995,
+    "_round0_classification": "ABNORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 28162,
+    "_gt_label": 1,
+    "_category": "easy_high",
+    "_nb_nd": 0.6024285318654586,
+    "_teacher": "{\"sufficiency\": \"confident\", \"cls\": \"ABNORMAL\", \"what_missing\": null}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=purchase_value and age close to cluster range",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.343",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 58,
+    "top_5_clusters": [
+      {
+        "cluster_id": 58,
+        "rank": 1,
+        "score": 4.8313265
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "strict_bucketed",
+    "match_score": 4.8313265,
+    "top_1_distance": 1.343362076559031,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 111.74798011779785,
+      "controller_agent_loop": 68739.5555973053,
+      "total": 68851.64284706116
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.343362076559031,
+        "cluster_id": 58,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "purchase_value and age close to cluster range",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": 0.4328,
+        "gate_plateau": 0.0228,
+        "gate_ratio": null,
+        "match_type": "strict_bucketed"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 68859.3675569864,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 28167,
+    "_gt_label": 1,
+    "_category": "boundary",
+    "_nb_nd": 0.5353202414640459,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"ABNORMAL\", \"what_missing\": \"age high, sex mismatch, IP_country different\"}"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.096",
+      "planner_used=True",
+      "tool_execution_mode=mcp_navtive"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 11,
+    "top_5_clusters": [
+      {
+        "cluster_id": 11,
+        "rank": 1,
+        "score": 0.8881963491439819
+      },
+      {
+        "cluster_id": 75,
+        "rank": 2,
+        "score": 0.6970838904380798
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec",
+    "match_type": "centroid",
+    "match_score": 0.8881963491439819,
+    "top_1_distance": 1.0962892933598514,
+    "top_k": 2,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 164.40606117248535,
+      "controller_agent_loop": 66124.19939041138,
+      "total": 66289.04724121094
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.0962892933598514,
+        "cluster_id": 11,
+        "cls": "NORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "centroid"
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 66296.29904590547,
+    "_round0_classification": "NORMAL",
+    "_distance_band": "abnormal_clear",
+    "idx": 28286,
+    "_gt_label": 0,
+    "_category": "boundary",
+    "_nb_nd": 0.34640041517109227,
+    "_teacher": "{\"sufficiency\": \"ambiguous\", \"cls\": \"NORMAL\", \"what_missing\": \"boundary distance; expand evidence\"}"
+  }
+]

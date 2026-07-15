@@ -44,7 +44,7 @@ metadata:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: agent-eval-inference-pca64-k100-v14-07111
+  name: agent-eval-inference-0714agent-baseline
   namespace: elastic
   labels:
     app: evaluation
@@ -114,7 +114,7 @@ spec:
         # N_SAMPLES: 전체 평가 샘플 수.
         #   smoke(검증): 10~20, 정식 평가: 500~1000
         - name: N_SAMPLES
-          value: "50"
+          value: "20"
         - name: START_INDEX
           value: "10000"
         - name: CORESET_PERCENTAGE

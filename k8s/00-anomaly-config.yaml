@@ -199,26 +199,19 @@ data:
   BASE_TOP_K: "3"
   EXPAND_TOP_K: "5"
   ANALYZER_DECISION_MODE: "det"     # 비교실험 시 "llm"으로 patch
-  CLS_ND_THRESHOLD: "0.5"  # ===========================
+  CLS_ND_THRESHOLD: "0.42"  # ===========================
   # Agent eval
   # ===========================
 
   SUFFICIENCY_BOUNDARY_LOW:  "0.3"
   SUFFICIENCY_BOUNDARY_HIGH: "0.55"
-  EVAL_JSONL_GCS: "tree-search/analyzer_ft/pca_64_k100/hf_0629/training_data_mined_eval.jsonl"
+  EVAL_JSONL_GCS: "tree-search/analyzer_ft/pca_64_k100/hf_0713/training_data_mined_eval.jsonl"
   EVAL_SOURCE: "eval_set"
   AGENT_EVAL_GCS_PREFIX: "gs://fraud_ecomm/agent_eval"
 
   EVAL_RATIO: "0.1"          # NB01 EVAL_RATIO와 동일 (역매핑 구간)
 
-  TOOL_GATE_ENABLE : "true"
-  EXPAND_ND_LO : "0.48"
-  EXPAND_ND_HI : "0.60"
-  EXPAND_PLATEAU_TAU : "0.142"
-  REROUTE_ON_CENTROID : "true"
-  REROUTE_SCORE_RATIO : "0.93"
   DIST_TOP_K : "5"
-
 # ===========================
 # Index Name Convention (참고용)
 # ===========================

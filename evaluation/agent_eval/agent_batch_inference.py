@@ -108,7 +108,7 @@ async def call_agent_detect(
 
 EVAL_JSONL_GCS = os.getenv(
     "EVAL_JSONL_GCS",
-    "tree-search/analyzer_ft/pca_64_k100/hf_0629/training_data_mined_eval.jsonl",
+    "tree-search/analyzer_ft/pca_64_k100/hf_0713/training_data_mined_eval.jsonl",
 )
 GCS_BUCKET = os.getenv("GCS_BUCKET_NAME", "fraud_ecomm")
 

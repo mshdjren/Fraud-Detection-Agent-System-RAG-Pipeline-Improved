@@ -13,7 +13,7 @@ metadata:
 data:
   # ── 실험 설정 ──────────────────────────────────────────────────
   EXPERIMENT_CASE:  "pca_64_k100"
-  TEACHER_PROVIDER: "hf_0629"
+  TEACHER_PROVIDER: "hf_0713"
   ADAPTER_TYPE:     "sft"        # mined | distance
 
   # ── GCS 설정 ───────────────────────────────────────────────────
@@ -24,11 +24,11 @@ data:
   ADAPTER_LOCAL_DIR: "/data/adapter"
 
   # ── Base 모델 ──────────────────────────────────────────────────
-  # BASE_MODEL_ID: "Qwen/Qwen2.5-0.5B-Instruct"
-  BASE_MODEL_ID: "Qwen/Qwen2.5-3B-Instruct"
+  BASE_MODEL_ID: "Qwen/Qwen2.5-0.5B-Instruct"
+  # BASE_MODEL_ID: "Qwen/Qwen2.5-3B-Instruct"
 
   # ── 추론 설정 ──────────────────────────────────────────────────
-  MAX_NEW_TOKENS:  "64"
+  MAX_NEW_TOKENS:  "40"   #default : 64, forward : 56
   DEVICE:          "cpu"
   # TORCH_DTYPE:     "float32"
   # OMP_NUM_THREADS: "2"
@@ -38,9 +38,9 @@ data:
  # ── 서빙 백엔드 스위치 ───────────────────────────────────────
  # hf   : 기존 방식 (AutoModelForCausalLM + PeftModel merge, float32)
  # gguf : llama-cpp-python + Q4_K_M (NB02 Section 14 산출물)
-  MODEL_BACKEND:  "gguf"
+  MODEL_BACKEND:  "gguf"    #hf
   GGUF_FILENAME:  "model_q4.gguf"
-  N_CTX:          "2048"
+  N_CTX:          "768"    #default :2048
 
   # ── Distance 분포 (colab Section 5 실측값: pca_64_k100) ────────
   DIST_P25: "1.264"
@@ -51,6 +51,11 @@ data:
   # ── 분석 컨텍스트 플래그 ────────────────────────────────────────
   PERSONA_ENABLED:    "true"
   TREE_RULES_ENABLED: "false"
+
+  ANALYZER_TASK: "agent"  #forward 동시 사용 // or agent
+
+  ENABLE_KV_CACHE: "false"
+  KV_CACHE_MB: "256"
 
 ---
 # ===========================
@@ -127,13 +132,14 @@ spec:
             echo "[init] ADAPTER_TYPE    : ${ADAPTER_TYPE}"
             echo "[init] GCS_BUCKET      : ${GCS_BUCKET}"
             echo "[init] MODEL_BACKEND   : ${MODEL_BACKEND}"
+            echo "[init] ANALYZER_TASK   : ${ANALYZER_TASK}"
 
-            # gs://{GCS_BUCKET}/{GCS_FT_BASE}/{EXPERIMENT_CASE}/{TEACHER_PROVIDER}/adapter_{ADAPTER_TYPE}/
+            # gs://{GCS_BUCKET}/{GCS_FT_BASE}/{EXPERIMENT_CASE}/{TEACHER_PROVIDER}/{ANALYZER_TASK}_adapter_{ADAPTER_TYPE}/
             #   ├── README.md, adapter_config.json, adapter_model.safetensors, ... (hf 서빙용)
             #   └── gguf/
             #        ├── model_q4.gguf
             #        └── gguf_meta.json
-            METHOD_PATH="gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/${TEACHER_PROVIDER}/adapter_${ADAPTER_TYPE}"
+            METHOD_PATH="gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/${TEACHER_PROVIDER}/${ANALYZER_TASK}_adapter_${ADAPTER_TYPE}"
             DEST="${ADAPTER_LOCAL_DIR}"
 
             echo "[init] GCS path  : ${METHOD_PATH}"

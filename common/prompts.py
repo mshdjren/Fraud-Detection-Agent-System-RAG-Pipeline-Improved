@@ -401,7 +401,7 @@ _teacher_builder  = build_teacher_prompt_with_gt_agent
 
 def set_mode(mode: str):
     """노트북이 어느 prompt 변형을 쓸지 선택. "agent" | "forward"."""
-    global _MODE, _analyzer_builder, _teacher_builder
+    global _MODE, _analyzer_builder, _teacher_builde5r
     assert mode in ("agent", "forward")
     _MODE = mode
     if mode == "agent":
@@ -413,6 +413,11 @@ def set_mode(mode: str):
 
 
 def build_analyzer_user_prompt(*a, **kw):
+    # v2: PROMPT_VERSION 스위치 (set_prompt_version / env PROMPT_VERSION)
+    if globals().get("PROMPT_VERSION", "v1") == "v2":
+        fn = (build_analyzer_user_prompt_forward_v2 if _MODE == "forward"
+              else build_evaluator_user_prompt_v2)
+        return fn(*a, **kw)
     """활성 모드의 analyzer prompt builder로 위임 (원본 함수명 호환)."""
     return _analyzer_builder(*a, **kw)
 
@@ -441,3 +446,218 @@ def build_sample(test_idx: int, for_teacher: bool = True, include_gt: bool = Fal
     else:
         prompt = _analyzer_builder(test_features, cluster_id, top5_oi, distances, persona)
     return SYSTEM_PROMPT, prompt
+
+# ════════════════════════════════════════════════════════════════
+# PROMPT v2 — prefill 재설계 (multi-cluster memory bank intuition 정합)
+# ----------------------------------------------------------------
+# 설계 근거 (개념 논의 확정분):
+#  ① 이웃 feature 원시 덤프 제거 — 판정 신호는 거리뿐(논문 Eq.7-10),
+#     원시 덤프는 소형 모델의 환각 근거로 작용 실증("source 'Ads' deviates"
+#     오답: 이웃 3명 전부 Ads). → top-1 합의 다이제스트 1줄로 대체.
+#  ② 원시 mean/std 표 제거 — 소형 모델에 암산 요구 대신 z를 사전 계산해
+#     [ok/DEVIANT] 태그로 제공 (NB04 고유율 18.9→75.8% 개선의 일반화).
+#  ③ 정적 instruction 선두 배치 — llama.cpp prefix KV cache 적중을 위해
+#     [정적 instruction][가변 TEST/FIT/RETRIEVAL] 순서. per-request prefill
+#     ~350→~150 tok.
+#  ④ what_missing 반구조화 — "<direction>: <evidence>" (direction은
+#     planner/지표가 기계 소비, evidence는 아래 표에서만 인용).
+# train-serve: v2는 재생성-재학습 사이클과 한 몸 — PROMPT_VERSION으로
+# v1(현행 어댑터)과 공존. 서빙은 새 어댑터 배포 시점에 env로 전환.
+# ════════════════════════════════════════════════════════════════
+import os as _os
+
+PROMPT_VERSION = _os.getenv("PROMPT_VERSION", "v1").lower()
+
+def set_prompt_version(v: str):
+    global PROMPT_VERSION
+    PROMPT_VERSION = str(v).lower()
+
+
+# EVALUATOR_INSTRUCTION_V2 = """Output cls, sufficiency, and (only if insufficient) what_missing.
+# - cls: if confident, follow nd (nd≲0.3→NORMAL, nd≳0.7→ABNORMAL; band may shift);
+#   if ambiguous, nd is unreliable — weigh the CLUSTER FIT table + retrieval.
+# - sufficiency: copy the [SYSTEM-COMPUTED] value.
+# - what_missing: null unless ambiguous; judges RETRIEVAL quality, not the class. "<direction>: <evidence>":
+#     cluster_mismatch      — a [DEVIANT] FIT feature → reroute
+#     neighbor_insufficient — plateau spread or 'differs'>'agrees' → expand
+#   Cite 1-2 features with values; never restate distance.
+# Output ONLY compact JSON:
+# {"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","what_missing":"<direction>: <evidence>" or null}"""
+
+EVALUATOR_INSTRUCTION_V2 = """Output cls, sufficiency, and (only if insufficient) what_missing.
+- cls: if confident, follow nd (nd≲0.3→NORMAL, nd≳0.55→ABNORMAL; band may shift);
+  if ambiguous, nd is unreliable — weigh the CLUSTER FIT table + retrieval.
+- sufficiency: copy the [SYSTEM-COMPUTED] value.
+- what_missing: null unless ambiguous; judges RETRIEVAL quality, not the class. "<direction>: <evidence>":
+    cluster_mismatch      — a numeric [DEVIANT] FIT feature (name+z) → reroute
+    neighbor_insufficient — name 1-2 features under 'differs' + the [spread] neighbor state → expand
+  Cite from the tables above; never restate the distance.
+Output ONLY compact JSON:
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","what_missing":"<direction>: <evidence>" or null}"""
+
+# FORWARD_INSTRUCTION_V2 = """Task: classify the transaction as NORMAL or ABNORMAL using the
+# system-computed evidence below.
+
+# Guide (nd = normalized distance to nearest retrieved normal):
+#   nd < 0.3            very similar to normal patterns (likely NORMAL)
+#   0.3 <= nd < 0.55    hardest zone — weigh the cluster-fit table carefully
+#   nd >= 0.55          weak similarity (potentially ABNORMAL)
+
+# - reasoning: THE SINGLE MOST DECISIVE feature from the tables below with its
+#   value/z (nd may be cited as secondary evidence). <=25 words. Never vague
+#   phrases like "close to cluster range" without a named value.
+# - confidence: 0-100 integer reflecting how decisive the evidence is.
+
+# Output ONLY compact JSON (no markdown):
+# {"cls":"NORMAL|ABNORMAL","confidence":<0-100 integer>,"reasoning":"..."}"""
+FORWARD_INSTRUCTION_V2 = """Classify the transaction as NORMAL or ABNORMAL using the system-computed evidence below.
+- cls: follow nd (nd≲0.3→NORMAL, nd≳0.55→ABNORMAL; band may shift).
+- reasoning: cite THE SINGLE MOST DECISIVE feature from the tables below with its value/z
+  (nd may be secondary). <=25 words. Never vague phrases like "close to cluster range"
+  without a named value.
+- confidence: 0-100 integer reflecting how decisive the evidence is.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","confidence":<0-100 integer>,"reasoning":"..."}"""
+
+def format_cluster_fit(test_features: Dict, persona: Optional[Dict],
+                       z_tau: float = 1.0) -> str:
+    """수치형 z 사전계산표 — persona가 numeric 한정인 결정과 정합.
+    (categorical 적합 증거는 format_retrieval_digest의 합의 라인이 담당)"""
+    nst = (persona or {}).get("numeric_stats") or {}
+    lines = []
+    for col in NUMERIC_COLS:
+        s = nst.get(col)
+        v = test_features.get(col)
+        if not s or v is None:
+            continue
+        sd = float(s.get("std", 0.0)) or 1e-6
+        z = (float(v) - float(s.get("mean", 0.0))) / sd
+        tag = "DEVIANT" if abs(z) >= z_tau else "ok"
+        lines.append(f"  - {col}: value={round(float(v), 2)}, z={z:+.2f} [{tag}]")
+    return "\n".join(lines) if lines else "  (no cluster profile)"
+
+
+# def format_retrieval_digest(distances: List[float],
+#                             test_features: Dict,
+#                             top1_feats: Optional[Dict] = None,
+#                             plateau_tau: float = 0.142) -> str:
+#     """이웃 원시 덤프 대체 — nd/plateau 수치 + top-1 categorical 합의 1줄.
+#     top1_feats 부재(서빙 retriever가 feature 미반환) 시 거리 라인만 출력."""
+#     if not distances:
+#         return "No retrieved results."
+#     d = sorted(float(x) for x in distances if x != float("inf"))
+#     nd = normalize_dist(d[0])
+#     line1 = f"nd(top1)={nd:.2f} [{dist_tag(d[0])}]"
+#     if len(d) >= 3 and d[0] > 0:
+#         plateau = (d[min(4, len(d) - 1)] - d[0]) / d[0]
+#         line1 += f" | plateau={plateau:.2f} [{'dense' if plateau <= plateau_tau else 'spread'}]"
+#     lines = [line1]
+#     if top1_feats:
+#         agrees, differs = [], []
+#         for c in CATEGORICAL_COLS:
+#             tv, nv = test_features.get(c), top1_feats.get(c)
+#             if tv is None or nv is None:
+#                 continue
+#             (agrees if str(tv) == str(nv) else differs).append(c)
+#         lines.append(f"top-1 agrees: {', '.join(agrees) or '(none)'}"
+#                      f" | differs: {', '.join(differs) or '(none)'}")
+#     return "\n".join(lines)
+
+def format_retrieval_digest(distances, test_features, topk_feats=None, plateau_tau=0.142):
+    if not distances: return "No retrieved results."
+    d = sorted(float(x) for x in distances if x != float("inf"))
+    line1 = f"nd(top1)={normalize_dist(d[0]):.2f} [{dist_tag(d[0])}]"
+    # if len(d) >= 3 and d[0] > 0:
+    #     pl = (d[min(4,len(d)-1)] - d[0]) / d[0]
+    #     line1 += f" | plateau={pl:.2f} [{'dense' if pl<=plateau_tau else 'spread'}]"
+    if len(d) >= 3 and d[0] > 0:
+        pl = (d[min(4,len(d)-1)] - d[0]) / d[0]
+        line1 += f" | neighbor_spread={pl:.2f} [{'dense' if pl<=plateau_tau else 'spread'}]"    
+    lines = [line1]
+    feats = [f for f in (topk_feats or []) if f]
+    if feats:
+        k = len(feats); agr, dif = [], []
+        for c in CATEGORICAL_COLS:
+            tv = test_features.get(c)
+            if tv is None: continue
+            votes = [f.get(c) for f in feats if f.get(c) is not None]
+            if not votes: continue
+            nm = sum(str(tv) == str(v) for v in votes)
+            (agr if nm*2 >= len(votes) else dif).append(f"{c}({nm}/{len(votes)})")
+        lines.append(f"top-{k} agrees: {', '.join(agr) or '(none)'} | differs: {', '.join(dif) or '(none)'}")
+    return "\n".join(lines)
+
+
+def _build_v2(instruction: str, test_features: Dict, cluster_id,
+              distances: List[float], persona: Optional[Dict],
+              top1_feats: Optional[Dict]) -> str:
+    """[정적 instruction 선두][가변 블록 후미] — KV prefix cache 정합 레이아웃."""
+    return (
+        f"{instruction}\n\n"
+        f"## TEST\n{format_transaction(test_features)}\n\n"
+        f"## CLUSTER #{cluster_id} FIT (z vs profile)\n"
+        f"{format_cluster_fit(test_features, persona)}\n\n"
+        f"## RETRIEVAL\n"
+        f"{format_retrieval_digest(distances, test_features, top1_feats)}"
+    )
+
+
+# def build_evaluator_user_prompt_v2(test_features: Dict, cluster_id,
+#                                    top5_orig_indices: List[int],
+#                                    distances: List[float],
+#                                    persona: Optional[Dict] = None,
+#                                    top1_feats: Optional[Dict] = None) -> str:
+#     """오프라인(NB): coreset_feature_map으로 top-1 feature 자동 해석.
+#     서빙: top1_feats를 직접 전달(local_analyzer가 retriever 결과에서 추출)."""
+#     if top1_feats is None and top5_orig_indices:
+#         try:
+#             top1_feats = coreset_feature_map.get(int(top5_orig_indices[0]))
+#         except (NameError, TypeError):
+#             top1_feats = None
+#     return _build_v2(EVALUATOR_INSTRUCTION_V2, test_features, cluster_id,
+#                      distances, persona, top1_feats)
+
+
+# def build_analyzer_user_prompt_forward_v2(test_features: Dict, cluster_id,
+#                                           top5_orig_indices: List[int],
+#                                           distances: List[float],
+#                                           persona: Optional[Dict] = None,
+#                                           top1_feats: Optional[Dict] = None) -> str:
+#     if top1_feats is None and top5_orig_indices:
+#         try:
+#             top1_feats = coreset_feature_map.get(int(top5_orig_indices[0]))
+#         except (NameError, TypeError):
+#             top1_feats = None
+#     return _build_v2(FORWARD_INSTRUCTION_V2, test_features, cluster_id,
+#                      distances, persona, top1_feats)
+
+def build_evaluator_user_prompt_v2(test_features: Dict, cluster_id,
+                                   top5_orig_indices: List[int],
+                                   distances: List[float],
+                                   persona: Optional[Dict] = None,
+                                   topk_feats: Optional[Dict] = None) -> str:
+    """오프라인(NB): coreset_feature_map으로 top-1 feature 자동 해석.
+    서빙: top1_feats를 직접 전달(local_analyzer가 retriever 결과에서 추출)."""
+    if topk_feats is None and top5_orig_indices:
+        try:
+            topk_feats = coreset_feature_map.get(int(top5_orig_indices[:3]))
+        except (NameError, TypeError):
+            topk_feats = None
+    return _build_v2(EVALUATOR_INSTRUCTION_V2, test_features, cluster_id,
+                     distances, persona, topk_feats)
+
+
+def build_analyzer_user_prompt_forward_v2(test_features: Dict, cluster_id,
+                                          top5_orig_indices: List[int],
+                                          distances: List[float],
+                                          persona: Optional[Dict] = None,
+                                          topk_feats: Optional[Dict] = None) -> str:
+    if topk_feats is None and top5_orig_indices:
+        try:
+            topk_feats = coreset_feature_map.get(int(top5_orig_indices[:3]))
+        except (NameError, TypeError):
+            topk_feats = None
+    return _build_v2(FORWARD_INSTRUCTION_V2, test_features, cluster_id,
+                     distances, persona, topk_feats)
+

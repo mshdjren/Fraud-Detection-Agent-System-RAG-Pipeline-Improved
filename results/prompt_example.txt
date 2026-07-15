@@ -1,0 +1,158 @@
+======================================================================
+[DEBUG] forwardRAG, eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: 0.9
+  - age: 0.6
+
+[Categorical Features]
+  - sex: F
+  - source: Ads
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Tuesday
+  - month_purchase: July
+  - IP_country: Unknown
+
+## CLUSTER #29
+**Summary**: Cluster 29 (1672 samples), mid-value
+
+**Numeric Statistics:**
+  - purchase_value: mean=0.098, std=1.012, min=-1.500, max=3.800
+  - age: mean=0.055, std=1.013, min=-1.800, max=4.200
+
+## SIMILAR NORMAL PATTERNS
+Top-1 distance(norm): 0.16  (close match ✓)
+Neighbor spread: neighbors spread out ⚠
+
+Neighbor 1: purchase_value=0.8, age=0.2, sex=F, source=Ads, browser=Chrome, IP_country=Unknown, month_purchase=May, weekday_purchase=Saturday
+Neighbor 2: purchase_value=0.5, age=0.7, sex=F, source=Ads, browser=Chrome, IP_country=Unknown, month_purchase=November, weekday_purchase=Tuesday
+Neighbor 3: purchase_value=0.2, age=0.9, sex=F, source=Ads, browser=Chrome, IP_country=Unknown, month_purchase=September, weekday_purchase=Friday
+
+Classify this transaction as NORMAL or ABNORMAL.
+
+Analysis framework:
+1. Statistical Deviation: Compare test values against cluster numeric/categorical profile
+2. Pattern Similarity: Evaluate normalized L2 distance
+   - norm_dist < 0.3: Very similar to normal patterns (likely NORMAL)
+   - 0.3 ≤ norm_dist < 0.55: Moderate similarity — the hardest zone; examine
+     features carefully (accuracy bottoms out near the decision threshold)
+   - norm_dist ≥ 0.55: Weak similarity (potentially ABNORMAL)
+
+Decision criteria:
+- ABNORMAL if: significant deviation from cluster AND high normalized distance
+- NORMAL if: aligns with cluster patterns AND low normalized distance
+- Consider both statistical deviation and distance together
+- Confidence: 0=uncertain, 100=certain
+- Reference specific feature values and normalized distance in reasoning
+
+Respond with ONLY compact JSON (no markdown, no extra text):
+{"cls":"NORMAL|ABNORMAL","confidence":<0-100 integer>,"reasoning":"<=25 words citing concrete feature values and nd"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.164
+  gt_label: 0  (NORMAL)
+  category: boundary_distance
+  topk_spread: None
+
+────────── GOLD (teacher assistant) ──────────
+{"cls": "NORMAL", "confidence": 94, "reasoning": "purchase_value and age within cluster norms, close match nd=0.16"}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "ABNORMAL", "confidence": 85, "reasoning": "source \'Ads\' deviates significantly, nd=0.16"}'
+
+  (추론 1712ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'confidence', 'reasoning']
+  cls: ABNORMAL
+{
+  "cls": "ABNORMAL",
+  "confidence": 85,
+  "reasoning": "source 'Ads' deviates significantly, nd=0.16"
+}
+======================================================================
+
+======================================================================
+[DEBUG] Evaluator, eval_recs[0]  (USE_GGUF=False)
+======================================================================
+
+────────── SYSTEM ──────────
+You are an expert fraud detection analyst. Analyze the TEST TRANSACTION by comparing it with the cluster profile and retrieved similar normal patterns. 
+
+CRITICAL: Respond in ENGLISH ONLY with valid JSON. Do not use Chinese or any other language.
+
+────────── USER (모델 입력 그대로) ──────────
+## TEST TRANSACTION
+[Numeric Features]
+  - purchase_value: -0.5
+  - age: -0.4
+
+[Categorical Features]
+  - sex: M
+  - source: SEO
+  - browser: Chrome
+
+[Additional Context]
+  - weekday_purchase: Tuesday
+  - month_purchase: April
+  - IP_country: China
+
+## CLUSTER #76
+**Cluster**: Cluster 76 (967 samples), mid-value, source=Ads, sex=M
+  - purchase_value: within range (-0.4σ)
+  - age: within range (-0.4σ)
+
+## RETRIEVED NORMAL NEIGHBORS (top-1)
+Top-1 distance(norm): 0.13  (close match ✓)
+Neighbor spread: n/a (only top-1)
+
+Neighbor 1: purchase_value=-0.5, age=-0.2, sex=M, source=SEO, browser=Chrome, IP_country=Unknown, month_purchase=June, weekday_purchase=Friday
+
+You decide the verdict AND explain what is uncertain.
+
+- cls: use the normalized distance (nd) as the PRIMARY basis — low nd → NORMAL,
+  high nd → ABNORMAL. Restating nd for cls is fine; nd is the right signal for it.
+- sufficiency: "ambiguous" if nd is mid-range OR the neighbors are spread out;
+  otherwise "confident".
+- next_action (only if ambiguous): "expand" if neighbors are spread / too few;
+  "reroute" if the sample does not fit this cluster's persona; else "none".
+- what_missing (the part only you can do): when ambiguous, explain in PLAIN
+  FEATURE / PERSONA language WHICH concrete attributes make this case uncertain
+  (e.g. "purchase_value far above cluster range and IP_country mismatch"), so a
+  re-search can target them. Name features, not the distance number. Null if confident.
+
+Output ONLY compact JSON (no markdown):
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","next_action":"none|expand|reroute","what_missing":"<=15 words naming concrete features, or null","reason":"<=20 words"}
+
+────────── METADATA (정답지) ──────────
+  nd (top1_l2_dist_norm): 0.134
+  gt_label: 0  (NORMAL)
+  category: boundary_distance
+  topk_spread: 0.27102044387804614
+
+────────── GOLD (teacher assistant) ──────────
+{"sufficiency": "confident", "cls": "NORMAL", "what_missing": null}
+
+────────── MODEL RAW OUTPUT ──────────
+'{"cls": "NORMAL", "what_missing": "boundary distance; expand evidence"}'
+
+  (추론 1757ms)
+
+────────── PARSED ──────────
+  키: ['cls', 'what_missing']
+  cls: NORMAL
+{
+  "cls": "NORMAL",
+  "what_missing": "boundary distance; expand evidence"
+}
+======================================================================

@@ -27,7 +27,7 @@ data:
   ANALYZER_URL:     "http://local-analyzer:80"
   # CPU-only GKE(e2-medium)에서 Qwen 추론은 10~30초 소요 가능
   # — 기존 controller.py 하드코딩 10s로 타임아웃 발생 확인됨
-  ANALYZER_TIMEOUT: "120"
+  ANALYZER_TIMEOUT: "600"
   # ── [검증용] Analyzer Mock 토글 ──────────────────────────────────
   # local analyzer 재튜닝 전 agent loop 검증 전용. 노트북 재튜닝 완료 후
   # false로 되돌릴 것.
@@ -54,6 +54,12 @@ data:
   EXPAND_PLATEAU_TAU : "0.142"
   REROUTE_ON_CENTROID : "true"
   REROUTE_SCORE_RATIO : "0.93"
+
+  SUFFICIENCY_BOUNDARY_LOW : "0.3"
+  SUFFICIENCY_BOUNDARY_HIGH : "0.55"
+
+  SKIP_ANALYZER_ON_CONFIDENT : "true"
+  CLS_ND_THRESHOLD : "0.42"
 
 ---
 # ===========================
