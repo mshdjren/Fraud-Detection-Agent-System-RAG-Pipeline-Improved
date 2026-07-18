@@ -14,7 +14,7 @@ data:
   # ── 실험 설정 ──────────────────────────────────────────────────
   EXPERIMENT_CASE:  "pca_64_k100"
   TEACHER_PROVIDER: "hf_0713"
-  ADAPTER_TYPE:     "sft"        # mined | distance
+  ADAPTER_TYPE:     "grpo"        # sft | grpo
 
   # ── GCS 설정 ───────────────────────────────────────────────────
   GCS_BUCKET:  "fraud_ecomm"

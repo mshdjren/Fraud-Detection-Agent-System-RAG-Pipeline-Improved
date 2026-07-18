@@ -114,9 +114,9 @@ spec:
         # N_SAMPLES: 전체 평가 샘플 수.
         #   smoke(검증): 10~20, 정식 평가: 500~1000
         - name: N_SAMPLES
-          value: "20"
+          value: "50"
         - name: START_INDEX
-          value: "10000"
+          value: "26000"
         - name: CORESET_PERCENTAGE
           value: "100"
         - name: TIMEOUT

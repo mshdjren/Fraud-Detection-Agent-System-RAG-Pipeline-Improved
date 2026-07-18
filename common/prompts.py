@@ -472,28 +472,25 @@ def set_prompt_version(v: str):
     global PROMPT_VERSION
     PROMPT_VERSION = str(v).lower()
 
-
+# 3key 출력
 # EVALUATOR_INSTRUCTION_V2 = """Output cls, sufficiency, and (only if insufficient) what_missing.
-# - cls: if confident, follow nd (nd≲0.3→NORMAL, nd≳0.7→ABNORMAL; band may shift);
+# - cls: if confident, follow nd (nd≲0.3→NORMAL, nd≳0.55→ABNORMAL; band may shift);
 #   if ambiguous, nd is unreliable — weigh the CLUSTER FIT table + retrieval.
 # - sufficiency: copy the [SYSTEM-COMPUTED] value.
 # - what_missing: null unless ambiguous; judges RETRIEVAL quality, not the class. "<direction>: <evidence>":
-#     cluster_mismatch      — a [DEVIANT] FIT feature → reroute
-#     neighbor_insufficient — plateau spread or 'differs'>'agrees' → expand
-#   Cite 1-2 features with values; never restate distance.
+#     cluster_mismatch      — a numeric [DEVIANT] FIT feature (name+z) → reroute
+#     neighbor_insufficient — name 1-2 features under 'differs' + the neighbor_spread state → expand
+#   Cite from the tables above; never restate the distance.
 # Output ONLY compact JSON:
 # {"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","what_missing":"<direction>: <evidence>" or null}"""
 
-EVALUATOR_INSTRUCTION_V2 = """Output cls, sufficiency, and (only if insufficient) what_missing.
-- cls: if confident, follow nd (nd≲0.3→NORMAL, nd≳0.55→ABNORMAL; band may shift);
-  if ambiguous, nd is unreliable — weigh the CLUSTER FIT table + retrieval.
-- sufficiency: copy the [SYSTEM-COMPUTED] value.
-- what_missing: null unless ambiguous; judges RETRIEVAL quality, not the class. "<direction>: <evidence>":
-    cluster_mismatch      — a numeric [DEVIANT] FIT feature (name+z) → reroute
-    neighbor_insufficient — name 1-2 features under 'differs' + the [spread] neighbor state → expand
-  Cite from the tables above; never restate the distance.
+EVALUATOR_INSTRUCTION_V2 = """Judge the RETRIEVAL quality below and state what is missing.
+Format "<direction>: <evidence>", direction is exactly one of:
+  cluster_mismatch      — a [DEVIANT] FIT feature (name+z) → the assigned cluster is wrong → reroute
+  neighbor_insufficient — 1-2 features under 'differs' + the neighbor_spread state → expand
+Cite 1-2 features with values from the tables above; never restate the distance.
 Output ONLY compact JSON:
-{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","what_missing":"<direction>: <evidence>" or null}"""
+{"what_missing":"<direction>: <evidence>"}"""
 
 # FORWARD_INSTRUCTION_V2 = """Task: classify the transaction as NORMAL or ABNORMAL using the
 # system-computed evidence below.
@@ -591,7 +588,7 @@ def format_retrieval_digest(distances, test_features, topk_feats=None, plateau_t
 
 def _build_v2(instruction: str, test_features: Dict, cluster_id,
               distances: List[float], persona: Optional[Dict],
-              top1_feats: Optional[Dict]) -> str:
+              topk_feats: Optional[Dict]) -> str:
     """[정적 instruction 선두][가변 블록 후미] — KV prefix cache 정합 레이아웃."""
     return (
         f"{instruction}\n\n"
@@ -599,7 +596,7 @@ def _build_v2(instruction: str, test_features: Dict, cluster_id,
         f"## CLUSTER #{cluster_id} FIT (z vs profile)\n"
         f"{format_cluster_fit(test_features, persona)}\n\n"
         f"## RETRIEVAL\n"
-        f"{format_retrieval_digest(distances, test_features, top1_feats)}"
+        f"{format_retrieval_digest(distances, test_features, topk_feats)}"
     )
 
 
@@ -638,15 +635,14 @@ def build_evaluator_user_prompt_v2(test_features: Dict, cluster_id,
                                    persona: Optional[Dict] = None,
                                    topk_feats: Optional[Dict] = None) -> str:
     """오프라인(NB): coreset_feature_map으로 top-1 feature 자동 해석.
-    서빙: top1_feats를 직접 전달(local_analyzer가 retriever 결과에서 추출)."""
+    서빙: topk_feats를 직접 전달(local_analyzer가 retriever 결과에서 추출)."""
     if topk_feats is None and top5_orig_indices:
         try:
-            topk_feats = coreset_feature_map.get(int(top5_orig_indices[:3]))
+            topk_feats = [coreset_feature_map.get(int(i)) for i in top5_orig_indices[:3]]
         except (NameError, TypeError):
             topk_feats = None
     return _build_v2(EVALUATOR_INSTRUCTION_V2, test_features, cluster_id,
                      distances, persona, topk_feats)
-
 
 def build_analyzer_user_prompt_forward_v2(test_features: Dict, cluster_id,
                                           top5_orig_indices: List[int],
@@ -655,7 +651,7 @@ def build_analyzer_user_prompt_forward_v2(test_features: Dict, cluster_id,
                                           topk_feats: Optional[Dict] = None) -> str:
     if topk_feats is None and top5_orig_indices:
         try:
-            topk_feats = coreset_feature_map.get(int(top5_orig_indices[:3]))
+            topk_feats = [coreset_feature_map.get(int(i)) for i in top5_orig_indices[:3]]
         except (NameError, TypeError):
             topk_feats = None
     return _build_v2(FORWARD_INSTRUCTION_V2, test_features, cluster_id,

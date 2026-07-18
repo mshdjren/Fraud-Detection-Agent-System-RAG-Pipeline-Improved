@@ -72,7 +72,7 @@ EVAL_RATIO  = 0.1
 
 EVAL_MAX_NUM               = 50
 MEASURE_TEACHER_COMPLIANCE = True
-EVAL_SAMPLE_N              = 200
+EVAL_SAMPLE_N              = 300
 
 # 1000개를 세 갈래로 명시 배분 (합=1.0)
 MINING_FRAC   = 0.5     # hard negative (mining type1/2)  → 500
