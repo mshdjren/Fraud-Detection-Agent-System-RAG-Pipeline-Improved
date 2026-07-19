@@ -82,6 +82,13 @@ async def call_agent_detect(
              or result.get("classification")   # rounds 없을 때만 fallback
         result["_round0_classification"] = r0
 
+        # ★ [NB v3 — 잔여 실험 B] controller finalize가 round_log에 남기는
+        #   {"round": "final", nd_round0, nd_final} 엔트리 소비 —
+        #   reroute/expand가 nd를 실제로 개선하는지(min-fusion)의 유일한 실측 경로.
+        _fin = next((r for r in rounds if r.get("round") == "final"), None)
+        result["_nd_round0"] = (_fin or {}).get("nd_round0")
+        result["_nd_final"]  = (_fin or {}).get("nd_final")
+
         # ── distance band 분류 ──────────────────────────────
         dist = float(result.get("top_1_distance") or 0)
         if dist < BOUNDARY_LOW:
@@ -496,6 +503,16 @@ async def main():
     print(f"  agent FNR@thr        : {report['agent_at_threshold'].get('fnr')}")
     print(f"  boundary FNR         : {s.get('boundary_fnr')}")
     print(f"  verdict change rate  : {s.get('verdict_change_rate')}")
+    # ★ [잔여 실험 B] nd_round0 vs nd_final — min-fusion이 판 바꾼 규모
+    _nd_pairs = [(p["_nd_round0"], p["_nd_final"]) for p in predictions
+                 if not p.get("error") and p.get("_nd_round0") is not None
+                 and p.get("_nd_final") is not None]
+    if _nd_pairs:
+        _impr = [a - b for a, b in _nd_pairs if b < a - 1e-9]
+        _mean = (sum(_impr) / len(_impr)) if _impr else 0.0
+        print(f"  nd min-fusion        : n={len(_nd_pairs)}  "
+              f"improved={len(_impr)} ({len(_impr)/len(_nd_pairs):.1%})  "
+              f"meanΔ(improved)={_mean:.4f}")
     # routing 정확도: 서빙 primary_cluster_id vs GT cluster (gt_cluster_tree)
     _r = [(p.get("primary_cluster_id"), p.get("_gt_cluster"))
           for p in predictions if not p.get("error")

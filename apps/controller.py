@@ -24,7 +24,7 @@ Controller Service — Planner + Agent Loop (LangGraph StateGraph)
        accept_verdict로 바로 수렴 (numeric distance band를 모델이 이미
        내부화했다고 보고, planner가 재해석하지 않음).
     => what_missing은 teacher 단계의 자유 텍스트가 남아있을 수 있으나,
-       검증 결과(노트북 Section 9 cell 54) 대부분 distance band의
+       검증 결과(NB03 v3, S4 1-key 실측 포함) 대부분 distance band의
        재진술이다. 따라서 planner 프롬프트는 what_missing의 키워드를
        "신뢰 가능한 신호"가 아니라 "tool 선택을 위한 약한 힌트"로만
        사용하도록 명시한다.
@@ -120,6 +120,13 @@ BOUNDARY_HIGH = float(os.getenv("SUFFICIENCY_BOUNDARY_HIGH", "0.55"))
 #   대비 차별점의 구조적 근거. llm 모드 비교실험 시에는 반드시 false.
 SKIP_ANALYZER_ON_CONFIDENT = os.getenv("SKIP_ANALYZER_ON_CONFIDENT", "true").lower() == "true"
 CLS_ND_THRESHOLD = float(os.getenv("CLS_ND_THRESHOLD", "0.5"))   # analyzer와 동일 키 공유
+# ★ [NB v3 정합 — nd min-fusion] 검색 확장(expand)/재라우팅(reroute)으로
+#   라운드가 늘면 최종 nd = min(라운드별 nd) 로 재계산해 det cls를 재판정.
+#   근거(NB03 v3 Section 3 실측): after_reroute(min) AUROC — 전체 0.815→0.836
+#   (Δ+0.022), boundary 0.558→0.620(Δ+0.062). "가장 잘 맞는 정상 frame"이
+#   판정 기준이라는 memory-bank 원리와 동일. det 모드 전제 — llm 모드로
+#   A/B할 땐 false로 끄고 모델 verdict를 그대로 둔다.
+ND_MIN_FUSION = os.getenv("ND_MIN_FUSION", "true").lower() == "true"
 
 
 def _normalize_dist_fallback(d: float) -> float:
@@ -716,6 +723,10 @@ class AgentState(TypedDict, total=False):
     # 보존한다 — harness가 "경로별 AUROC 기여"와 "conditional edge 정확성"
     # (plan 결정 vs 실제 분기 일치)을 계산하는 유일한 데이터 소스.
     round_log:                Annotated[List[Dict], operator.add]
+    # ★ [nd min-fusion] 라운드별 정규화 nd / raw L2 축적 — node_analyze가
+    # 라운드마다 1개씩 append, node_finalize가 min을 취해 최종 판정에 사용.
+    nd_history:               Annotated[List[float], operator.add]
+    raw_dist_history:         Annotated[List[float], operator.add]
     # 종료 사유: "accept_verdict" | "budget_exceeded" | "fast_track" |
     # "unknown_action" — loop 안전성(budget 초과 0건) 측정용.
     termination:              str
@@ -889,6 +900,8 @@ async def node_analyze(state: AgentState) -> AgentState:
                 "analyzer_history": [{"round": current_round,
                                       **normalize_analyzer_output(raw).model_dump()}],
                 "history": [f"analyze:skipped_confident(nd={_nd_skip:.3f})"],
+                "nd_history": [round(_nd_skip, 4)],                       # ★ min-fusion 소스
+                "raw_dist_history": [float(state.get("top1_distance", DIST_P50))],
             }
 
     # ── [검증용] Mock Analyzer ──────────────────────────────────────────
@@ -997,10 +1010,17 @@ async def node_analyze(state: AgentState) -> AgentState:
     # state["analyzer"]에는 analyzer 원본 응답(raw)을 그대로 저장한다.
     # node_plan의 PlanRequest(analyzer=dict) model_validator가
     # normalize_analyzer_output을 단 한 번만 거쳐 올바르게 처리한다.
+    # ★ [nd min-fusion] 이번 라운드의 nd 축적 — analyzer 응답에 nd가 있으면
+    #   그 값을(local_analyzer v3가 동봉), 없으면 동일 수식으로 재계산.
+    _raw_d  = float(state.get("top1_distance", DIST_P50))
+    _nd_now = raw.get("nd") if isinstance(raw, dict) and isinstance(raw.get("nd"), (int, float)) \
+              else _normalize_dist_fallback(_raw_d)
     return {
         "analyzer": raw,
         "analyzer_history": [{"round": state.get("round", 0), **normalized.model_dump()}],
         "history": ["analyze"],
+        "nd_history": [round(float(_nd_now), 4)],
+        "raw_dist_history": [_raw_d],
     }
 
 
@@ -1068,6 +1088,7 @@ async def node_plan(state: AgentState) -> AgentState:
         "round":         state.get("round", 0),
         "track":         state.get("track", "deep"),
         "top1_distance": state.get("top1_distance"),
+        "nd":            (state.get("nd_history") or [None])[-1],   # ★ 이번 라운드 nd
         "cluster_id":    state.get("cluster_id"),
         "cls":           getattr(_norm, "classification", None),
         "sufficiency":   getattr(_norm, "sufficiency", None),
@@ -1354,7 +1375,27 @@ async def node_finalize(state: AgentState) -> AgentState:
         reason = "budget_exceeded"
     else:
         reason = "unknown_action"
-    return {"history": ["finalize"], "termination": reason}
+
+    # ★ [nd min-fusion — NB v3 정합] 최종 nd = min(라운드별 nd).
+    #   reroute/expand가 만든 새 frame 중 "가장 잘 맞는 정상"이 판정 기준
+    #   (after_reroute(min) 실측 Δ+0.022/+0.062). det 전제로 cls도 재판정.
+    upd: Dict = {"history": ["finalize"], "termination": reason}
+    nds  = state.get("nd_history") or []
+    raws = state.get("raw_dist_history") or []
+    if nds:
+        nd0, nd_final = nds[0], min(nds)
+        upd["round_log"] = [{"round": "final", "nd_round0": nd0,
+                             "nd_final": round(nd_final, 4), "n_rounds": len(nds)}]
+        if ND_MIN_FUSION:
+            upd["verdict"] = "ABNORMAL" if nd_final >= CLS_ND_THRESHOLD else "NORMAL"
+            if raws:
+                upd["top1_distance"] = min(raws)     # 응답/confidence도 min frame 정합
+            if len(nds) > 1 and abs(nd_final - nds[-1]) > 1e-9:
+                logger.info("nd_min_fusion_applied",
+                            request_id=state.get("request_id", "?"),
+                            nd_rounds=nds, nd_final=round(nd_final, 4),
+                            verdict=upd["verdict"])
+    return upd
 
 
 def route_after_pre_router(state: AgentState) -> str:
@@ -1474,6 +1515,8 @@ async def detect(req: DetectRequest):
         "history": [],
         "analyzer_history": [],
         "round_log": [],
+        "nd_history": [],
+        "raw_dist_history": [],
     }
     try:
         final_state = await agent_graph.ainvoke(init_state)

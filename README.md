@@ -10,13 +10,19 @@
 
 ## 📌 프로젝트 개요
 
-**Multi-Cluster Memory Bank 이상탐지 알고리즘(EAAI 2025)을 운영 가능한 AgentRAG 시스템으로 확장한 엔드투엔드 파이프라인**입니다.
+**Multi-Cluster Memory Bank 이상탐지 알고리즘(EAAI 2025)을 운영 가능한 수준의 AgentRAG 시스템으로 확장한 엔드투엔드 파이프라인 개발 프로젝트**입니다.
 
-Tabular 이상 거래를 "retrieval → 거리 기반 이상탐지 → 판정 원인 설명" 흐름으로 처리하며, Vector Indexing · Router(클러스터 라우팅) · Retriever(HNSW) · Evaluator(LLM) · Planner · Orchestrator의 6개 MSA로 GKE에 배포했습니다.
+Tabular 이상 거래를 "retrieval → 거리 기반 이상탐지 → 판정 원인 설명" 흐름으로 처리하며, Vector Indexing · Router(클러스터 라우팅) · Retriever(HNSW) · Evaluator(LLM) · Planner · Orchestrator의 6개 MSA로 GKE에 배포했습니다. 정적 forwardRAG(전수 LLM 추론 baseline)에서 출발해, **검색 결과를 평가하고 선택적으로 재검색하는 Agent 시스템**으로 확장한 과정과 그 측정 근거가 이 프로젝트의 핵심입니다.
 
-이 프로젝트의 핵심은 **"LLM을 파이프라인 어디에 써야 하는가"를 4단계 실험으로 측정해 좁혀간 과정**입니다:
+### 🎯 핵심 문제 해결 (검증 완료 지표)
 
-> **6회 독립 측정 + 4단계(S1→S4) 실험의 일관된 결론** — 이 도메인에서 판정 신호는 임베딩 거리(nd)가 유일하며, LLM의 판정·진단 개입은 순손실이다. 따라서 LLM의 자유 출력을 5키 → 1키로 축소해 3B를 0.5B로 대체하고, **agent의 가치를 "정확도 개선"이 아닌 "선택적 호출에 의한 비용 절감(이론치 ≈57%)"과 감사 주석(what_missing)으로 재정의**했다.
+| 문제 | 해결 방안 | 성과 |
+|------|---------|------|
+| 벡터 검색 병목 | Percolate Query Bucketization (3단계 고도화) | Router Recall@5 +9%p, P99 latency −25% |
+| 메모리 제약 | Coreset Sampling 10% 운영점 | 메모리 −89% (2.8GB→0.31GB), AUROC 손실 0.4%p 이내, median latency −46% |
+| Teacher 오답이 학습 신호 오염 | Rejection Sampling (GT-free 생성 → GT 필터) | teacher 정답률 60~65% 감안 ×1.7 oversample로 품질·수량 동시 확보 |
+| SFT-GRPO Training으로 llm 역할 분배 | 과제 설계 원인 정량 규명 → Deterministic-LLM 역할 분리 | what_missing 생성 타이밍 11%→100%, 실제 이탈 feature 지목 정합도 70% |
+| Deterministic-planner 역할 분담 | 측정 기반 Selective Tool Gate (rule search) | expand 발동 84%→10~12%, 게이트 영역 내 good/bad flip 3.2:1 |
 
 ---
 
@@ -37,9 +43,7 @@ Test Transaction
 [Orchestrator] 최종 판정 + round_log/termination → API Response
 ```
 
-`PIPELINE_MODE=forward` 전환 시 동일 인프라에서 **정적 forwardRAG baseline**(route→retrieve→analyzer 1회)으로 동작합니다 — Agent 시스템의 가치를 같은 문제지에서 A/B 측정하기 위한 구조입니다.
-
-**실험 재현**: NB01-04(데이터 생성) / NB02(SFT·GRPO) / NB03(검증·Judge) 모두 `EXPERIMENT_STAGE ∈ {S1,S2,S3,S4}` 한 줄로 아래 4단계를 전환합니다.
+`PIPELINE_MODE=forward` 전환 시 동일 인프라에서 **정적 forwardRAG baseline**([route]→[Retrieve]→[Analyzer] 1회)으로 동작합니다 — Agent 시스템의 가치를 같은 문제지에서 A/B 측정하기 위한 구조입니다.
 
 ---
 
@@ -216,276 +220,218 @@ Coreset Sampling 최적 운영점 검증: 메모리-이상탐지 성능-검색 l
 
 <br>
 
-### 3️⃣ Pipeline-aware data mining & LLM Analyzer 경량화 및 GRPO 최적화
+---
 
-| Stage | 구성 | 발견한 문제 | 다음 단계로의 조치 |
-|---|---|---|---|
-| **S1** | forward 3-key SFT, rejection 없음 | boilerplate 붕괴 + 3-key 비정합 — **원인은 모델 용량이 아니라 과제 설계** | Rejection Sampling + prompt v2 |
-| **S2** | forward + rejection + prompt v2 | forward는 성공(배포 후보). 단 router 오배정은 구조적으로 감지 불가 | agent evaluator 도입 |
-| **S3** | agent 3-key evaluator SFT | 데이터는 완벽하나 **0.5B가 판정과 서술을 동시에 못 함** | 판정을 코드로 이관, 출력 1-key로 축소 |
-| **S4** | agent 1-key(wm) + GRPO | evidence < nd (net −14), misroute 가설 기각 — **판정 개입은 손해** | wm을 감사 주석으로 격하, 선택적 호출로 가치 재정의 |
+### 3️⃣ 학습 데이터 생성 — Prompt v2 + 3중 Rejection Sampling
 
-### Stage 1 — Rejection 없는 SFT: 과제 설계 문제 발견
-
-| 지표 | 실측 | 의미 |
-|---|---:|---|
-| reasoning 고유율 | 18.9% | 상투 문구 수렴 |
-| 최빈 문장 점유(top-1) | 28.2% | boilerplate 암기 |
-| confidence std | <10 | 평균 회귀 |
-| teacher 정답률 | 60~65% | 오답이 학습 신호 오염 |
-
-→ cls·confidence·reasoning 3-key가 서로 비정합. **이산 판정 + key 간 의존 + 신호 희소**라는 과제 설계가 원인임을 규명.
-
-### Stage 2 — Rejection Sampling + Prompt v2: forward 성공 (배포 후보)
-
-| 지표 | v1 → v2 | 판정 |
-|---|---:|---|
-| 고유율 | 18.9% → **75.8%** | ✅ |
-| top-1 점유 | 28.2% → **4.6%** | ✅ |
-| conf ↔ \|nd−0.5\| 상관 | — → **0.985** | ✅ |
-| ECE (라벨 함수) | — → **0.109** | 라벨 상한 |
-| forward student P1 (grounded) | — → **95.5%** | ✅ |
-| forward cls acc / FNR | 0.811 / 0.261 | ✅ A/B 가능 |
-
-**📌 최신 S2 재검증 run (0713 / SFT / GGUF Q4 CPU / train 2,083 · eval 300 · Block 0 n=100)** — NB03 v3 실측:
-
-| 축 | 지표 | 실측 |
-|---|---|---:|
-| Block 0 | 파싱 성공 | 75/100 |
-| | **P1** grounded-consistency | **88.0%** (66/75) |
-| | **P2** feature-Jaccard (vs teacher) | 0.726 |
-| | **P3** confidence ECE | **0.099** (mean 82.0, std 7.5) |
-| | **P4** 고유율 / top1 / soft-top1 | **100% / 1.3% / 2.7%** |
-| | **P5** cls acc / FNR | 0.773 / 0.250 |
-| Block 1F (train 데이터) | conf↔\|nd−0.5\| 상관 / nd-GT ECE | 0.981 / 0.152 |
-| | grounding / cls-reasoning 정합 위반 | 77.1% / 27.9% |
-| Step 0 (ambiguous 158) | nd AUROC / acc(th 0.5) | **0.832** / 0.791 |
-| | student acc / **net gain** | 0.703 / **−14** ⛔ |
-| F7 | max\|z\| AUROC (misroute 예측) | **0.514** (가설 기각 재확인) |
-| | ambiguous 중 clean | 1,045/1,354 = **77%** |
-
-> 판독: student의 P3 ECE 0.099가 라벨 함수 상한(0.109)에 근접 — confidence 재라벨 학습 성공. P4 다양성도 붕괴 없음. **그러나 Step 0 net gain −14** — ambiguous 구간에서조차 student cls가 nd threshold보다 못하며, "evidence > nd" 가설이 무필터 eval에서 재차 기각됨. FNR 0.250은 nd threshold(0.5→0.42 재캘리브레이션) 이슈로 직교.
-
-**동시에 확정된 결정적 측정 3건** (→ Part 3 Table B-4/B-5 상세):
-
-| 측정 | 결과 | 함의 |
-|---|---:|---|
-| top5_spread / persona_dev 단독 AUROC | 0.403 / 0.496 | 무신호 |
-| nd only → nd + std(top3) 융합 | 0.779 → **0.857 (Δ+0.077)** | spread는 **코드 융합**에서만 가치 |
-| + persona ALL / categorical partial corr(nd 통제) | 0.873 (Δ+0.016) / **+0.000** | 정제 천장 닫힘 · categorical 정보량 0 |
-
-→ **"거리가 유일 신호" 1차 확정.** 하지만 router 오배정(type1 531 / type2 1,263)은 forward가 구조적으로 감지 불가 → agent evaluator 도입 근거.
-
-### Stage 3 — 3-key Agent Evaluator: 데이터는 완벽, student는 붕괴
-
-| 지표 | 데이터 (teacher) | student (3-key) |
-|---|---:|---:|
-| coupling 위반 (confident⟺null) | **0/995** ✅ | — |
-| wm 형식 준수율 | 100% | 100% |
-| grounding (cm/ni) | 100% / 100% ※ | P1 **35.7%** |
-| direction 균형 (cm:ni) | 214:293 | **57:3 붕괴** |
-| cls acc / FNR | — | 0.760 / 0.327 |
-
-> ※ 데이터의 grounding 100%·(구버전 표기) evidence-GT 100%는 **rejection이 실패를 이미 걸러낸 순환논증**이었음을 이후 확인 — 무필터 eval(Step 0)에서 net −13/−14로 반전. 본 README의 이전 판에서 "evidence-GT 100% vs nd 64.4%로 설계 정당화"라 서술한 부분을 정정합니다.
-
-**SUF_BALANCE A/B — 0.5B의 구조적 한계:**
-
-| | nd_clear 일치 | FNR | P1 | cls acc | parse |
-|---|---:|---:|---:|---:|---:|
-| ambiguous_only (224) | **53.8%** ❌ | 0.462 | **92.7%** | 0.531 | 82% |
-| downsample (1,014) | **94.7%** ✅ | 0.146 | 79.6% | 0.689 | 84% |
-| SFT-only (downsample) | — | 0.315 | — | 0.740 | 100% |
-
-→ ambiguous만 학습하면 nd→cls 매핑을 잃고(53.8%), 전 밴드를 학습하면 wm이 희석됨. **0.5B는 판정과 서술을 동시에 못 한다** — grounding↔cls 트레이드오프(92.7%↔53.8% / 79.6%↔94.7%)는 해소 불가.
-
-### Stage 4 — 1-key + GRPO: 가설의 직접 검정 (기각)
-
-| 측정 | 실측 | 판정 |
-|---|---:|---|
-| Step 0 nd AUROC (밴드 내) | 0.832 | 밴드 안에서도 nd가 강신호 |
-| Step 0 student acc vs nd | 0.709 vs 0.791 | ❌ |
-| Step 0 net gain | **−13 (SFT)** | ❌ evidence < nd |
-| [F7-3] max\|z\| AUROC (misroute 예측) | **0.421** (재측정 0.514) | ❌ 가설 기각 — 오배정 샘플의 이탈이 오히려 작음 |
-| [F7-2] cm / ni P vs base | 0.511/0.459 · 0.539/0.519 | ❌ 정보량 ≈0 |
-| [F7-1] ambiguous 중 clean | 466/786 = 59% (재측정 77%) | ❌ "ambiguous⟺검색 결함" 전제 붕괴 |
-| Block 0 P4 고유율 / top1 | 4.0% / 97% | ❌ SFT 붕괴 |
-| parse | 84% | GBNF로 개선 대상 |
-
-**⚠ GRPO 결과 정정 (이전 README의 "SFT 대비 AUROC +2.3%p, ECE −8%" 주장 철회):**
-
-| 시점 | 상태 | 원인 |
-|---|---|---|
-| 1차 run | **무효** — `_grpo` 어댑터 = SFT 어댑터 | reward 함수 최상단 cls 검사 → 1-key(wm_only) 출력에서 전 reward=0 → adv_std=0 → 전 스텝 skip (확정 버그, v3에서 수정) |
-| 2차 run (버그 수정 후, pool 786) | **여전히 updated=0 / skipped=786** | SFT 붕괴 출력(`"neighbor_insufficient"` direction 단독) × **이진 형식 게이트**(`: <evidence>` 필수) → 그룹 전원 reward 0 → 분산 0 |
-| 3차 (진행 예정) | 공란 — *추후 진행* | graded reward(v5: direction/evidence/인용 부분 점수) + temperature·G 상향으로 그룹 내 분산 복원 후 재실행 |
-
-### 🎯 결론 — 이론이 100% 맞았어도 (보수적 상한)
-
-| 축 | 실제 | 이론 정합 시 (보수) |
-|---|---:|---:|
-| 판정 AUROC | 0.832 | **0.85~0.86** (fusion 천장 0.857) |
-| FNR | 0.315 | 0.25~0.28 |
-| **LLM 호출량** | 100% (forward 전수) | **≈43%** (ambiguous만 — 확실한 이득) |
-| latency/건 | 60~120s | ≈25~50s |
-
-> **핵심 메시지**: 이론이 전부 성립했어도 판정 개선의 물리적 천장은 +0.077(nd+std 실측)이고 persona 추가는 +0.016. 반면 **호출량 절감 57%는 확실**. 즉 agent의 가치는 정확도가 아니라 **선택적 호출에 의한 비용 절감**이며, 그마저도 **cls를 코드가 결정할 때만** 성립한다. 잔여 가치 경로는 (A) wm의 감사 주석 격하 + `PIPELINE_MODE=forward` A/B로 호출 절감 실측 마무리, (B) reroute가 nd를 실제 개선하는지(nd_round0 vs nd_final) 단 1건의 미검증 실험뿐 — 단, boundary에서 `after_reroute(min)` Δ+0.062 실측(Part 3 B-6)은 (B)에 약한 긍정 신호.
+Teacher(Qwen2.5-14B) 증류 데이터의 품질 문제를 **프롬프트와 필터를 2단계에 걸쳐 고도화**해 해결했습니다.
 
 ---
 
-# 📈 Part 2. Visualization
+#### **Version 1: GT-conditioned 생성 (rejection 없음)**
 
-핵심 3종은 NB03 v3 Section 2.5가 생성하며, 결과 저장 블록이 `gs://fraud_ecomm/evaluation/{run_tag}/`에 업로드합니다 (README 이미지는 `picture/` 미러).
+Teacher에게 GT를 알려주고 사후 설명을 생성하는 직관적 방식입니다.
 
-### 핵심 시각화
+```text
+프롬프트: [이웃 원시 feature 덤프 ~200 tok] + [mean/std 통계표] + GROUND TRUTH: ABNORMAL
+→ teacher: "reasoning을 GT에 맞춰 사후 합리화(rationalization)"
+```
 
-**Fig 1 — Rejection Funnel (Sankey)**: 생성 → parse/cls-GT/grounded/dup 기각 → balance → train 최종. Rejection Sampling이 teacher 오답(정답률 60~65%)을 어떻게 걸러내는지의 정량 흐름.
-
-<p align="center"><img src="picture/fig1_rejection_funnel.png" width="70%"><br><i>Fig 1. Rejection funnel — NB01-04 F3 gen_stats 기반 (S2 run)</i></p>
-
-**Fig 2 — Calibration Curve**: 라벨 함수(50+50·tanh, ECE 0.109 = 상한) vs student(ECE 0.099). student가 라벨 상한에 근접 = confidence 재라벨 학습 성공의 직접 증거.
-
-<p align="center"><img src="picture/fig2_calibration_s2.png" width="60%"><br><i>Fig 2. Label function vs student calibration (S2, eval n=300 / Block 0 n=100)</i></p>
-
-**Fig 3 — 다양성 산점 (고유율 × soft-top1)**: v1(18.9%/28.2%) → v2(75.8%/4.6%) 데이터 개선과, agent 1-key student의 붕괴점(4.0%/97%)·forward student(100%/2.7%)를 한 평면에서 대비.
-
-<p align="center"><img src="picture/fig3_diversity.png" width="60%"><br><i>Fig 3. Diversity scatter — teacher 데이터(S1~S4) + student</i></p>
-
-### 부차 시각화 (상태 관리)
-
-| 그림 | 내용 | 상태 |
-|---|---|---|
-| Fig 4 | Fusion AUROC bar — nd → +spread → +persona (천장 닫힘) | *추후 진행* (수치는 B-4 확정) |
-| Fig 5 | LangGraph StateGraph (mermaid) | *추후 진행* |
-| Fig 6 | Streamlit agent trace 타임라인 / latency breakdown | *추후 진행* |
-| Fig 7 | Locust 부하 그래프 (P95 / 에러율) | *추후 진행* |
+- **의도**: GT 조건화로 라벨-설명 일관성 확보
+- **한계**: reason↔label 인과 파괴 — student가 관계가 아닌 **템플릿을 암기** (reasoning 고유율 18.9%, 최빈 문장 점유 28.2%, confidence 평균회귀 std<10). teacher 정답률 60~65%의 오답도 그대로 학습 신호 오염
 
 ---
 
+#### **Version 2: Prompt v2 + GT-free 생성 → 3중 Rejection**
 
-## 4️⃣ ForwardRAG vs Evaluator-based AgentRAG
+"통계는 시스템이 계산하고, 해석만 LLM에 남긴다" — 프롬프트에서 산술을 제거하고, blind 생성 후 코드로 거릅니다.
 
-### B-0. 설계 원칙 — Deterministic-LLM 역할 분리
-
-> **"규칙으로 정확히 계산되는 신호는 코드가, 서술만 LLM이."**
-> LLM 출력 key 수 = 검증 불가능한 자유도. 4단계 측정의 귀결로 자유도를 5→1로 축소했고, 남은 자유도(what_missing)는 사실 검증 가능한 반구조 형식으로 강제한다.
-
-| 신호 | 담당 | 근거 |
-|---|---|---|
-| sufficiency | **deterministic** (nd-band [0.3, 0.55) 주입) | 이산 판정의 SFT collapse — 주입 후 wm 생성 타이밍 11%→100% |
-| cls | **deterministic** (nd threshold; `llm` 모드는 A/B용) | Step 0 net −13/−14 — evidence < nd |
-| confidence | **deterministic** (50+50·tanh 재라벨) | teacher 자체 conf는 std<10 평균회귀 (S1) |
-| what_missing | **LLM** (유일한 자유 출력, 감사 주석) | 판정 기여는 기각됐으나 선택적 감사 서술로 잔존 가치 |
-| 이웃 spread | **deterministic** (게이트에서 nd와 융합) | LLM 재진술 활용 0% · 융합 Δ+0.077은 코드에서만 실현 |
-
-### B-1. Prompt v2 — "통계는 시스템이 계산하고, 해석만 남긴다"
-
-논문의 판정 메커니즘상 이웃의 원시 feature는 점수 계산에 등장하지 않음(거리로만 기여). v1의 3가지 위반을 제거:
-
-| 위반 | v1 | v2 | 근거 |
-|---|---|---|---|
-| ① 이웃 원시 덤프 | top-3 전체 feature (~150-200 tok) | `top-k agrees \| differs` 다이제스트 1줄 | 3B조차 교차대조 실패("source deviates" 환각 — 이웃 전원 Ads) |
-| ② 원시 통계표 | mean/std → 모델이 z 암산 | **Deviation Table** `z=+0.79 [ok]` 사전계산 | 고유율 18.9→75.8% 실측 |
-| ③ 판정/설명 미분리 | 5-bullet 판정 기준 | nd band 가이드만 유지 | cls는 det — 자유도 차단 |
-
-레이아웃 `[정적 instruction 선두][가변 후미]` — llama.cpp prefix KV cache 정합. `prompts.py`는 학습·서빙 단일 소스이며 `AGENT_OUTPUT_KEYS(1key/3key)` 스위치로 S3/S4 instruction을 전환(서빙 기본 1key).
-
-### B-2. Hard Negative Mining + 3중 Rejection
-
-파이프라인 실제 오류 3종을 학습 데이터에 반영 — Type1 misrouted / Type2 cross-cluster / Type3 boundary. 배분 `mining 0.4 / boundary 0.4 / easy 0.2`, boundary 하한은 sufficiency band와 정합.
-
-teacher(Qwen2.5-14B)가 **GT hint 없이 blind 추론** → 사후 필터(GT-conditioned 생성은 reason↔label 인과를 파괴하므로 금지):
+```text
+[정적 instruction 선두 (~120 tok, KV prefix cache 대상)]
+[Deviation Table]  purchase_value: z=+0.79 [ok] ...   ← z를 사전 계산 (모델 암산 제거)
+[RETRIEVAL digest] top-k agrees: sex(3/3) | differs: browser(1/3) ...  ← 원시 덤프 15 tok 압축
+```
 
 | 필터 | 내용 | 해결한 실패 모드 |
 |---|---|---|
-| ① cls-GT | teacher 판정 ≠ GT 기각 | teacher 오답(60~65%) 오염 |
-| ② grounded | 인용 feature의 **사실 방향**을 코드 검증 | 인용율 지표의 함정(정합 서술 통과) |
+| ① cls-GT | blind teacher 판정 ≠ GT → 기각 | teacher 오답(60~65%) 오염 |
+| ② grounded | 인용 feature의 **사실 방향**을 코드 검증 | "인용율 71.8%"의 함정 — 정합 서술도 통과하던 문제 |
 | ③ dedup cap | soft-key(40자) 키당 ≤2% | 최빈 문장 점유 붕괴 |
 
-**Table B-2a. Rejection 수율 (agent, 참고 run)** — Fig 1의 수치 원천은 stage별 `*_gen_stats.json`.
+- **의도**: 검증 가능한 것(z, 합의)은 코드가 계산·필터 → LLM은 "표에서 골라 서술"만
+- **한계**: grounded 기각 ~38%의 수율 비용 (oversample ×1.7~2.5로 상쇄) + rejection이 만드는 지표 착시(부록 참조)
 
-| 단계 | 건수 |
-|---|---:|
-| 생성 (oversample ×1.7~2.5) | 1,700 |
-| grounded 기각 | 653 |
-| dedup 기각 | 374 |
-| 통과 → balance 후 채택 | 673 → **378** (ambiguous 71 — 표본 부족, 개선 대상) |
+---
 
-### B-3. 학습 구성 (NB02)
+#### 📊 실험 결과 (학습 데이터 생성)
 
-| | 설정 |
-|---|---|
-| Teacher / Student | Qwen2.5-14B-Instruct → 0.5B (3B 비교군) |
-| 방법 | PEFT/LoRA → SFT(TRL, completion-only loss) → GRPO |
-| 서빙 | GGUF Q4_K_M, llama-cpp-python (CPU, e2-standard-2) |
-| GRPO reward | R_direction / R_grounded / R_format (전부 코드 검증 가능) − P_template/P_length/P_dist |
-
-**Table B-3. SFT vs GRPO (동일 eval set)** — *GRPO 유효 run 확보 후 기입 (Part 1 Stage 4 정정 참조)*
-
-| 지표 | SFT | GRPO(v5 reward) | Δ |
+| 지표 | v1 (GT-conditioned) | **v2 (+Rejection)** | 목표 |
 |---|---:|---:|---:|
-| P1 grounded-consistency | 79.6% (S3 downsample) | *추후 진행* | |
-| P4 고유율 / soft-top1 | 4.0% / 97% (S4) | *추후 진행* | |
-| direction 균형 (cm:ni) | 57:3 | *추후 진행* | |
-| parse | 84% | *추후 진행* (GBNF 병행) | |
+| reasoning 고유율 | 18.9% | **75.8%** | >40% |
+| top-1 문장 점유율 | 28.2% | **4.6%** | <10% |
+| confidence ↔ \|nd−0.5\| 상관 | — | **0.985** | ≈1.0 |
+| ECE (라벨 함수) | — | **0.109** | 서빙 비교 기준선 |
 
-**Table B-3b. Student 크기 비교 (3B vs 0.5B)** — *judge 신뢰성 통과 후 기입*
+<table>
+<tr>
+<td width="55%" align="center">
 
-| | 3B (Q4) | 0.5B (Q4) | 기준 |
+<img src="picture/fig1_rejection_funnel.png" width="100%">
+
+**Rejection Funnel (Sankey)**<br>생성 → parse/GT/grounded/dup 기각 → train 최종
+
+</td>
+<td width="45%" align="center">
+
+<img src="picture/fig3_diversity.png" width="100%">
+
+**다양성 산점 (고유율 × soft-top1)**<br>v1 → v2 개선 + student 붕괴점 대비
+
+</td>
+</tr>
+</table>
+
+---
+
+### 4️⃣ Deterministic–LLM 역할 분리 — Agent Evaluator 출력 자유도 5키 → 1키
+
+"어디까지 LLM에 맡길 것인가"를 감이 아니라 **단계별 실험(S1→S4)으로 측정해 축소**했습니다.
+
+---
+
+#### **Version 1: 3-key Evaluator (cls·sufficiency·what_missing 전부 LLM)**
+
+ambiguous 구간(nd∈[0.3, 0.55))에서는 nd가 신뢰 불가하므로, LLM이 evidence로 cls까지 판정하게 합니다.
+
+- **의도**: 검색 결과가 애매할 때 LLM evidence 판정으로 nd를 보완
+- **한계**: 데이터는 완벽(coupling 위반 0/995)했으나 **0.5B가 판정과 서술을 동시에 못 함** — 아래 A/B에서 해소 불가 트레이드오프 확인
+
+| SUF_BALANCE A/B | nd→cls 유지 | wm 품질(P1) | 판정 |
 |---|---:|---:|---|
-| judge 점수 / P1 / cls acc | *추후 진행* | *추후 진행* | 0.5B ≥ 3B×0.9 → 교체 |
-| 메모리 (GGUF) | ~2.0 GB | ~0.4 GB | |
+| ambiguous만 학습 (224) | **53.8%** ❌ | 92.7% | 판정 붕괴 |
+| 전 밴드 학습 (1,014) | 94.7% | **79.6%** | 서술 희석 |
 
-### B-4. 신호 융합 천장 (boundary n=11,440 — S2 run 재확인)
+---
+
+#### **Version 2: 1-key + Deterministic 판정 (최종 채택)**
+
+판정·게이트를 전부 코드로 이관하고, LLM에는 자유 출력 1개만 남깁니다.
+
+```python
+sufficiency = "ambiguous" if 0.3 <= nd < 0.55 else "confident"   # 코드 (nd-band)
+cls         = "ABNORMAL"  if nd >= 0.5 else "NORMAL"             # 코드 (nd threshold)
+what_missing = LLM(prompt + "[SYSTEM-COMPUTED] sufficiency=...") # 유일한 LLM 자유 출력
+```
+
+| 신호 | 담당 | 근거 (실측) |
+|---|---|---|
+| sufficiency | 코드 (nd-band 주입) | 이산 판정의 SFT collapse — 주입 후 wm 생성 타이밍 11%→**100%** |
+| cls | 코드 (nd threshold) | ambiguous에서도 student(0.703) < nd(0.791), **net gain −14** |
+| confidence | 코드 (50+50·tanh 재라벨) | teacher 자체 conf는 평균회귀 (std<10) |
+| what_missing | **LLM** (감사 주석) | 실제 이탈 feature 지목 정합도 70% |
+
+- **의도**: "표에서 골라 서술" 과제로 격하 → **3B를 0.5B로 대체**하는 근거. instruction은 서빙과 verbatim 동일(train-serve 정합)
+- **한계**: wm의 판정 기여는 기각됨(부록 F7) — 가치는 감사 주석 + 선택적 호출로 재정의
+
+---
+
+#### 📊 실험 결과 (역할 분리 — Step 0 직접 검정, eval n=300 / ambiguous 158)
+
+| 측정 | 실측 | 판정 |
+|---|---:|---|
+| nd AUROC (ambiguous 밴드 내) | **0.832** | 밴드 안에서도 nd가 강신호 |
+| student cls acc vs nd acc | 0.703 vs **0.791** | evidence < nd |
+| net gain (student가 nd를 이긴 순증) | **−14** | ⛔ LLM 판정 개입은 손해 → det 전환 확정 |
+
+---
+
+### 5️⃣ SFT → GRPO — 검증 가능 reward 설계 (실패 진단 3단계 포함)
+
+SFT는 토큰 우도를 최적화해 **템플릿 암기를 보상**합니다. grounding을 직접 밀어올리기 위해 전 항이 **코드로 검증 가능한** reward를 설계했고, 실패를 2회 진단해 수정했습니다 — 이 진단 과정 자체가 RL 디버깅의 핵심 산출물입니다.
+
+#### Reward 구성 (agent: what_missing / forward: reasoning)
+
+| 항 | 정의 | 검증 방식 |
+|---|---|---|
+| R_direction | 결함 채널(cm/ni) ↔ 결정론 신호(DEVIANT 존재 / spread) 일관성 | 프롬프트 파싱 (코드) |
+| R_grounded | 인용 feature 실재 + z/value 명시 + 채널 정합 | Deviation Table (코드) |
+| R_format | `"<direction>: <evidence>"` / 3-key JSON | 정규식 |
+| − P_template/length/dist | 그룹 내 중복 · 토큰 초과 · 거리 재진술 | dedup key / tokenizer |
+
+#### 실패 진단 체인 — reward는 "지형"이다
+
+| 버전 | 실행 결과 (실측) | 진단된 원인 | 수정 |
+|---|---|---|---|
+| **v4** | 전 스텝 skip (updated 0/786, reward 전부 0.0) | reward 최상단이 cls 요구 — 1-key(wm_only) 출력엔 cls가 없음 → 전 생성 0점 → 그룹 분산 0 | cls 검사를 forward 분기로 이동 |
+| **v5** (graded) | 학습은 됐으나 **P1 0%, direction 단독 출력만** (cm:ni 57:39 flip) | ① direction 단독 = 0.375 **안전지대** ② mining-GT 방향 맞히기(Δ0.35)가 최대 분산원 ③ dup 페널티가 direction-flip을 "다양성"으로 보상 — 전형적 reward hacking | v6 ladder |
+| **v6** (ladder) | *재실험 예정* | — | 무출력 0 < direction 단독 **0.10** < evidence 시도 0.30 < 실인용 0.50 < 채널 정합 0.75 < +z 0.90 < +일관성 1.0 — 모든 계단에 gradient. direction 채점은 GT가 아닌 **결정론 신호 일관성**, dup 페널티는 evidence 출력에만 |
+
+> 병행 필요조건: GRPO는 정책이 실제 샘플한 출력만 학습한다 — 붕괴 모델은 temperature 1.1 / G=8 / colon prefix-forcing으로 **탐색을 먼저 복원**해야 ladder가 작동한다. v6로도 P1이 0%대면 같은 reward를 off-policy로 쓰는 best-of-n rejection SFT(RAFT)로 전환.
+
+#### 📊 실험 결과 (SFT vs GRPO — 동일 eval set)
+
+| 지표 | SFT (S4) | GRPO v5 (hacking) | GRPO v6 |
+|---|---:|---:|---:|
+| P1 grounded-consistency | — | **0.0%** | *추후 진행* |
+| P4 고유율 / top1 | 4.0% / 97% | 3.0% / 57% (direction flip) | *추후 진행* |
+| judge 평균 (0/0.5/1) | — | 0.300 (1점 0건) | *추후 진행* |
+
+---
+
+### 6️⃣ Agent 가치 재정의 — Selective 호출 + nd min-fusion
+
+4단계 측정의 귀결로 agent의 가치를 "정확도"가 아니라 **비용(호출량)과 판정 frame 선택**으로 재정의하고, 서빙에 반영했습니다.
+
+- **Confident-skip**: nd가 밴드 밖이면 LLM 호출 자체를 생략 (cls/wm 정답이 결정론) — 호출량 100% → **≈43%** (ambiguous 비율)
+- **Selective Tool Gate**: "ambiguous면 무조건 expand" 폐기 → 오프라인 rule search(N=28,302)로 `nd∈[0.48,0.60) ∧ plateau≤0.142` 도출 (good/bad flip 3.2:1) — expand 발동 84% → **10~12%**
+- **nd min-fusion** (서빙 반영 완료): reroute/expand로 라운드가 늘면 최종 nd = **min(라운드별 nd)** — "가장 잘 맞는 정상 frame"이 판정 기준이라는 memory-bank 원리와 동일. 실측 근거: after_reroute(min) AUROC 전체 0.815→**0.836**, boundary 0.558→**0.620**
+
+#### 📊 실험 결과 (Agent vs forwardRAG — 보수적 상한)
+
+| 축 | forwardRAG (전수) | Agent (이론 상한) | 실측 |
+|---|---:|---:|---:|
+| 판정 AUROC | 0.832 | ≤0.857 (fusion 물리 천장 Δ+0.077) | *A/B 추후 진행* |
+| LLM 호출량 | 100% | **≈43%** | *A/B 추후 진행* |
+| latency/건 | 60~120s | ≈25~50s | *A/B 추후 진행* |
+
+---
+
+### 7️⃣ 평가 체계 — 우선순위 지표(Block 0) + LLM-as-Judge
+
+"통과하기 쉬운 지표(인용율·loss)"가 아니라 사실 정합을 우선 채점합니다. **P1** grounded-consistency(인용의 사실 방향) → **P2** teacher-parity(Jaccard) → **P3** ECE/형식 → **P4** 다양성(soft-top1이 진짜 신호) → **P5** cls acc(det 서빙에선 참고). Judge는 자유출력 2-key(`what_missing`/`reasoning`)만 이산 rubric(0/0.5/1)으로 채점하며, **신뢰성 3종(GT 상관·재현성·순서편향) 통과가 채택 조건**입니다 (judge ≠ student — teacher 14B만).
+
+#### 📊 실험 결과 (배포 후보 forward student — S2, GGUF Q4 CPU, Block 0 n=100)
+
+| 지표 | 실측 | 해석 |
+|---|---:|---|
+| P1 grounded-consistency | **88.0%** | 인용 feature의 사실 정합 |
+| P3 confidence ECE | **0.099** | 라벨 함수 상한(0.109)에 근접 = 재라벨 학습 성공 |
+| P4 고유율 / soft-top1 | 100% / 2.7% | 붕괴 없음 |
+| P5 cls acc / FNR | 0.773 / 0.250 | FNR은 threshold(0.5→0.42) 직교 레버 |
+
+<p align="center"><img src="picture/fig2_calibration_s2.png" width="55%"><br><i>Calibration — 라벨 함수(ECE 0.109 상한) vs student(0.099)</i></p>
+
+---
+
+## 📎 부록 — Fraudecom 데이터 직접 검증 (Intuition)
+
+위 설계 결정들의 근거가 된 원데이터 실험 (NB03 v3 Section 3, 모델 불필요).
+
+**A-1. 신호 융합 천장 (boundary n=11,440)** — "거리가 유일 신호"의 실측
 
 | 신호 | AUROC | 판정 |
 |---|---:|---|
 | top5_spread / persona_dev 단독 | 0.403 / 0.496 | 무신호 |
-| **nd only** | 0.779 | |
-| **nd + std(top3)** | **0.857 (Δ+0.077)** | ✅ 코드 융합에서만 가치 |
-| nd + std + gap | 0.857 | 포화 |
-| + persona (purchase_value, age) / ALL | 0.873 (Δ+0.016) | ⚠ 정제 천장 닫힘 |
+| **nd only** → **nd + std(top3)** | 0.779 → **0.857 (Δ+0.077)** | spread 가치는 **코드 융합**에서만 — LLM 재진술 활용 0% |
+| + persona (useful/ALL) | 0.873 (Δ+0.016) | 정제 천장 닫힘 → 판별 확대는 graph(새 차원)로만 |
 
-### B-5. nd 통제 후 feature별 추가 정보량 (boundary)
+**A-2. nd 통제 후 feature별 추가 정보량** — categorical 6종 전부 partial corr **+0.000** / AUROC 0.500 → `cluster_mismatch` 근거를 numeric으로 한정한 설계의 실증. numeric(purchase_value/age)도 partial −0.10대(nd에 흡수).
 
-| feature | AUROC | partial(\|dev\|, label \| nd) |
-|---|---:|---:|
-| purchase_value / age | 0.437 / 0.419 | −0.103 / −0.122 |
-| categorical 6종 (sex/source/browser/IP/month/weekday) | **0.500** | **+0.000** |
+**A-3. misroute 가설 기각 (F7)** — "배정 클러스터에서 크게 벗어나면 배정이 틀렸다"는 가설: max|z| AUROC **0.421**(재측정 0.514) — 오배정 샘플의 이탈이 오히려 작음. ambiguous 중 clean 59~77% — "ambiguous ⟺ 검색 결함" 전제도 붕괴. → wm의 판정 기여 기각의 결정 근거.
 
-> categorical은 nd 통제 후 정보량 0 → ① `cluster_mismatch` 근거를 numeric으로 한정한 설계의 실증 ② evaluator의 판별 확대는 정제가 아니라 **graph(새 차원)** 로만 가능.
+**A-4. reroute 재정렬 진단 (n=28,302)** — 전체는 재정렬 성격(Spearman 0.653, Δ+0.022)이나 **boundary에서 순위 보존이 깨지며(0.102) min-fusion Δ+0.062** → 6️⃣ nd min-fusion 서빙 반영의 직접 근거이자, 잔여 실험(nd_round0 vs nd_final)의 기대치.
 
-### B-6. Reroute 재정렬 진단 (S2 run, n=28,302)
-
-| 구간 | Spearman(nd_assigned, nd_reroute) | AUROC assigned → after_reroute(min) |
-|---|---:|---:|
-| 전체 | +0.653 | 0.815 → 0.836 (**Δ+0.022**) |
-| boundary(p30~p50) | **+0.102** | 0.558 → 0.620 (**Δ+0.062**) |
-
-> 전체에서는 재정렬 성격이 우세하나, **boundary에서는 순위 보존이 깨지고(0.102) min-fusion이 +0.062** — 잔여 실험 (B)(nd_round0 vs nd_final)의 기대치를 지지하는 유일한 약한 긍정 신호. 단 천장 +0.077 내의 개선임.
-
-### B-7. 평가 체계 (NB03 v3 = 정본)
-
-| 우선순위 | 지표 | 왜 필요한가 |
-|---|---|---|
-| P1 | grounded-consistency | 인용율의 함정 교정 — 인용의 **사실 방향** 채점 |
-| P2 | teacher-parity (Jaccard) | teacher 상한 대비 위치 (forward의 "direction 100%"는 artifact — 신호 아님) |
-| P3 | [agent] wm 형식·direction 분포 / [forward] ECE | planner 소비 가능성 / 평균회귀 교정 |
-| P4 | 고유율 / top1 / **soft-top1** | 템플릿 붕괴 — soft-top1이 진짜 신호 |
-| P5 | cls acc / FNR | det 서빙에선 **참고 지표** (nd threshold가 결정) |
-
-**LLM-as-Judge** (`common/judge.py` 단일 소스): 자유출력 2-key(`what_missing`/`reasoning`)만 이산 rubric(0/0.5/1)으로 채점. **judge ≠ student** (teacher 14B/Gemini만). 채점 전 신뢰성 3종(GT 상관 >0 / 2회 일치율 / 순서 편향) 통과가 채택 조건.
-
-**Table B-7. Judge 결과** — *신뢰성 검증 run 후 기입 (추후 진행)*
-
-| 항목 | 값 |
-|---|---:|
-| judge↔GT 상관 / 재현성 / 순서편향 | *추후 진행* |
-| judge avg — forward(0.5B) / agent(0.5B) / agent(3B) | *추후 진행* |
-
-### B-8. Selective Tool Gate (게이트 = 코드, LLM = 서술)
-
-- **expand**: 오프라인 rule search(N=28,302) → `nd∈[0.48,0.60) AND plateau≤0.142`, good/bad flip **3.2:1**, 실측 발동 84%→10~12%
-- **reroute**: wm 텍스트에는 mismatch 신호 부재 확인 → 라우터 관측 신호(`match_type=centroid` + rank1/2 score 근접)로 대체, rank2 전환 시 persona 교체 *(τ 캘리브레이션 진행 중)*
+**A-5. 지표 착시 2건 (정직한 기록)** — ① "evidence-GT 100%"는 rejection이 정답만 남긴 **순환논증**(무필터 Step 0에서 net −14로 반전) ② P1 100%(데이터)도 동어반복 — rejection 생존자의 성질. 평가는 반드시 **무필터 eval set**에서.
 
 ---
 
@@ -495,21 +441,23 @@ teacher(Qwen2.5-14B)가 **GT hint 없이 blind 추론** → 사후 필터(GT-con
 |---|---|
 | ❌ Teacher rationalization (GT-conditioned wm) | reason↔label 인과 파괴 → GT-free 생성 + 필터 |
 | ❌ 인용율을 품질 지표로 | 정합 서술 통과 → grounded-consistency로 교체 |
-| ❌ categorical을 cluster_mismatch 근거로 | partial corr +0.000 (B-5) |
+| ❌ categorical을 cluster_mismatch 근거로 | partial corr +0.000 (부록 A-2) |
 | ❌ eval_loss 기반 best-checkpoint | 템플릿 암기 보상 → P1 기반 early-stop |
 | ❌ spread의 LLM 재진술 / retrieval_reliability 슬롯 | 활용 0% / 0/200 미발화 |
 | ❌ Global centroid hard-anomaly gate / 단순 PatchCore reweight | precision 0.64~0.76 / FNR 0.16→0.26 순손실 |
 | **🔧 정정** "ambiguous cls = evidence 판정" (evidence-GT 100%) | **순환논증** — rejection이 정답만 잔존. 무필터 Step 0 net −13/−14로 반전 → cls 전면 deterministic 전환 |
-| **🔧 정정** "GRPO: AUROC +2.3%p, ECE −8%" | 1차 run 무효(reward cls 버그) · 2차 run 무효(이진 게이트 × SFT 붕괴 → 분산 0). graded reward로 재실험 예정 |
+| **🔧 정정** "GRPO: AUROC +2.3%p, ECE −8%" | v4 무효(cls-gate 버그, 전 스텝 skip) → v5 무효(안전지대 + direction-flip hacking, P1 0%) → **v6 ladder reward로 재실험** (5️⃣ 진단 체인) |
 | ✅ prompt v2 / deterministic sufficiency 주입 / Selective expand gate | 고유율 18.9→75.8% / wm 타이밍 11→100% / flip 3.2:1 |
 | ✅ 출력 자유도 5→1키 + 0.5B 전환 | 판정·진단은 코드, 서술만 LLM — 4단계 측정의 귀결 |
 
+> **6회 독립 측정 + 4단계(S1→S4) 실험의 일관된 결론** — 이 도메인에서 판정 신호는 임베딩 거리(nd)가 유일하며, LLM의 판정·진단 개입은 순손실이다. 따라서 LLM의 자유 출력을 5키 → 1키로 축소해 3B를 0.5B로 대체하고, **agent의 가치를 "정확도 개선"이 아닌 "선택적 호출에 의한 비용 절감(이론치 ≈57%)"과 감사 주석(what_missing)으로 재정의**했다.
+
 ## 🔜 남은 작업
 
-- [ ] **GRPO v5 reward 재실험** (graded reward + temperature/G 상향) → Table B-3 기입
-- [ ] `PIPELINE_MODE=forward` A/B — **LLM 호출량 절감 실측** (이론 ≈57%) → Table 4-2 상당 기입
-- [ ] 잔여 실험 (B): agent_batch_inference로 nd_round0 vs nd_final (reroute의 실제 nd 개선 — B-6이 약한 긍정)
-- [ ] Judge 신뢰성 3종 통과 → Table B-7 / 3B vs 0.5B 비교 → B-3b
+- [ ] **GRPO v6(ladder) reward 재실험** — 탐색 복원(temp 1.1 / G=8 / colon prefix-forcing) 병행 → 5️⃣ 결과 표 기입, 실패 시 best-of-n rejection SFT(RAFT) 전환
+- [ ] `PIPELINE_MODE=forward` A/B — **LLM 호출량 절감 실측** (이론 ≈57%) → 6️⃣ 결과 표 기입
+- [ ] 잔여 실험 (B): agent_batch_inference로 nd_round0 vs nd_final 실측 (harness 소비 코드 반영 완료 — 부록 A-4가 약한 긍정)
+- [ ] Judge 신뢰성 3종 통과 → 7️⃣ judge 표 채움 / 3B vs 0.5B 비교
 - [ ] `CLS_ND_THRESHOLD` 0.5→0.42 재캘리브레이션 (FNR 직교 레버)
 - [ ] parse 84%→99% (GBNF grammar) / KV prefix cache 재측정(현 N=5에서 −9% 역효과 — 표본·캐시 적중 재점검)
 

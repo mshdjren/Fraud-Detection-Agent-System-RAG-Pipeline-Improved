@@ -238,9 +238,11 @@ async def call_router(client, embedding, experiment_case, percolate_version) -> 
 DIST_TOP_K = int(os.getenv("DIST_TOP_K", "5"))
 # ★ [forwardRAG baseline] PIPELINE_MODE
 #   "agent"(기본): controller LangGraph loop (evaluator + planner + tools)
-#   "forward": 정적 RAG baseline — route→retrieve→analyzer(3-key) 1회,
+#   "forward": 정적 RAG baseline — route→retrieve→analyzer(3-key
+#     {cls, confidence, reasoning}, prompt v2/S2 어댑터) 1회,
 #     controller/planner/loop 미경유. local-analyzer는 ANALYZER_TASK=forward
-#     + forward 어댑터로 함께 전환해야 한다 (README 배포 절차 참조).
+#     + PROMPT_VERSION=v2 + forward_adapter_sft(GGUF)로 함께 전환 (NB02 v3
+#     저장 규칙: {mode}_adapter_{sft|grpo}/gguf/model_q4.gguf).
 PIPELINE_MODE     = os.getenv("PIPELINE_MODE", "agent").lower()
 ANALYZER_TIMEOUT  = float(os.getenv("ANALYZER_TIMEOUT", "180"))
 
@@ -491,7 +493,10 @@ async def detect(tc: TestCase):
         final_classification = agent_result.get("classification", "NORMAL")
         confidence = agent_result.get("confidence")
         if confidence is None:
-            # controller가 confidence를 못 채운 극단적 fallback 상황 대비
+            # ★ [NB v3 정합] S4 1-key(det) analyzer는 confidence를 출력하지
+            #   않는다(정상 경로) — nd 기반 재계산이 기본 경로다. controller
+            #   finalize가 min-fusion 시 top_1_distance를 min(raw)로 갱신하므로
+            #   이 confidence도 최종 판정 frame과 자동 정합된다.
             confidence = int(round(distance_to_score(_normalize_dist(agent_result.get("top_1_distance", top1))) * 100))
         logger.info("pipeline_done", request_id=request_id,
                     classification=final_classification, confidence=confidence,

@@ -16,6 +16,11 @@ prompt builder를 모두 보유하므로, 두 노트북이 같은 모듈을 공�
 """
 import numpy as np
 from typing import Dict, List, Optional, Tuple
+import os as _os
+
+PROMPT_VERSION = _os.getenv("PROMPT_VERSION", "v1").lower()
+AGENT_OUTPUT_KEYS = _os.getenv("AGENT_OUTPUT_KEYS", "1key").lower()
+
 
 NUMERIC_COLS     = ["purchase_value", "age"]
 CATEGORICAL_COLS = ["sex", "source", "browser", "IP_country",
@@ -464,13 +469,18 @@ def build_sample(test_idx: int, for_teacher: bool = True, include_gt: bool = Fal
 # train-serve: v2는 재생성-재학습 사이클과 한 몸 — PROMPT_VERSION으로
 # v1(현행 어댑터)과 공존. 서빙은 새 어댑터 배포 시점에 env로 전환.
 # ════════════════════════════════════════════════════════════════
-import os as _os
-
-PROMPT_VERSION = _os.getenv("PROMPT_VERSION", "v1").lower()
 
 def set_prompt_version(v: str):
     global PROMPT_VERSION
     PROMPT_VERSION = str(v).lower()
+
+# ── agent 출력 키 스위치: "1key"(S4, 서빙 기본) | "3key"(S3 재현) ──
+#   train-serve 정합: 서빙(local_analyzer)은 1key 고정 — 3key는 오프라인 실험 전용.
+
+def set_agent_keys(k: str):
+    global AGENT_OUTPUT_KEYS
+    assert k in ("1key", "3key")
+    AGENT_OUTPUT_KEYS = k
 
 # 3key 출력
 # EVALUATOR_INSTRUCTION_V2 = """Output cls, sufficiency, and (only if insufficient) what_missing.
@@ -484,6 +494,20 @@ def set_prompt_version(v: str):
 # Output ONLY compact JSON:
 # {"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","what_missing":"<direction>: <evidence>" or null}"""
 
+# ── [S3] 3-key evaluator instruction — model이 cls/sufficiency/what_missing 전부 출력 ──
+#   (Stage 3 재현용. sufficiency는 [SYSTEM-COMPUTED] 복사, ambiguous cls는 evidence 판단)
+EVALUATOR_INSTRUCTION_V2_3KEY = """Output cls, sufficiency, and (only if insufficient) what_missing.
+- cls: if confident, follow nd (nd≲0.3→NORMAL, nd≳0.55→ABNORMAL; band may shift);
+  if ambiguous, nd is unreliable — weigh the CLUSTER FIT table + retrieval.
+- sufficiency: copy the [SYSTEM-COMPUTED] value.
+- what_missing: null unless ambiguous; judges RETRIEVAL quality, not the class. "<direction>: <evidence>":
+    cluster_mismatch      — a numeric [DEVIANT] FIT feature (name+z) → reroute
+    neighbor_insufficient — name 1-2 features under 'differs' + the neighbor_spread state → expand
+  Cite from the tables above; never restate the distance.
+Output ONLY compact JSON:
+{"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","what_missing":"<direction>: <evidence>" or null}"""
+
+# ── [S4] 1-key evaluator instruction — cls/sufficiency는 코드(nd)가 결정, model은 wm만 ──
 EVALUATOR_INSTRUCTION_V2 = """Judge the RETRIEVAL quality below and state what is missing.
 Format "<direction>: <evidence>", direction is exactly one of:
   cluster_mismatch      — a [DEVIANT] FIT feature (name+z) → the assigned cluster is wrong → reroute
@@ -641,7 +665,9 @@ def build_evaluator_user_prompt_v2(test_features: Dict, cluster_id,
             topk_feats = [coreset_feature_map.get(int(i)) for i in top5_orig_indices[:3]]
         except (NameError, TypeError):
             topk_feats = None
-    return _build_v2(EVALUATOR_INSTRUCTION_V2, test_features, cluster_id,
+    _instr = (EVALUATOR_INSTRUCTION_V2_3KEY if AGENT_OUTPUT_KEYS == "3key"
+              else EVALUATOR_INSTRUCTION_V2)          # ★ S3/S4 스위치
+    return _build_v2(_instr, test_features, cluster_id,
                      distances, persona, topk_feats)
 
 def build_analyzer_user_prompt_forward_v2(test_features: Dict, cluster_id,

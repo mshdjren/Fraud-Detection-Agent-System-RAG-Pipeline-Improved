@@ -12,6 +12,8 @@ Input  (controller → analyzer):
 
 Output (analyzer → controller):
   cls, sufficiency, what_missing (+ persona_used/tree_rules_used 메타데이터)
+  ★ [NB v3] 모델 자유 출력은 what_missing 1-key(S4 wm_only) —
+    cls(nd threshold)·sufficiency(nd-band)는 코드가 결정(det)해 채운다.
 
 ★ 이 schema가 또 바뀌어도, 영향 범위는 이 파일과 analyzer_schema.py로
 한정된다. controller.py/orchestrator_agentic.py는 analyzer_schema.py의
@@ -63,7 +65,9 @@ EXPERIMENT_CASE  = os.getenv("EXPERIMENT_CASE",  "pca_64_k100")
 TEACHER_PROVIDER = os.getenv("TEACHER_PROVIDER", "hf")
 ADAPTER_TYPE     = os.getenv("ADAPTER_TYPE",     "mined")
 BASE_MODEL_ID    = os.getenv("BASE_MODEL_ID",    "Qwen/Qwen2.5-0.5B-Instruct")
-MAX_NEW_TOKENS   = int(os.getenv("MAX_NEW_TOKENS", "512"))
+# ★ [NB v3 정합] NB02 GEN_MAX_NEW: wm_only(1-key)=32, forward_full=56.
+#   서빙 기본 64로 축소 — decode는 bandwidth-bound(CPU)라 latency 직결.
+MAX_NEW_TOKENS   = int(os.getenv("MAX_NEW_TOKENS", "64"))
 DEVICE           = os.getenv("DEVICE",           "cpu")
 TORCH_DTYPE_STR  = os.getenv("TORCH_DTYPE",      "float32")
 
@@ -264,9 +268,10 @@ ANALYZER_DECISION_MODE = os.getenv("ANALYZER_DECISION_MODE", "det").lower()
 #   (GCS_FT_BASE의 forward 학습분)와 함께 configmap으로 전환한다.
 ANALYZER_TASK = os.getenv("ANALYZER_TASK", "evaluator").lower()
 # ★ [PROMPT v2] 프롬프트 레이아웃 스위치 — v2 = z-table + 합의 다이제스트 +
-#   정적 instruction 선두(KV prefix cache 정합). v2 어댑터(재학습분) 배포와
-#   반드시 함께 전환 (train-serve 정합). 기본 v1 = 현행 어댑터 포맷.
-PROMPT_VERSION = os.getenv("PROMPT_VERSION", "v1").lower()
+#   정적 instruction 선두(KV prefix cache 정합).
+#   ★ [NB v3 정합] 기본값 v1→v2 — 현행 어댑터(S2 forward / S4 agent 1-key)는
+#   전부 prompt v2로 학습됨. v1은 구 어댑터 롤백 시에만 env로 지정.
+PROMPT_VERSION = os.getenv("PROMPT_VERSION", "v2").lower()
 CLS_ND_THRESHOLD       = float(os.getenv("CLS_ND_THRESHOLD", "0.5"))   # nd>=0.5 → ABNORMAL
 
 SUFFICIENCY_BOUNDARY_LOW  = float(os.getenv("SUFFICIENCY_BOUNDARY_LOW",  "0.3"))
@@ -520,6 +525,7 @@ class AnalyzeResponse(BaseModel):
     persona_used:    bool = False
     tree_rules_used: bool = False
     decision_mode:   str  = "det"          # ★ det | llm | forward (비교실험 추적용)
+    nd:              Optional[float] = None  # ★ [NB v3] 정규화 거리 — controller nd 추적/min-fusion 소스
     confidence:      Optional[int] = None  # ★ forward 3-key 출력 (evaluator는 None)
     reasoning:       Optional[str] = None  # ★ forward 3-key 출력
     model_cls:       Optional[str] = None  # ★ det 모드에서 모델이 낸 cls (참고용)
@@ -542,7 +548,13 @@ async def startup():
 
     # prompts.py 런타임 바인딩 — 정적 값(dist 통계, boundary threshold)은
     # 요청마다 바뀌지 않으므로 startup 시점 1회면 충분 (동시 요청 안전).
-    prompts.set_mode("agent")
+    # ★ [NB v3 정합] task별 mode + prompt version 동기화. v3 prompts.py의
+    #   1key/3key instruction 스위치는 서빙에서 항상 1key(S4 wm_only)로 고정.
+    prompts.set_mode("forward" if ANALYZER_TASK == "forward" else "agent")
+    if hasattr(prompts, "set_prompt_version"):
+        prompts.set_prompt_version(PROMPT_VERSION)
+    if hasattr(prompts, "set_agent_keys"):
+        prompts.set_agent_keys("1key")
     prompts.bind_runtime(
         DIST_P50=DIST_P50, DIST_IQR=DIST_IQR,
         NORM_CLOSE_THRESHOLD=DIST_P25,
@@ -582,7 +594,7 @@ def _parse_inference_result(
             conf = 50
         return AnalyzeResponse(
             cls=f_cls, sufficiency=sufficiency,       # deterministic 참고값 유지
-            what_missing=None,
+            what_missing=None, nd=round(nd, 4),
             confidence=conf,
             reasoning=str(result.get("reasoning", ""))[:300] or None,
             persona_used=persona_used, tree_rules_used=tree_rules_used,
@@ -596,10 +608,15 @@ def _parse_inference_result(
         #   model_cls 메타로 보존해 det vs llm 비교가 가능하게 한다.
         cls = "ABNORMAL" if nd >= CLS_ND_THRESHOLD else "NORMAL"
     else:
-        # llm: 모델 판단 그대로 (기존 검증 유지)
+        # llm: 모델 판단 그대로 (A/B 스위치 유지).
+        # ★ [NB v3 정합] 현행 어댑터는 S4 wm_only(1-key) — cls를 출력하지 않는다.
+        #   llm 모드 + 1-key 어댑터 조합에서 422로 죽지 않도록 det fallback.
+        #   (llm 모드를 실사용하려면 S1~S3 cls-출력 어댑터를 배포해야 함)
         cls = model_cls
         if cls not in ("NORMAL", "ABNORMAL"):
-            raise ValueError(f"Invalid cls: '{cls}'")
+            logger.warning("llm_mode_without_cls_fallback_det",
+                           raw_keys=list(result.keys()), nd=round(nd, 4))
+            cls = "ABNORMAL" if nd >= CLS_ND_THRESHOLD else "NORMAL"
         # sufficiency도 모델 출력 사용 — 유효하지 않으면 deterministic fallback
         _m_suf = str(result.get("sufficiency", "")).lower()
         if _m_suf in ("confident", "ambiguous"):
@@ -612,11 +629,11 @@ def _parse_inference_result(
     # 판단한다는 전제다. (이 게이트가 예전엔 "항상 None" 버그의 원인이었음)
     what_missing = result.get("what_missing")
 
-    # instruction 문구가 5키를 요구하다 보니 모델이 sufficiency/next_action/
-    # reason도 같이 뱉을 수 있음 — WM_FOCUS 학습 target엔 없던 키라 신뢰하지
-    # 않고 로그만 남긴다. 나중에 모델이 실제로 이 키들도 학습하게 되면,
-    # 이 로그로 관측하고 필요 시 반영 여부를 결정하면 된다.
-    untrained_keys = [k for k in result if k not in ("cls", "what_missing")]
+    # ★ [NB v3 정합] S4 학습 target은 wm_only 1-key {what_missing} —
+    #   det 모드에서 cls도 untrained 키다(내면 관측만). llm 모드(S1~S3
+    #   어댑터 전제)에서만 cls를 학습 키로 취급한다.
+    _trained = ("what_missing",) if ANALYZER_DECISION_MODE == "det" else ("cls", "what_missing")
+    untrained_keys = [k for k in result if k not in _trained]
     if untrained_keys:
         logger.info(
             "model_emitted_untrained_keys", mode=mode, keys=untrained_keys,
@@ -641,7 +658,8 @@ def _parse_inference_result(
         cls=cls, sufficiency=sufficiency, what_missing=what_missing,
         persona_used=persona_used, tree_rules_used=tree_rules_used,
         decision_mode=ANALYZER_DECISION_MODE,
-        model_cls=model_cls if ANALYZER_DECISION_MODE == "det" else None,
+        nd=round(nd, 4),
+        model_cls=(model_cls or None) if ANALYZER_DECISION_MODE == "det" else None,
     )
 
 

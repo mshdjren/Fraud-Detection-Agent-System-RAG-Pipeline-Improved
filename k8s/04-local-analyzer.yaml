@@ -57,6 +57,8 @@ data:
   ENABLE_KV_CACHE: "false"
   KV_CACHE_MB: "256"
 
+  PROMPT_VERSION: "v2"
+  AGENT_OUTPUT_KEYS: "1key"
 ---
 # ===========================
 # ServiceAccount (Workload Identity)
