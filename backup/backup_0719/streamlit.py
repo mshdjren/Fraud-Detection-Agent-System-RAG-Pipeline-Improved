@@ -352,6 +352,24 @@ if run_btn:
                     with st.expander("🔁 Agent Loop Trace", expanded=True):
                         _render_agent_trace(trace)
 
+                # ── ★ [NB v3] 라운드별 판정 상세 — S4 1-key(det)에서 모델의
+                #   유일한 자유 출력은 what_missing(감사 주석)이고 cls/suf는
+                #   nd가 결정하므로, nd·sufficiency·wm을 라운드 단위로 노출.
+                #   마지막 "final" 엔트리 = controller nd min-fusion 결과.
+                _rounds = result.get("agent_rounds", [])
+                if _rounds:
+                    with st.expander("🧭 라운드별 판정 (nd / sufficiency / what_missing)"):
+                        _rows = [{
+                            "round":        r.get("round"),
+                            "nd":           r.get("nd", r.get("nd_final")),
+                            "cls":          r.get("cls"),
+                            "sufficiency":  r.get("sufficiency"),
+                            "what_missing": r.get("what_missing"),
+                            "action":       r.get("action"),
+                            "nd_round0":    r.get("nd_round0"),
+                        } for r in _rounds]
+                        st.table(_rows)
+
                 # ── 파이프라인 상세 ────────────────────────────
                 with st.expander("🔧 파이프라인 상세"):
                     meta_col1, meta_col2 = st.columns(2)

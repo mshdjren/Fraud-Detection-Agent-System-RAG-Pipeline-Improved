@@ -54,7 +54,6 @@ data:
   # 응답의 key_evidence/agent_trace 표기가 일치한다 (orchestrator 자신은
   # tool을 실행하지 않으므로 동작에는 영향 없음, 표기 일관성용).
   TOOL_EXECUTION_MODE: "mcp_navtive"
-  PIPELINE_MODE: "agent"    #forward, agent
 ---
 # Deployment (Orchestrator)
 apiVersion: apps/v1
@@ -154,6 +153,11 @@ spec:
               name: anomaly-config
               key: DIST_TOP_K
 
+        - name: PIPELINE_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PIPELINE_MODE
         # ... (기존 env 설정들 동일) ...
         - name: ROUTER_TIMEOUT
           valueFrom:
@@ -228,6 +232,7 @@ spec:
             configMapKeyRef:
               name: anomaly-orchestrator-config
               key: TOOL_EXECUTION_MODE
+
 
         # ✅ Volume Mount 추가
         volumeMounts:

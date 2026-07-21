@@ -212,6 +212,9 @@ data:
   EVAL_RATIO: "0.1"          # NB01 EVAL_RATIO와 동일 (역매핑 구간)
 
   DIST_TOP_K : "5"
+
+  PIPELINE_MODE: "agent"    #forward, agent
+
 # ===========================
 # Index Name Convention (참고용)
 # ===========================

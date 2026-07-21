@@ -42,6 +42,7 @@ Test Transaction
       ↓
 [Orchestrator] 최종 판정 + round_log/termination → API Response
 ```
+<img src="picture/Langgraph.jpg" width="100%">
 
 `PIPELINE_MODE=forward` 전환 시 동일 인프라에서 **정적 forwardRAG baseline**([route]→[Retrieve]→[Analyzer] 1회)으로 동작합니다 — Agent 시스템의 가치를 같은 문제지에서 A/B 측정하기 위한 구조입니다.
 
@@ -225,7 +226,9 @@ Coreset Sampling 최적 운영점 검증: 메모리-이상탐지 성능-검색 l
 ### 3️⃣ 학습 데이터 생성 — Prompt v2 + 3중 Rejection Sampling
 
 Teacher(Qwen2.5-14B) 증류 데이터의 품질 문제를 **프롬프트와 필터를 2단계에 걸쳐 고도화**해 해결했습니다.
+<p align="center"><img src="picture/streamlit_AgentRAG.jpg" width="100%"><br><i>AgentRAG streamlit UI</i></p>
 
+<p align="center"><img src="picture/streamlit_forwardRAG.jpg" width="100%"><br><i>ForwardRAG streamlit UI</i></p>
 ---
 
 #### **Version 1: GT-conditioned 생성 (rejection 없음)**
@@ -274,16 +277,16 @@ Teacher에게 GT를 알려주고 사후 설명을 생성하는 직관적 방식�
 
 <table>
 <tr>
-<td width="55%" align="center">
+<td width="50%" align="center">
 
-<img src="picture/fig1_rejection_funnel.png" width="100%">
+<img src="picture/mining_data.jpg" width="100%">
 
 **Rejection Funnel (Sankey)**<br>생성 → parse/GT/grounded/dup 기각 → train 최종
 
 </td>
-<td width="45%" align="center">
+<td width="50%" align="center">
 
-<img src="picture/fig3_diversity.png" width="100%">
+<img src="picture/nb03-fig3.png" width="100%">
 
 **다양성 산점 (고유율 × soft-top1)**<br>v1 → v2 개선 + student 붕괴점 대비
 
@@ -380,6 +383,8 @@ SFT는 토큰 우도를 최적화해 **템플릿 암기를 보상**합니다. gr
 
 ### 6️⃣ Agent 가치 재정의 — Selective 호출 + nd min-fusion
 
+<p align="center"><img src="picture/streamlit_forwardRAGvsAgentRAG.jpg" width="100%"><br><i>AgentRAG streamlit UI</i></p>
+
 4단계 측정의 귀결로 agent의 가치를 "정확도"가 아니라 **비용(호출량)과 판정 frame 선택**으로 재정의하고, 서빙에 반영했습니다.
 
 - **Confident-skip**: nd가 밴드 밖이면 LLM 호출 자체를 생략 (cls/wm 정답이 결정론) — 호출량 100% → **≈43%** (ambiguous 비율)
@@ -408,8 +413,6 @@ SFT는 토큰 우도를 최적화해 **템플릿 암기를 보상**합니다. gr
 | P3 confidence ECE | **0.099** | 라벨 함수 상한(0.109)에 근접 = 재라벨 학습 성공 |
 | P4 고유율 / soft-top1 | 100% / 2.7% | 붕괴 없음 |
 | P5 cls acc / FNR | 0.773 / 0.250 | FNR은 threshold(0.5→0.42) 직교 레버 |
-
-<p align="center"><img src="picture/fig2_calibration_s2.png" width="55%"><br><i>Calibration — 라벨 함수(ECE 0.109 상한) vs student(0.099)</i></p>
 
 ---
 
@@ -455,10 +458,7 @@ SFT는 토큰 우도를 최적화해 **템플릿 암기를 보상**합니다. gr
 ## 🔜 남은 작업
 
 - [ ] **GRPO v6(ladder) reward 재실험** — 탐색 복원(temp 1.1 / G=8 / colon prefix-forcing) 병행 → 5️⃣ 결과 표 기입, 실패 시 best-of-n rejection SFT(RAFT) 전환
-- [ ] `PIPELINE_MODE=forward` A/B — **LLM 호출량 절감 실측** (이론 ≈57%) → 6️⃣ 결과 표 기입
-- [ ] 잔여 실험 (B): agent_batch_inference로 nd_round0 vs nd_final 실측 (harness 소비 코드 반영 완료 — 부록 A-4가 약한 긍정)
 - [ ] Judge 신뢰성 3종 통과 → 7️⃣ judge 표 채움 / 3B vs 0.5B 비교
-- [ ] `CLS_ND_THRESHOLD` 0.5→0.42 재캘리브레이션 (FNR 직교 레버)
 - [ ] parse 84%→99% (GBNF grammar) / KV prefix cache 재측정(현 N=5에서 −9% 역효과 — 표본·캐시 적중 재점검)
 
 ## 💻 기술 스택 & 실행

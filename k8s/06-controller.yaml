@@ -40,7 +40,7 @@ data:
   TOOLS_MCP_URL:    "http://agent-tools-mcp:80"
   # Direct / mcp — orchestrator의 TOOL_EXECUTION_MODE와 동일 값으로 맞춰야
   # agent_trace의 "expand_within_cluster:{mode}" 표기가 둘 다 일치한다.
-  TOOL_EXECUTION_MODE: "mcp_navtive"
+  TOOL_EXECUTION_MODE: "mcp_native"
   # expand/reroute 등 follow-up tool 반복 허용 횟수 (루프 가드)
   AGENT_MAX_ROUNDS: "2"
   # pre_router가 base_* 없이 단독 호출될 때(스모크 테스트 등)만 쓰는

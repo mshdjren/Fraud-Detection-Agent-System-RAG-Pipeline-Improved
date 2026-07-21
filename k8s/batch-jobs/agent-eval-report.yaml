@@ -10,7 +10,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: agent-eval-report-0714forward
+  name: agent-eval-report-0720forward
   namespace: elastic
   labels:
     app: evaluation

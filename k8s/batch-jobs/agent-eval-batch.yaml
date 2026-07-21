@@ -44,7 +44,7 @@ metadata:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: agent-eval-inference-0714agent-baseline
+  name: agent-eval-inference-0720-forward-baseline
   namespace: elastic
   labels:
     app: evaluation
@@ -110,11 +110,16 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: EVAL_SOURCE
+        - name: PIPELINE_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PIPELINE_MODE
         # ── 추론 파라미터 ─────────────────────────────────────────
         # N_SAMPLES: 전체 평가 샘플 수.
         #   smoke(검증): 10~20, 정식 평가: 500~1000
         - name: N_SAMPLES
-          value: "50"
+          value: "200"
         - name: START_INDEX
           value: "26000"
         - name: CORESET_PERCENTAGE

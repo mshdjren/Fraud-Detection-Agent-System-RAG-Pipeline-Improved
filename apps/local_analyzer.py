@@ -259,14 +259,14 @@ def _format_top5_neighbors(top_k_results: List[Dict]) -> str:
 #   "llm": [SYSTEM-COMPUTED] 주입 없이 모델이 cls/sufficiency/what_missing
 #          모두 판단 — "LLM이 전부 판단" baseline.
 ANALYZER_DECISION_MODE = os.getenv("ANALYZER_DECISION_MODE", "det").lower()
-# ★ [forwardRAG baseline] ANALYZER_TASK
+# ★ [forwardRAG baseline] PIPELINE_MODE
 #   "evaluator"(기본): agent용 — sufficiency 주입/det cls, {cls, what_missing}
 #   "forward": 정적 RAG baseline — 3-key {cls, confidence, reasoning}를
 #     모두 LLM이 판단(주입/det 없음). 프롬프트는 prompts.
 #     build_analyzer_user_prompt_forward(NB04 재학습과 단일 소스)를 사용.
 #   배포 단위 스위치라 per-request 플러밍 없음 — forward 전용 어댑터
 #   (GCS_FT_BASE의 forward 학습분)와 함께 configmap으로 전환한다.
-ANALYZER_TASK = os.getenv("ANALYZER_TASK", "evaluator").lower()
+PIPELINE_MODE = os.getenv("PIPELINE_MODE", "agent").lower()
 # ★ [PROMPT v2] 프롬프트 레이아웃 스위치 — v2 = z-table + 합의 다이제스트 +
 #   정적 instruction 선두(KV prefix cache 정합).
 #   ★ [NB v3 정합] 기본값 v1→v2 — 현행 어댑터(S2 forward / S4 agent 1-key)는
@@ -320,14 +320,14 @@ def build_user_prompt(
         _oi = [int(r.get("original_index", -1)) for r in _nb]
         _ds = [float(r.get("distance", 0.0)) for r in _nb]
         _builder = (prompts.build_analyzer_user_prompt_forward_v2
-                    if ANALYZER_TASK == "forward"
+                    if PIPELINE_MODE == "forward"
                     else prompts.build_evaluator_user_prompt_v2)
         _up = _builder(test_features=test_transaction, cluster_id=cluster_id,
                        top5_orig_indices=_oi, distances=_ds,
                        persona=persona, topk_feats=_tk)
         nd = prompts.normalize_dist(top1_distance)
         suf = _suf_from_nd(nd)
-        if ANALYZER_TASK != "forward" and ANALYZER_DECISION_MODE == "det":
+        if PIPELINE_MODE != "forward" and ANALYZER_DECISION_MODE == "det":
             # 주입은 가변 후미(캐시 무영향) — v2 evaluator 학습도 동일 위치
             _up += f"\n\n[SYSTEM-COMPUTED] retrieval_sufficiency = {suf.upper()}"
         return _up, suf, nd
@@ -336,7 +336,7 @@ def build_user_prompt(
     #   SearchResult(dict) → (orig_indices, distances) 어댑터만 거친다.
     #   sufficiency/nd 반환값은 evaluator와 시그니처를 맞추기 위한 계산값
     #   (forward에서는 판단에 미사용 — 메트릭/로그용으로만 유지).
-    if ANALYZER_TASK == "forward":
+    if PIPELINE_MODE == "forward":
         nb = top_k_normal_results[:3]
         fwd_prompt = prompts.build_analyzer_user_prompt_forward(
             test_features=test_transaction, cluster_id=cluster_id,
@@ -550,7 +550,7 @@ async def startup():
     # 요청마다 바뀌지 않으므로 startup 시점 1회면 충분 (동시 요청 안전).
     # ★ [NB v3 정합] task별 mode + prompt version 동기화. v3 prompts.py의
     #   1key/3key instruction 스위치는 서빙에서 항상 1key(S4 wm_only)로 고정.
-    prompts.set_mode("forward" if ANALYZER_TASK == "forward" else "agent")
+    prompts.set_mode("forward" if PIPELINE_MODE == "forward" else "agent")
     if hasattr(prompts, "set_prompt_version"):
         prompts.set_prompt_version(PROMPT_VERSION)
     if hasattr(prompts, "set_agent_keys"):
@@ -584,7 +584,7 @@ def _parse_inference_result(
     아니다 (WM_FOCUS 학습: 모델은 cls/what_missing만 예측하도록 학습됨).
     """
     # ★ forward: 3-key {cls, confidence, reasoning} — 모두 LLM 판단.
-    if ANALYZER_TASK == "forward":
+    if PIPELINE_MODE == "forward":
         f_cls = str(result.get("cls", result.get("classification", ""))).upper()
         if f_cls not in ("NORMAL", "ABNORMAL"):
             raise ValueError(f"Invalid forward cls: '{f_cls}'")

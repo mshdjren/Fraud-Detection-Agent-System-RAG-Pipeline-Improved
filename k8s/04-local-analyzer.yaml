@@ -28,7 +28,7 @@ data:
   # BASE_MODEL_ID: "Qwen/Qwen2.5-3B-Instruct"
 
   # ── 추론 설정 ──────────────────────────────────────────────────
-  MAX_NEW_TOKENS:  "40"   #default : 64, forward : 56
+  MAX_NEW_TOKENS:  "64"   #default : 64, forward : 56
   DEVICE:          "cpu"
   # TORCH_DTYPE:     "float32"
   # OMP_NUM_THREADS: "2"
@@ -40,7 +40,7 @@ data:
  # gguf : llama-cpp-python + Q4_K_M (NB02 Section 14 산출물)
   MODEL_BACKEND:  "gguf"    #hf
   GGUF_FILENAME:  "model_q4.gguf"
-  N_CTX:          "768"    #default :2048
+  N_CTX:          "768"    #default :768, 1024, 2048
 
   # ── Distance 분포 (colab Section 5 실측값: pca_64_k100) ────────
   DIST_P25: "1.264"
@@ -51,8 +51,6 @@ data:
   # ── 분석 컨텍스트 플래그 ────────────────────────────────────────
   PERSONA_ENABLED:    "true"
   TREE_RULES_ENABLED: "false"
-
-  ANALYZER_TASK: "agent"  #forward 동시 사용 // or agent
 
   ENABLE_KV_CACHE: "false"
   KV_CACHE_MB: "256"
@@ -134,14 +132,14 @@ spec:
             echo "[init] ADAPTER_TYPE    : ${ADAPTER_TYPE}"
             echo "[init] GCS_BUCKET      : ${GCS_BUCKET}"
             echo "[init] MODEL_BACKEND   : ${MODEL_BACKEND}"
-            echo "[init] ANALYZER_TASK   : ${ANALYZER_TASK}"
+            echo "[init] PIPELINE_MODE   : ${PIPELINE_MODE}"
 
-            # gs://{GCS_BUCKET}/{GCS_FT_BASE}/{EXPERIMENT_CASE}/{TEACHER_PROVIDER}/{ANALYZER_TASK}_adapter_{ADAPTER_TYPE}/
+            # gs://{GCS_BUCKET}/{GCS_FT_BASE}/{EXPERIMENT_CASE}/{TEACHER_PROVIDER}/{PIPELINE_MODE}_adapter_{ADAPTER_TYPE}/
             #   ├── README.md, adapter_config.json, adapter_model.safetensors, ... (hf 서빙용)
             #   └── gguf/
             #        ├── model_q4.gguf
             #        └── gguf_meta.json
-            METHOD_PATH="gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/${TEACHER_PROVIDER}/${ANALYZER_TASK}_adapter_${ADAPTER_TYPE}"
+            METHOD_PATH="gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/${TEACHER_PROVIDER}/${PIPELINE_MODE}_adapter_${ADAPTER_TYPE}"
             DEST="${ADAPTER_LOCAL_DIR}"
 
             echo "[init] GCS path  : ${METHOD_PATH}"
@@ -169,6 +167,13 @@ spec:
         envFrom:
         - configMapRef:
             name: local-analyzer-config
+
+        env:
+        - name: PIPELINE_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PIPELINE_MODE
 
         volumeMounts:
         - name: data-volume
@@ -198,6 +203,27 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: GOOGLE_CLOUD_PROJECT
+
+        - name: PIPELINE_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PIPELINE_MODE
+        - name: CLS_ND_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CLS_ND_THRESHOLD
+        - name: SUFFICIENCY_BOUNDARY_LOW
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SUFFICIENCY_BOUNDARY_LOW
+        - name: SUFFICIENCY_BOUNDARY_HIGH
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SUFFICIENCY_BOUNDARY_HIGH
 
         volumeMounts:
         - name: data-volume

@@ -221,6 +221,7 @@ class AgentMetricCalculator(MetricCalculator):
         """
         b_correct = b_fraud = b_expand = b_changed = 0
         nb_correct = nb_fraud = 0
+        b_total = nb_total = 0        # ★ [E3-a] in-loop 집계 — 아래 raw 재계산 제거
 
         for i, pred in enumerate(predictions):
             if pred.get("error") or i >= len(gt_labels):
@@ -243,37 +244,31 @@ class AgentMetricCalculator(MetricCalculator):
                 in_boundary = boundary_low <= dist < boundary_high
 
             if in_boundary:
+                b_total += 1               # ★ [E3-a]
                 if label == 1:  # 실제 fraud
                     b_fraud += 1
                     if cls == "ABNORMAL":
                         b_correct += 1
                 # expand/reroute 발동 여부
-                has_tool = any(
-                    s in trace for s in [
-                        "expand_within_cluster:direct",
-                        "reroute_cross_cluster:direct",
-                        "expand_within_cluster:mcp",
-                        "reroute_cross_cluster:mcp",
-                        "expand_within_cluster:mcp_native",
-                        "reroute_cross_cluster:mcp_native",
-                    ]
-                )
+                # ★ [E3-b] 정확일치 → substring: 실행 엔트리는 "<tool>:<mode>" 형태라
+                #   콜론 포함 prefix 매칭이면 충분하고, 배포 env 오탈자
+                #   ("mcp_navtive" — 06-controller.yaml)로 생기는 미집계도 흡수한다.
+                #   (plan 단계 "plan:<tool>"은 콜론 위치가 달라 매칭되지 않음 = 의도 유지)
+                has_tool = any(("expand_within_cluster:" in s)
+                               or ("reroute_cross_cluster:" in s) for s in trace)
                 if has_tool:
                     b_expand += 1
                     if r0_cls and r0_cls != cls:
                         b_changed += 1
             else:
+                nb_total += 1              # ★ [E3-a]
                 if label == 1 and cls == "ABNORMAL":
                     nb_correct += 1
                 if label == 1:
                     nb_fraud += 1
 
-        b_total = sum(1 for i, p in enumerate(predictions)
-                      if not p.get("error") and i < len(gt_labels)
-                      and boundary_low <= float(p.get("top_1_distance") or p.get("top1_distance") or 0) < boundary_high)
-        nb_total = sum(1 for i, p in enumerate(predictions)
-                       if not p.get("error") and i < len(gt_labels)
-                       and not (boundary_low <= float(p.get("top_1_distance") or p.get("top1_distance") or 0) < boundary_high))
+        # ★ [E3-a] b_total/nb_total은 loop에서 in_boundary와 동일 기준으로 집계됨
+        #   (기존: band [0.3,0.55)를 raw L2(≈0.8~1.5)에 재적용 → boundary_n=0 무효)
 
         b_fnr  = 1.0 - (b_correct / max(b_fraud, 1))
         nb_fnr = 1.0 - (nb_correct / max(nb_fraud, 1))
@@ -325,10 +320,14 @@ class AgentMetricCalculator(MetricCalculator):
             lbl = int(gt_labels[i])
             if r0 and r1 and r0 != r1:
                 changed += 1
-                if lbl == 1 and r0 == "NORMAL" and r1 == "ABNORMAL":
-                    correct_flip += 1
-                elif lbl == 1 and r0 == "ABNORMAL" and r1 == "NORMAL":
-                    wrong_flip += 1
+                # ★ [E4 수정] binary flip은 GT 정합을 반드시 바꾼다 —
+                #   기존 코드는 lbl==1만 검사해 gt=0(정상)을 오탐으로 뒤집는
+                #   wrong flip이 미집계 (실측: changed 4 = correct 2 + 미집계 2).
+                _gt_cls = "ABNORMAL" if lbl == 1 else "NORMAL"
+                if r1 == _gt_cls:
+                    correct_flip += 1     # 틀린 판정 → 맞는 판정
+                else:
+                    wrong_flip += 1       # 맞는 판정 → 틀린 판정
 
         vcr = changed / max(total_with_tool, 1)
         cfr = correct_flip / max(changed, 1)
@@ -373,6 +372,29 @@ class AgentMetricCalculator(MetricCalculator):
             else:
                 accept_n += 1
 
+        # ★ [direction 비율] agent_rounds의 what_missing prefix로
+        #   cluster_mismatch(cm) / neighbor_insufficient(ni) / 무출력(none) 집계 —
+        #   "expand rate"만으로는 evaluator가 어떤 결함 유형을 보고했는지 안 보임.
+        cm_n = ni_n = wm_none_n = wm_rounds = 0
+        for pred in predictions:
+            if pred.get("error"):
+                continue
+            for r in (pred.get("agent_rounds") or []):
+                if not isinstance(r.get("round"), int):
+                    continue                      # "final" 요약 엔트리 제외
+                if str(r.get("sufficiency", "")).lower() != "ambiguous":
+                    continue                      # wm 정답이 null인 confident 제외
+                wm_rounds += 1
+                wm = r.get("what_missing")
+                if not isinstance(wm, str) or not wm.strip():
+                    wm_none_n += 1
+                elif wm.startswith("cluster_mismatch"):
+                    cm_n += 1
+                elif wm.startswith("neighbor_insufficient"):
+                    ni_n += 1
+                else:
+                    wm_none_n += 1                # 형식 이탈도 none으로 집계
+
         deep_n = total - fast_n
         result = {
             "total":           total,
@@ -384,9 +406,18 @@ class AgentMetricCalculator(MetricCalculator):
             "expand_rate":     round(expand_n / max(deep_n, 1), 4),
             "reroute_rate":    round(reroute_n / max(deep_n, 1), 4),
             "fast_rate":       round(fast_n / max(total, 1), 4),
+            # direction 분포 (ambiguous 라운드 기준)
+            "wm_rounds_n":     wm_rounds,
+            "cm_n":            cm_n,
+            "ni_n":            ni_n,
+            "wm_none_n":       wm_none_n,
+            "cm_ratio":        round(cm_n / max(wm_rounds, 1), 4),
+            "ni_ratio":        round(ni_n / max(wm_rounds, 1), 4),
         }
         self._agent_summary["expand_rate"]  = round(expand_n / max(deep_n, 1), 4)
         self._agent_summary["reroute_rate"] = round(reroute_n / max(deep_n, 1), 4)
+        self._agent_summary["cm_ratio"]     = result["cm_ratio"]
+        self._agent_summary["ni_ratio"]     = result["ni_ratio"]
         return result
 
     # ── 3-5. Agent Latency Breakdown ────────────────────────
@@ -403,6 +434,8 @@ class AgentMetricCalculator(MetricCalculator):
         base_lats = []
         total_lats = []
         tool_deltas = []
+        fwd_lats = []          # ★ forward 모드: analyzer 1회 호출 구간
+        ctrl_lats = []         # agent 모드: controller loop 전체 구간
 
         for pred in predictions:
             if pred.get("error"):
@@ -411,6 +444,10 @@ class AgentMetricCalculator(MetricCalculator):
             if isinstance(lms, dict):
                 base  = lms.get("base_retrieve")
                 total = lms.get("total")
+                if lms.get("forward_analyzer") is not None:
+                    fwd_lats.append(float(lms["forward_analyzer"]))
+                if lms.get("controller_agent_loop") is not None:
+                    ctrl_lats.append(float(lms["controller_agent_loop"]))
                 if base is not None and total is not None:
                     base_lats.append(float(base))
                     total_lats.append(float(total))
@@ -433,6 +470,10 @@ class AgentMetricCalculator(MetricCalculator):
             "tool_delta_ms":    _stats(tool_deltas),   # analyzer+planner+tool 합산
             "n_evaluated":      len(base_lats),
         }
+        if fwd_lats:                                   # ★ forward 모드 구간
+            result["forward_analyzer_ms"] = _stats(fwd_lats)
+        if ctrl_lats:                                  # agent 모드 loop 구간
+            result["controller_loop_ms"] = _stats(ctrl_lats)
         if total_lats:
             self._agent_summary["latency_total_p95_ms"] = round(float(np.percentile(total_lats, 95)), 2)
         return result
