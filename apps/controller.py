@@ -120,13 +120,31 @@ BOUNDARY_HIGH = float(os.getenv("SUFFICIENCY_BOUNDARY_HIGH", "0.55"))
 #   대비 차별점의 구조적 근거. llm 모드 비교실험 시에는 반드시 false.
 SKIP_ANALYZER_ON_CONFIDENT = os.getenv("SKIP_ANALYZER_ON_CONFIDENT", "true").lower() == "true"
 CLS_ND_THRESHOLD = float(os.getenv("CLS_ND_THRESHOLD", "0.5"))   # analyzer와 동일 키 공유
-# ★ [NB v3 정합 — nd min-fusion] 검색 확장(expand)/재라우팅(reroute)으로
-#   라운드가 늘면 최종 nd = min(라운드별 nd) 로 재계산해 det cls를 재판정.
-#   근거(NB03 v3 Section 3 실측): after_reroute(min) AUROC — 전체 0.815→0.836
-#   (Δ+0.022), boundary 0.558→0.620(Δ+0.062). "가장 잘 맞는 정상 frame"이
-#   판정 기준이라는 memory-bank 원리와 동일. det 모드 전제 — llm 모드로
-#   A/B할 땐 false로 끄고 모델 verdict를 그대로 둔다.
-ND_MIN_FUSION = os.getenv("ND_MIN_FUSION", "true").lower() == "true"
+
+# ══════════════════════════════════════════════════════════════════════
+# ★ [재설계] 판정 nd 계산 — round0 vs round1(재검색) 이원 척도
+#   · round0(재검색 없음): raw top-1 distance → nd (보정 없음).
+#     PatchCore 논문에서 top-1 raw가 대부분 데이터셋 최고 AUROC → 보정 불필요.
+#   · round1(expand/reroute 재검색 후): PatchCore-based reweighting nd.
+#     재검색 결과의 top-1이 "이웃 군집 속에 있나(신뢰) vs 혼자 튀나(고립)"를
+#     top-k 거리로 보정. min-fusion은 폐기 — 재검색 여부에 따라 둘 중 하나만.
+#   ⚠ 두 척도는 분포가 달라 하나의 CLS_ND_THRESHOLD를 공유하면 미스캘리브레이션
+#     위험 → agent_batch_inference가 재검색군/비재검색군 분리 AUROC로 진단.
+PATCHCORE_ON_RESEARCH = os.getenv("PATCHCORE_ON_RESEARCH", "true").lower() == "true"
+# reweighting 방향(부호) A/B — 두 의도가 부호 반대라 config로 실험 분리:
+#   "isolation": 원식 그대로. w=1-softmax(d1) → 재검색 top-1이 이웃 대비 고립될수록
+#                nd↑(이상도↑). "가까운데도 주변에 정상 이웃이 없다 = 의심".
+#   "density":   밀도 보정. 이웃이 조밀하면 그 매칭을 더 신뢰해 nd를 낮춤.
+#                "재검색이 좋은 정상 군집을 찾았으면 정상 쪽으로".
+PATCHCORE_REWEIGHT_MODE = os.getenv("PATCHCORE_REWEIGHT_MODE", "isolation").lower()
+PATCHCORE_TAU = float(os.getenv("PATCHCORE_TAU", os.getenv("EXPAND_PLATEAU_TAU", "0.142")))
+#   ↑ 구 EXPAND_PLATEAU_TAU를 승계 — 이제 gate 임계가 아니라 reweighting/spread
+#     관측 스케일 파라미터. (plateau_ratio 계산 자체는 유지 — spread 신호 관측용)
+
+# ★ [evaluator 1회] 재검색 후 round1에서는 analyzer(LLM)를 다시 부르지 않는다.
+#   forward(LLM 1회) 대비 latency 이득의 전제 — 재검색 결과는 PatchCore nd(거리)로
+#   최종 판정. wm의 판정 기여는 이미 기각됐으므로(net gain −14) 재평가는 순손실.
+EVALUATOR_ONCE = os.getenv("EVALUATOR_ONCE", "true").lower() == "true"
 
 
 def _normalize_dist_fallback(d: float) -> float:
@@ -146,30 +164,18 @@ def _normalize_dist_fallback(d: float) -> float:
 FORCE_MOCK_ANALYZER = os.getenv("FORCE_MOCK_ANALYZER", "false").lower() == "true"
 MOCK_ANALYZER_ACTION = os.getenv("MOCK_ANALYZER_ACTION", "expand")  # "expand" | "reroute"
 TOOLS_MCP_URL   = os.getenv("TOOLS_MCP_URL", "http://agent-tools-mcp:80")
-FAST_THRESHOLD  = float(os.getenv("FAST_TRACK_DISTANCE_THRESHOLD", "0.15"))
+FAST_THRESHOLD  = float(os.getenv("FAST_TRACK_DISTANCE_THRESHOLD", "0.01"))
 AGENT_MAX_ROUNDS = int(os.getenv("AGENT_MAX_ROUNDS", "2"))  # expand/reroute는 1회만 허용(루프 가드)
 # ★ [tool 의도 정합] 기본 retriever inference top-k=3, expand 시 top-k=5.
 #   (기존: evidence_top_n+4=5 고정 — expand 전후 evidence 수 차이가 없던 문제)
 BASE_TOP_K   = int(os.getenv("BASE_TOP_K",   "3"))
 EXPAND_TOP_K = int(os.getenv("EXPAND_TOP_K", "5"))
-# ★ [Selective tool gates] plan의 tool 선택을 planner(LLM/wm 키워드)에서
-#   측정 기반 deterministic 게이트로 오버라이드한다.
-#   근거 1(expand): NB01 rule search — ambiguous 전수 expand는 순손실,
-#     nd∈[0.48,0.60)+plateau_ratio≤0.142에서만 good/bad 3.2 (검증 완료).
-#   근거 2(reroute): wm 텍스트에는 mismatch 신호가 없음(boilerplate) —
-#     라우터의 관측 신호(match_type=centroid=percolate 실패 + rank1/2
-#     score 근접)로 대체. ※ reroute 게이트 상수는 아직 미검증 설계 —
-#     다음 smoke에서 _gt_cluster(routing accuracy) 기반 캘리브레이션 필수.
-#   ⚠ EXPAND_ND_LO/HI 스케일 주의: NB 값은 rank-percentile, 서빙 nd는
-#     sigmoid((d−P50)/IQR) — 동일 중앙값(0.5)이지만 꼬리 압축이 달라
-#     오프라인 변환(아래 NB 스니펫)으로 서빙 스케일 상수를 산출해 교체할 것.
-TOOL_GATE_ENABLE    = os.getenv("TOOL_GATE_ENABLE", "true").lower() == "true"
-EXPAND_ND_LO        = float(os.getenv("EXPAND_ND_LO", "0.48"))
-EXPAND_ND_HI        = float(os.getenv("EXPAND_ND_HI", "0.60"))
-EXPAND_PLATEAU_TAU  = float(os.getenv("EXPAND_PLATEAU_TAU", "0.142"))
-REROUTE_ON_CENTROID = os.getenv("REROUTE_ON_CENTROID", "true").lower() == "true"
-REROUTE_SCORE_RATIO = float(os.getenv("REROUTE_SCORE_RATIO", "0.93"))
-
+# ★ [재설계] tool 선택은 planner(what_missing 기반)가 전담한다 —
+#   deterministic gate 오버라이드(_mismatch_gate/_expand_gate)는 제거.
+#   근거: analyzer가 ambiguous로 판정하면 wm이 어떤 결함(sparse vs mismatch)인지
+#   지목 → planner가 그대로 tool 매핑. gate로 wm을 무시하면 "agent가 스스로
+#   판단"하는 아키텍처 정합성이 깨진다. (wm의 misroute 예측력이 낮다는 F7 측정은
+#   최종 판정을 거리가 하므로 직접 해를 끼치지 않음 — 재검색 후 nd가 판정.)
 # tool 실행 경로 — orchestrator_agentic.py의 동일 이름 env var와 의미를 맞춤
 # (오케스트레이터와 controller가 같은 토글로 A/B 비교 가능하도록).
 #   "direct"    : expand/reroute를 retriever에 직접 HTTP 호출 (agent_tools_mcp_server 미경유)
@@ -727,6 +733,11 @@ class AgentState(TypedDict, total=False):
     # 라운드마다 1개씩 append, node_finalize가 min을 취해 최종 판정에 사용.
     nd_history:               Annotated[List[float], operator.add]
     raw_dist_history:         Annotated[List[float], operator.add]
+    # ★ [재설계] PatchCore reweighting 관측 채널 (재검색 노드가 채움; 일반 채널)
+    _last_reweight_w:         Optional[float]   # reweighting 계수 w
+    _last_plateau:            Optional[float]   # (d_k−d_1)/d_1 spread
+    _nd_source:               Optional[str]     # "raw_top1" | "patchcore_top5"
+    _research_ms:             Optional[float]   # round1 재검색 소요(ms)
     # 종료 사유: "accept_verdict" | "budget_exceeded" | "fast_track" |
     # "unknown_action" — loop 안전성(budget 초과 0건) 측정용.
     termination:              str
@@ -880,6 +891,30 @@ async def node_analyze(state: AgentState) -> AgentState:
     """
     current_round = state.get("round", 0)
 
+    # ── [evaluator 1회] 재검색 후 라운드(round>=1)에서는 analyzer(LLM)를
+    #    다시 부르지 않는다. 재검색 노드가 이미 PatchCore nd를 nd_history에
+    #    기록했고, 그 nd로 finalize가 판정한다. sufficiency=confident를 반환해
+    #    plan이 accept_verdict → finalize로 즉시 수렴(LLM 0회 추가).
+    if EVALUATOR_ONCE and current_round >= 1:
+        _nd = (state.get("nd_history") or [None])[-1]
+        if _nd is None:
+            _nd = _normalize_dist_fallback(float(state.get("top1_distance", 0.5)))
+        raw = {
+            "cls": "ABNORMAL" if _nd >= CLS_ND_THRESHOLD else "NORMAL",
+            "sufficiency": "confident",          # → planner accept_verdict
+            "what_missing": None,
+        }
+        logger.info("node_analyze_skipped_evaluator_once",
+                    request_id=state.get("request_id", "?"),
+                    round=current_round, nd=round(float(_nd), 4),
+                    nd_source=state.get("_nd_source", "raw_top1"))
+        return {
+            "analyzer": raw,
+            "analyzer_history": [{"round": current_round,
+                                  **normalize_analyzer_output(raw).model_dump()}],
+            "history": ["analyze:skipped_evaluator_once"],
+        }
+
     # ── [confident-skip] det 정합: nd가 밴드 밖이면 LLM 없이 종결 ──────
     # sufficiency(밴드)와 cls(threshold)는 어차피 deterministic으로 결정되고
     # confident 케이스의 wm 정답은 null — LLM 호출은 정보량 0에 latency만
@@ -997,7 +1032,7 @@ async def node_analyze(state: AgentState) -> AgentState:
         nd  = _normalize_dist_fallback(raw_dist)           # ★ 정규화 후 비교 (버그 수정 지점)
         suf = "ambiguous" if BOUNDARY_LOW <= nd < BOUNDARY_HIGH else "confident"
         raw = {
-            "cls": "ABNORMAL" if nd >= 0.5 else "NORMAL",   # nd가 이제 정규화된 값이라 정상 비교
+            "cls": "ABNORMAL" if nd >= CLS_ND_THRESHOLD else "NORMAL",   # nd가 이제 정규화된 값이라 정상 비교
             "sufficiency": suf,
             "what_missing": "boundary distance; expand evidence" if suf == "ambiguous" else None,
         }
@@ -1045,33 +1080,14 @@ async def node_plan(state: AgentState) -> AgentState:
     )
     plan_resp = await run_plan(plan_req)
 
-    # ★ [Selective tool gates] planner 결정 위에 measured deterministic
-    # 오버라이드. ambiguous + 아직 tool 미사용 라운드에서만:
-    #   mismatch 신호 → reroute > expand rule 충족 → expand > 그 외 accept.
-    # (기존: ambiguous 전수 expand → smoke에서 84% expand·latency 76s·
-    #  verdict change 1/42, reroute 0 — 이 게이트가 그 두 문제의 직접 해법)
+    # ★ [재설계] tool 선택은 전적으로 planner(what_missing 기반)가 결정한다.
+    #   deterministic gate 오버라이드는 제거 — sufficiency=ambiguous면 wm이
+    #   지목한 결함 유형에 따라 planner가 expand/reroute를 고른 결과를 그대로 사용.
+    #   loop 가드(expansion_used → accept)는 planner 프롬프트 규칙 4에 이미 있고,
+    #   route_after_plan의 budget 가드가 추가 안전망.
     _norm0 = plan_req.analyzer
-    action_planner = plan_resp.action           # 오버라이드 전 (plan regret 계측용)
-    gate_plateau = gate_nd = gate_ratio = None
-    if (TOOL_GATE_ENABLE
-            and getattr(_norm0, "sufficiency", None) == "ambiguous"
-            and not state.get("expansion_used", False)):
-        _mis_ok, gate_ratio = _mismatch_gate(state)
-        _exp_ok, gate_plateau, gate_nd = _expand_gate(state)
-        if _mis_ok:
-            plan_resp.action = "reroute_cross_cluster"
-        elif _exp_ok:
-            plan_resp.action = "expand_within_cluster"
-        else:
-            plan_resp.action = "accept_verdict"
-            if plan_resp.verdict is None:
-                plan_resp.verdict = getattr(_norm0, "effective_classification", None) \
-                                    or getattr(_norm0, "classification", None)
-        if plan_resp.action != action_planner:
-            logger.info("tool_gate_override", request_id=state.get("request_id", "?"),
-                        planner=action_planner, gated=plan_resp.action,
-                        nd=gate_nd, plateau=gate_plateau, ratio=gate_ratio,
-                        match_type=state.get("match_type"))
+    action_planner = plan_resp.action           # (관측용 — gate 없으니 == 최종 action)
+    gate_plateau = gate_nd = gate_ratio = None  # (하위호환 로그 필드; 항상 None)
     agent_round_total.labels(action=plan_resp.action).inc()
     # ★ partial dict 반환. action/verdict/agent_hint/planner_backend는
     # reducer가 없는 일반 채널이라 안전하게 덮어쓴다. history는 이번에
@@ -1097,11 +1113,16 @@ async def node_plan(state: AgentState) -> AgentState:
         "planner_backend": plan_resp.backend,
         "evidence_top_k": state.get("evidence_top_n", BASE_TOP_K),  # ★ 3→5 전이 추적
         # ★ 게이트 관측 (reroute τ 캘리브레이션·plan regret 계측 입력)
-        "action_planner": action_planner,
-        "gate_nd":        round(gate_nd, 4) if gate_nd is not None else None,
-        "gate_plateau":   round(gate_plateau, 4) if gate_plateau is not None else None,
-        "gate_ratio":     round(gate_ratio, 4) if gate_ratio is not None else None,
+        "action_planner": action_planner,   # gate 제거로 == action (하위호환 유지)
+        "gate_nd":        None,              # (deprecated — gate 제거)
+        "gate_plateau":   None,
+        "gate_ratio":     None,
         "match_type":     state.get("match_type"),
+        # ★ reweighting 관측 (재검색 노드가 채움; round0은 None)
+        "reweight_w":     state.get("_last_reweight_w"),
+        "reweight_mode":  PATCHCORE_REWEIGHT_MODE if state.get("expansion_used") else None,
+        "research_ms":    state.get("_research_ms"),   # ★ round1 재검색 소요(ms)
+        "nd_source":      state.get("_nd_source", "raw_top1"),
     }
     return {
         "action": plan_resp.action,
@@ -1132,6 +1153,54 @@ def _tool_payload(tool_name: str, state: "AgentState") -> Dict:
     }
 
 
+def _patchcore_nd(neighbors: List[Dict], raw_top1: float) -> Tuple[float, Optional[float], Optional[float]]:
+    """재검색(round1) 결과의 top-k 이웃 거리로 PatchCore reweighting nd를 계산.
+
+    반환: (nd, weight, plateau_ratio)
+      nd       : 최종 정규화 거리 (CLS_ND_THRESHOLD와 비교되는 판정 score)
+      weight   : reweighting 계수 w (관측/로그용; None이면 이웃부족으로 미적용)
+      plateau  : (d_k−d_1)/d_1 spread 지표 (관측용, 항상 계산 시도)
+
+    PATCHCORE_REWEIGHT_MODE:
+      "isolation" (원식): w = 1 - softmax_1(d) = 1 - exp(d1/τ)/Σexp(di/τ).
+          top-1이 이웃 대비 유독 가까우면(고립) w↑ → score↑. base nd를 (1+w)로 키움.
+      "density": w를 신뢰도로 사용. 이웃이 조밀(plateau 작음)하면 nd를 낮춰 정상 쪽으로.
+
+    ⚠ 논문 원식의 분모는 최근접 메모리이웃의 근방이나, 서빙 비용 때문에
+      test→top-k 거리로 근사한다(= plateau_ratio의 softmax 형태). 주석 명시.
+    """
+    ds = sorted(float(n["distance"]) for n in neighbors if n.get("distance") is not None)
+    base_nd = _normalize_dist_fallback(raw_top1)
+    if len(ds) < 2 or ds[0] <= 0:
+        return base_nd, None, None                       # 이웃 부족 → 보정 없이 base
+    plateau = (ds[-1] - ds[0]) / ds[0]                    # (d_k−d_1)/d_1 spread
+    # ★ PatchCore reweighting. 논문 원식은 최근접 메모리이웃 근방으로 정규화하나,
+    #   서빙 비용 때문에 test→top-k 거리로 근사한다. τ 스케일 정합을 위해 top-1
+    #   기준 상대거리 (d_i − d_1)로 softmax를 구성한다(절대거리는 τ와 스케일 불일치).
+    import math as _m
+    tau = max(PATCHCORE_TAU, 1e-6)
+    rel = [d - ds[0] for d in ds]                         # d_1은 0 (softmax 최대항)
+    exps = [_m.exp(-r / tau) for r in rel]
+    p1 = exps[0] / sum(exps)                              # top-1의 softmax 질량 (조밀↑=경쟁↑=작음)
+    isolation = p1                                        # ★ p1이 클수록 top-1이 이웃 압도=고립
+    #   (rel이 크면 다른 항 exp≈0 → p1≈1 = top-1만 존재 = 고립.
+    #    rel이 작으면 이웃이 경쟁 → p1 작음 = 조밀=군집 속.)
+    if PATCHCORE_REWEIGHT_MODE == "density":
+        # 조밀(isolation 작음)하면 신뢰 → nd를 base보다 낮춤. 고립이면 base 유지.
+        nd = base_nd * (0.5 + 0.5 * isolation)
+    else:  # "isolation" (원식 방향)
+        # 고립(isolation 큼)일수록 이상도↑ → nd를 키움.
+        nd = min(1.0, base_nd * (1.0 + (isolation - _median_isolation())))
+    return float(nd), round(float(isolation), 4), round(float(plateau), 4)
+
+
+def _median_isolation() -> float:
+    """isolation 보정의 중심값(0.5 근방)을 빼 nd가 base 주변에서 대칭 이동하게 함.
+    top-k=5 균등 분포 시 p1≈0.2이므로, 완전 고립(1.0)이 아니면 nd를 과도히 키우지 않도록
+    0.5를 기준으로 삼는다(휴리스틱; 오프라인 캘리브레이션 시 교체)."""
+    return 0.5
+
+
 def _plateau_ratio(neighbors: List[Dict]) -> Optional[float]:
     """(d5−d1)/d1 — top-k 이웃 raw 거리의 조밀도 (스케일 무관, NB01 rule과
     동일 정의). base 검색이 5개 거리를 제공해야 계산 가능 — 부족하면 None."""
@@ -1140,35 +1209,6 @@ def _plateau_ratio(neighbors: List[Dict]) -> Optional[float]:
     if len(ds) < 5 or ds[0] <= 0:
         return None
     return (ds[4] - ds[0]) / ds[0]
-
-
-def _expand_gate(state: "AgentState") -> Tuple[bool, Optional[float], float]:
-    """NB01 rule search 최적 rule: nd∈[LO,HI) AND plateau_ratio≤τ.
-    (spread5 조건은 rule search에서 non-binding으로 확인 — 제외)"""
-    nd = _normalize_dist_fallback(float(state.get("top1_distance", 0.5)))
-    plateau = _plateau_ratio(state.get("neighbors") or [])
-    ok = (EXPAND_ND_LO <= nd < EXPAND_ND_HI
-          and plateau is not None and plateau <= EXPAND_PLATEAU_TAU)
-    return ok, plateau, nd
-
-
-def _mismatch_gate(state: "AgentState") -> Tuple[bool, Optional[float]]:
-    """reroute 게이트 — cluster 매칭 자체가 의심스러운 신호:
-      (1) match_type == "centroid": percolate 규칙 매칭 실패 → centroid
-          fallback (misroute 위험 집단; smoke에서 60%)
-      (2) rank2/rank1 score 근접(≥τ): centroid 유사도(1/(1+d))가 비등
-          → cross-cluster 경계 케이스 (hard negative Type 2 대응)
-    둘 다 만족 + 전환할 rank2 후보 존재 시에만 발화.
-    ※ 상수 τ=0.93은 smoke 관측 중앙값 — _gt_cluster로 캘리브레이션 전 잠정."""
-    if not REROUTE_ON_CENTROID or state.get("match_type") != "centroid":
-        return False, None
-    tk = {c.get("rank"): c for c in (state.get("top_k_clusters") or [])}
-    s1 = (tk.get(1) or {}).get("score") or 0.0
-    s2 = (tk.get(2) or {}).get("score") or 0.0
-    ratio = (s2 / s1) if s1 > 0 else None
-    ok = (ratio is not None and ratio >= REROUTE_SCORE_RATIO
-          and _pick_reroute_candidate(state) is not None)
-    return ok, ratio
 
 
 def _pick_reroute_candidate(state: "AgentState") -> Optional[Dict]:
@@ -1308,26 +1348,46 @@ async def _call_tool(tool_name: str, state: AgentState) -> Dict:
 
 
 @instrument_node("expand", required_keys=("cluster_id", "transaction"))
+def _apply_patchcore_after_research(updates: Dict, neighbors: List[Dict],
+                                    raw_top1: Optional[float]) -> None:
+    """재검색(expand/reroute) 결과에 PatchCore reweighting nd를 계산해 updates에 기록.
+    round1의 판정 nd는 이 값을 쓴다(min-fusion 폐기 — 재검색했으면 patchcore nd만)."""
+    if not PATCHCORE_ON_RESEARCH or raw_top1 is None or not neighbors:
+        return
+    nd, w, plateau = _patchcore_nd(neighbors, float(raw_top1))
+    updates["nd_history"] = [round(nd, 4)]                 # ★ 판정 nd (patchcore)
+    updates["raw_dist_history"] = [float(raw_top1)]
+    updates["_last_reweight_w"] = w
+    updates["_last_plateau"] = plateau
+    updates["_nd_source"] = "patchcore_top5"
+
+
 async def node_expand(state: AgentState) -> AgentState:
+    _t0 = time.time()
     updates: Dict = {
         "expansion_used": True,
         "round": state.get("round", 0) + 1,
         "history": [f"expand_within_cluster:{TOOL_EXECUTION_MODE}"],
     }
     try:
+        # ★ [측정 정확도] expand는 이미 base가 top-5를 갖고 있어 재검색이
+        #   불필요하지만, reroute와 동일 조건에서 latency를 재려고 동일 cluster에서
+        #   retriever를 실제 재호출한다(top_k=EXPAND_TOP_K).
         result = await _call_tool("expand_within_cluster", state)
         updates["evidence_top_n"] = result.get("top_k", EXPAND_TOP_K)
-        # ★ [tool 의도 정합] 기존 코드는 evidence_top_n만 갱신하고 neighbors/
-        # top1_distance를 버려서, 다음 analyze가 여전히 이전 evidence로 돌던
-        # 문제(expand가 사실상 no-op)가 있었다 — 새 top-5 evidence를 반영해야
-        # nd/sufficiency가 재계산되고 loop가 의미를 갖는다.
-        if result.get("neighbors"):
-            updates["neighbors"] = result["neighbors"]
-        if result.get("top1_distance") is not None:
-            updates["top1_distance"] = float(result["top1_distance"])
+        _nb = result.get("neighbors") or []
+        if _nb:
+            updates["neighbors"] = _nb
+        _raw = result.get("top1_distance")
+        if _raw is not None:
+            updates["top1_distance"] = float(_raw)
+        # ★ 재검색 결과 → PatchCore nd (판정 nd)
+        _apply_patchcore_after_research(updates, _nb or state.get("neighbors") or [],
+                                        _raw if _raw is not None else state.get("top1_distance"))
     except Exception as e:
         logger.warning("expand_tool_failed", error=str(e), mode=TOOL_EXECUTION_MODE)
         updates["evidence_top_n"] = EXPAND_TOP_K
+    updates["_research_ms"] = round((time.time() - _t0) * 1000, 1)   # ★ round1 재검색 시간
     return updates
 
 
@@ -1338,27 +1398,32 @@ async def node_reroute(state: AgentState) -> AgentState:
         "round": state.get("round", 0) + 1,
         "history": [f"reroute_cross_cluster:{TOOL_EXECUTION_MODE}"],
     }
+    _t0 = time.time()
     try:
         result = await _call_tool("reroute_cross_cluster", state)
         if result.get("cluster_id") is not None:
             updates["cluster_id"] = result["cluster_id"]
-            # ★ [persona 교체] top2 후보에 동봉된 persona로 전환 — analyzer가
-            # 새 cluster 기준 z-score 블록을 받는다. 후보에 persona가 없으면
-            # (PERSONA_ENABLED=false 등) None → "no profile" 처리로 안전 강하.
+            # ★ [persona 교체] top2 후보 persona로 전환 — analyzer가 새 cluster
+            # 기준 z-score 블록을 받는다(evaluator-once면 미사용이나 정합 유지).
             _cand = _pick_reroute_candidate(state)
             _new_persona = (_cand or {}).get("persona")
             updates["persona"] = _new_persona
-            updates["cluster_persona_summary"] = \
-                (_new_persona or {}).get("description")
+            updates["cluster_persona_summary"] = (_new_persona or {}).get("description")
             updates["history"].append(
                 f"reroute:cluster_{state.get('cluster_id', -1)}->{result['cluster_id']}")
-        if result.get("neighbors"):
-            updates["neighbors"] = result["neighbors"]
-        if result.get("top1_distance") is not None:
-            updates["top1_distance"] = float(result["top1_distance"])
+        _nb = result.get("neighbors") or []
+        if _nb:
+            updates["neighbors"] = _nb
+        _raw = result.get("top1_distance")
+        if _raw is not None:
+            updates["top1_distance"] = float(_raw)
         updates["evidence_top_n"] = result.get("top_k", BASE_TOP_K)
+        # ★ 새 cluster 재검색 결과 → PatchCore nd (판정 nd)
+        _apply_patchcore_after_research(updates, _nb or state.get("neighbors") or [],
+                                        _raw if _raw is not None else state.get("top1_distance"))
     except Exception as e:
         logger.warning("reroute_tool_failed", error=str(e), mode=TOOL_EXECUTION_MODE)
+    updates["_research_ms"] = round((time.time() - _t0) * 1000, 1)   # ★ round1 재검색 시간
     return updates
 
 
@@ -1376,25 +1441,37 @@ async def node_finalize(state: AgentState) -> AgentState:
     else:
         reason = "unknown_action"
 
-    # ★ [nd min-fusion — NB v3 정합] 최종 nd = min(라운드별 nd).
-    #   reroute/expand가 만든 새 frame 중 "가장 잘 맞는 정상"이 판정 기준
-    #   (after_reroute(min) 실측 Δ+0.022/+0.062). det 전제로 cls도 재판정.
+    # ★ [재설계 — min-fusion 폐기] 판정 nd 단일 선택:
+    #   · 재검색함(expand/reroute) → 마지막 nd = PatchCore top-5 nd (nd_history[-1])
+    #   · 재검색 안 함            → round0 raw top-1 nd (nd_history[0])
+    #   두 경우 모두 nd_history의 마지막 원소가 판정 nd다(재검색 노드가 append,
+    #   confident-skip/analyze는 round0 nd를 append). min을 취하지 않는다 —
+    #   척도가 섞이지 않도록. forward(모델 cls)와 달리 agent는 여기서 nd로 판정.
     upd: Dict = {"history": ["finalize"], "termination": reason}
     nds  = state.get("nd_history") or []
-    raws = state.get("raw_dist_history") or []
     if nds:
-        nd0, nd_final = nds[0], min(nds)
-        upd["round_log"] = [{"round": "final", "nd_round0": nd0,
-                             "nd_final": round(nd_final, 4), "n_rounds": len(nds)}]
-        if ND_MIN_FUSION:
-            upd["verdict"] = "ABNORMAL" if nd_final >= CLS_ND_THRESHOLD else "NORMAL"
-            if raws:
-                upd["top1_distance"] = min(raws)     # 응답/confidence도 min frame 정합
-            if len(nds) > 1 and abs(nd_final - nds[-1]) > 1e-9:
-                logger.info("nd_min_fusion_applied",
-                            request_id=state.get("request_id", "?"),
-                            nd_rounds=nds, nd_final=round(nd_final, 4),
-                            verdict=upd["verdict"])
+        nd_round0 = nds[0]
+        nd_final  = nds[-1]                       # 재검색 시 patchcore nd, 아니면 round0 nd
+        researched = bool(state.get("expansion_used"))
+        upd["round_log"] = [{
+            "round": "final",
+            "nd_round0": round(nd_round0, 4),
+            "nd_final":  round(nd_final, 4),
+            "n_rounds":  len(nds),
+            "researched": researched,
+            "nd_source": state.get("_nd_source", "raw_top1"),
+            "reweight_w": state.get("_last_reweight_w"),
+            "reweight_mode": PATCHCORE_REWEIGHT_MODE if researched else None,
+        }]
+        upd["verdict"] = "ABNORMAL" if nd_final >= CLS_ND_THRESHOLD else "NORMAL"
+        _raws = state.get("raw_dist_history") or []
+        if _raws:
+            upd["top1_distance"] = _raws[-1]      # 응답 표시 거리도 판정 frame 정합
+        if researched:
+            logger.info("agent_research_verdict",
+                        request_id=state.get("request_id", "?"),
+                        nd_round0=round(nd_round0, 4), nd_final=round(nd_final, 4),
+                        nd_source=state.get("_nd_source"), verdict=upd["verdict"])
     return upd
 
 
@@ -1583,13 +1660,47 @@ async def startup_event():
     logger.info("planner_started", model=LLM_MODEL, actions=list(FOLLOWUP_ACTIONS),
                 langgraph_ready=agent_graph is not None)
 
-# controller.py에 추가할 엔드포인트
+# 손수 주석한 정본 그래프 — draw_mermaid() 자동 출력은 노드명만 나와
+# 이 프로젝트의 핵심(🟠 LLM은 evaluator 1회만 / 🔵 판정·라우팅은 코드)이
+# 안 보이므로 포트폴리오용으로 별도 관리한다. system architecture와 1:1 대응.
+ANNOTATED_MERMAID = """flowchart TD
+    START([Test Transaction]) --> PR{{"pre_router · fast/deep track"}}
+    PR -->|"fast: global dist &lt; τ"| FIN
+    PR -->|"deep"| RET["retrieve · Filtered HNSW<br/>거리 top-5 / evidence top-3"]
+    RET --> ANA
+
+    subgraph LLMBOX [evaluator · LLM 1회만]
+      direction TB
+      ANA["analyze · Evaluator LLM<br/><b>what_missing</b> 1-key 생성<br/>cls/suf = 코드(nd) 결정론"]
+    end
+
+    ANA --> PLAN{{"plan · Planner<br/>what_missing → tool 매핑"}}
+    PLAN -->|"confident"| FIN
+    PLAN -->|"wm: sparse-evidence"| EX["expand_within_cluster<br/>같은 cluster top-5 재검색"]
+    PLAN -->|"wm: cluster/persona mismatch"| RR["reroute_cross_cluster<br/>rank2 cluster 전환 + persona 교체"]
+    EX --> PC["PatchCore reweighting nd<br/>(재검색 top-5 거리 보정)"]
+    RR --> PC
+    PC -.->|"evaluator 재호출 없음<br/>(EVALUATOR_ONCE)"| FIN
+    FIN["finalize<br/>재검색O → patchcore nd / 재검색X → raw nd<br/>nd ≥ CLS_ND_THRESHOLD → ABNORMAL"] --> END([API Response])
+
+    classDef llm fill:#F58518,stroke:#b5610f,color:#fff;
+    classDef code fill:#4C78A8,stroke:#2f4b6e,color:#fff;
+    classDef term fill:#54A24B,stroke:#356,color:#fff;
+    class ANA llm;
+    class PR,PLAN,RET,EX,RR,PC,FIN code;
+    class START,END term;
+"""
+
+
 @app.get("/graph/mermaid")
-async def graph_mermaid():
-    """LangGraph StateGraph를 Mermaid 텍스트로 반환 — 포트폴리오/디버깅용"""
-    if agent_graph is None:
-        raise HTTPException(status_code=503, detail="graph not built")
-    return {"mermaid": agent_graph.get_graph().draw_mermaid()}
+async def graph_mermaid(annotated: bool = True):
+    """Mermaid 텍스트 반환. annotated=True(기본): 역할분리·evaluator-once·
+    PatchCore nd를 주석한 정본. annotated=false: LangGraph 자동생성(구조검증용)."""
+    if not annotated:
+        if agent_graph is None:
+            raise HTTPException(status_code=503, detail="graph not built")
+        return {"mermaid": agent_graph.get_graph().draw_mermaid(), "annotated": False}
+    return {"mermaid": ANNOTATED_MERMAID, "annotated": True}
 
 @app.get("/graph/png")
 async def graph_png():

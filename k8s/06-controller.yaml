@@ -46,15 +46,16 @@ data:
   # pre_router가 base_* 없이 단독 호출될 때(스모크 테스트 등)만 쓰는
   # fast/deep 임계값 — orchestrator가 base call을 넘기는 정상 경로에서는
   # 사용되지 않는다 (node_pre_router의 _base_provided 분기 참고).
-  FAST_TRACK_DISTANCE_THRESHOLD: "0.15"
+  FAST_TRACK_DISTANCE_THRESHOLD: "0.01"
 
   TOOL_GATE_ENABLE : "true"
-  EXPAND_ND_LO : "0.48"
-  EXPAND_ND_HI : "0.60"
+
   EXPAND_PLATEAU_TAU : "0.142"
   REROUTE_ON_CENTROID : "true"
   REROUTE_SCORE_RATIO : "0.93"
 
+  EXPAND_ND_LO : "0.48"
+  EXPAND_ND_HI : "0.60"
   SUFFICIENCY_BOUNDARY_LOW : "0.3"
   SUFFICIENCY_BOUNDARY_HIGH : "0.55"
 

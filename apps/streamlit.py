@@ -4,7 +4,7 @@ streamlit_app.py — Fraud Detection Pipeline UI v2 (forwardRAG ⚖ AgentRAG)
 mode-aware 포트폴리오 데모:
   · 응답의 termination/trace로 forward | agent 를 자동 감지해 해당 UI만 렌더
       - forward: 3-key {cls, confidence, reasoning} 카드 + base/analyzer latency
-      - agent  : 라운드별 nd/sufficiency/what_missing + nd min-fusion +
+      - agent  : 라운드별 nd/sufficiency/what_missing + PatchCore nd(재검색) +
                  Agent Trace 타임라인 + tool_Δ latency (+ LangGraph mermaid)
   · ⚖ 비교 탭: 같은 세션에서 실행한 forward/agent 결과를 mode별 최신 1건씩
     나란히 비교 (판정/확신도/latency/LLM 호출/라운드/자유 출력)
@@ -112,7 +112,7 @@ def _render_trace(trace: list) -> None:
 def _render_rounds(result: dict) -> None:
     """[agent] 라운드별 nd/sufficiency/what_missing — S4 1-key(det)에서 모델의
     유일한 자유 출력은 wm(감사 주석)이고 cls/suf는 nd가 결정한다.
-    'final' 엔트리 = controller nd min-fusion 결과 (nd_round0 → nd_final)."""
+'final' 엔트리 = 재검색 여부에 따른 최종 nd (raw 또는 PatchCore top-5)."""
     rounds = result.get("agent_rounds") or []
     if not rounds:
         return
@@ -120,6 +120,9 @@ def _render_rounds(result: dict) -> None:
         rows = [{
             "round":        r.get("round"),
             "nd":           r.get("nd", r.get("nd_final")),
+            "nd_source":    r.get("nd_source"),
+            "reweight_w":   r.get("reweight_w"),
+            "research_ms":  r.get("research_ms"),
             "cls":          r.get("cls"),
             "sufficiency":  r.get("sufficiency"),
             "what_missing": r.get("what_missing"),
@@ -129,12 +132,12 @@ def _render_rounds(result: dict) -> None:
         fin = next((r for r in rounds if r.get("round") == "final"), None)
         if fin and fin.get("nd_round0") is not None and fin.get("nd_final") is not None:
             nd0, ndf = fin["nd_round0"], fin["nd_final"]
-            if abs(nd0 - ndf) > 1e-9:
-                st.success(f"🔀 **nd min-fusion**: {nd0:.4f} → **{ndf:.4f}** "
-                           f"(재검색 frame이 판정 기준 갱신, rounds={fin.get('n_rounds')})")
+            if fin.get("researched"):
+                st.success(f"🔀 **재검색 → PatchCore nd**: raw {nd0:.4f} → "
+                           f"**{ndf:.4f}** (mode={fin.get('reweight_mode')}, "
+                           f"w={fin.get('reweight_w')}, source={fin.get('nd_source')})")
             else:
-                st.caption(f"nd min-fusion: 변화 없음 (nd={ndf:.4f}, "
-                           f"rounds={fin.get('n_rounds')})")
+                st.caption(f"재검색 없음 → raw top-1 nd={ndf:.4f}로 판정")
 
 
 def _render_latency(latency_ms: dict, mode: str) -> None:
@@ -187,7 +190,7 @@ def render_result(result: dict) -> None:
               help=("모델 confidence (3-key 출력)" if mode == "forward"
                     else "nd 기반 결정론 confidence (det 모드 — 모델 출력 아님)"))
     c3.metric("top-1 distance", f"{result.get('top_1_distance', 0):.4f}",
-              help="agent는 nd min-fusion 반영 후의 최종 frame 거리")
+              help="agent는 재검색 시 PatchCore top-5 nd, 아니면 raw top-1 nd로 판정")
     lat = (result.get("latency_ms") or {}).get("total") or result.get("_client_latency_ms", 0)
     c4.metric("latency", f"{lat/1000:.1f}s")
 
@@ -275,7 +278,7 @@ def render_compare() -> None:
          lambda r: f"{(r.get('latency_ms') or {}).get('total', 0)/1000:.1f}s")
     _row("top-1 distance",
          lambda r: f"{r.get('top_1_distance', 0):.4f}",
-         lambda r: f"{r.get('top_1_distance', 0):.4f} (min-fusion 반영)")
+         lambda r: f"{r.get('top_1_distance', 0):.4f} (재검색 시 patchcore)")
     _row("라운드 / 재검색",
          lambda r: "1 (정적 — 항상 1회)",
          lambda r: str(max(len([x for x in (r.get("agent_rounds") or [])
@@ -349,13 +352,15 @@ with st.sidebar:
 
     st.divider()
     if MERMAID_OK:
-        if st.toggle("🗺️ Agent Graph 보기 (LangGraph)", value=False):
+        if st.toggle("🗺️ Agent Graph 보기 (주석 정본)", value=False):
+            # annotated=True(기본): 역할분리(🟠LLM/🔵코드)·evaluator-once·PatchCore nd
             mermaid_txt = _fetch_mermaid()
             if mermaid_txt:
-                st_mermaid(mermaid_txt, height=400)
+                st_mermaid(mermaid_txt, height=560)
+                st.caption("🟠 evaluator LLM(what_missing 1회) · "
+                           "🔵 라우팅·planner·판정(코드) · 🟢 종단")
             else:
-                st.warning("Controller `/graph/mermaid` 응답 없음 — forward 모드이거나 "
-                           "controller pod 미기동일 수 있습니다.")
+                st.warning("Controller `/graph/mermaid` 응답 없음 — controller pod 확인.")
     else:
         st.caption("💡 `pip install streamlit-mermaid` 설치 시 Agent Graph 시각화 활성화")
 

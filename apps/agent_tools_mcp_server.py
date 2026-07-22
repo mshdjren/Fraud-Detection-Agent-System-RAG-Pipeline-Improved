@@ -98,41 +98,50 @@ mcp = FastMCP(
     description=_TOOL_META["expand_within_cluster"]["use_when"],
 )
 async def expand_within_cluster(
-    cluster_id: int,
-    top_n: int = 5,
+    cluster_id: int = -1,
+    target_cluster_id: Optional[int] = None,
+    top_k: int = 5,
+    top_n: int = 5,                              # 하위호환 alias
+    embedding: Optional[List[float]] = None,
+    vec_index: Optional[str] = None,
     transaction: Optional[Dict[str, Any]] = None,
+    agent_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    같은 클러스터에서 정상 이웃을 top-1 -> top-k로 확장 retrieve한다.
+    같은 클러스터에서 정상 이웃을 top-k로 확장 retrieve한다.
 
-    Args:
-        cluster_id: 현재 매칭된 클러스터 ID (라우팅은 그대로, 이웃 수만 확장).
-        top_n: 확장 후 가져올 이웃 개수 (기본 5; 1~20).
-        transaction: (옵션) 원본 transaction dict — 일부 Retriever 구현에서
-            re-embedding 없이 캐시된 벡터를 재사용하기 위해 전달.
+    ★ [schema 통일] retriever 실제 RetrieveRequest {embedding, cluster_ids,
+      vec_index, top_k}로 호출한다 — 기존 {cluster_id, top_n, mode}는
+      retriever에 없는 필드라 422 → no-op였다(controller _call_tool_direct와 정합).
+      target_cluster_id는 controller가 실어 보내는 대상 cluster(expand는 현 cluster).
 
     Returns:
-        {"top_n": int, "neighbors": [...], "cluster_persona_summary": str|None}
+        {"top_k": int, "cluster_id": int, "top1_distance": float|None,
+         "neighbors": [...], "cluster_persona_summary": str|None}
     """
-    top_n = max(1, min(20, int(top_n)))
+    _k = max(1, min(20, int(top_k or top_n)))
+    _cid = target_cluster_id if target_cluster_id is not None else cluster_id
+    _cluster_ids = [int(_cid)] if _cid is not None and int(_cid) >= 0 else []
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             resp = await client.post(
                 f"{RETRIEVER_URL}/retrieve",
-                json={"cluster_id": cluster_id, "top_n": top_n,
-                      "transaction": transaction or {}, "mode": "within_cluster"},
+                json={"embedding": embedding, "cluster_ids": _cluster_ids,
+                      "vec_index": vec_index, "top_k": _k},
             )
             resp.raise_for_status()
             data = resp.json()
         return {
-            "top_n": top_n,
-            "neighbors": data.get("neighbors", []),
+            "top_k": _k,
+            "cluster_id": _cid,
+            "top1_distance": data.get("top1_distance"),
+            "neighbors": data.get("results", data.get("neighbors", [])),
             "cluster_persona_summary": data.get("cluster_persona_summary"),
         }
     except Exception as e:
         logger.warning("expand_within_cluster_retriever_failed", error=str(e))
-        # graceful degrade — retriever 미배포 환경에서도 agent loop가 진행되도록
-        return {"top_n": top_n, "neighbors": [], "cluster_persona_summary": None,
+        return {"top_k": _k, "cluster_id": _cid, "top1_distance": None,
+                "neighbors": [], "cluster_persona_summary": None,
                 "_degraded": True, "_error": str(e)}
 
 
@@ -142,39 +151,56 @@ async def expand_within_cluster(
     description=_TOOL_META["reroute_cross_cluster"]["use_when"],
 )
 async def reroute_cross_cluster(
-    cluster_id: int,
-    top_n: int = 5,
+    cluster_id: int = -1,
+    target_cluster_id: Optional[int] = None,
+    top_k: int = 3,
+    top_n: int = 5,                              # 하위호환 alias
+    embedding: Optional[List[float]] = None,
+    vec_index: Optional[str] = None,
     transaction: Optional[Dict[str, Any]] = None,
+    agent_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    매칭된 클러스터 자체가 의심될 때, 다른 후보 클러스터들에서 재검색한다.
+    매칭 클러스터가 의심될 때, controller가 고른 target_cluster_id(사실상 rank2)
+    에서 재검색한다.
 
-    Args:
-        cluster_id: 현재(의심되는) 클러스터 ID — 재검색 시 후보에서 제외.
-        top_n: 새 클러스터에서 가져올 이웃 개수.
-        transaction: (옵션) 원본 transaction dict.
+    ★ [schema 통일 + 실전환] target을 controller가 정하고(router top-5 재사용),
+      MCP는 그 cluster로 retriever를 실제 재검색한다 — 기존 {exclude_cluster_id,
+      mode}는 retriever에 없어 422 → cluster/nd 불변(no-op)이던 버그의 근본 수정.
 
     Returns:
-        {"cluster_id": int|None, "neighbors": [...], "cluster_persona_summary": str|None}
+        {"top_k": int, "cluster_id": int|None, "top1_distance": float|None,
+         "neighbors": [...], "cluster_persona_summary": str|None}
     """
-    top_n = max(1, min(20, int(top_n)))
+    _k = max(1, min(20, int(top_k or top_n)))
+    # target이 없으면 재라우팅 불가 — controller가 반드시 target_cluster_id를 실어야 함.
+    _cid = target_cluster_id
+    if _cid is None or int(_cid) < 0:
+        logger.warning("reroute_no_target", cluster_id=cluster_id,
+                       target_cluster_id=target_cluster_id)
+        return {"top_k": _k, "cluster_id": None, "top1_distance": None,
+                "neighbors": [], "cluster_persona_summary": None,
+                "_degraded": True, "_error": "no target_cluster_id"}
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             resp = await client.post(
                 f"{RETRIEVER_URL}/retrieve",
-                json={"exclude_cluster_id": cluster_id, "top_n": top_n,
-                      "transaction": transaction or {}, "mode": "cross_cluster"},
+                json={"embedding": embedding, "cluster_ids": [int(_cid)],
+                      "vec_index": vec_index, "top_k": _k},
             )
             resp.raise_for_status()
             data = resp.json()
         return {
-            "cluster_id": data.get("cluster_id"),
-            "neighbors": data.get("neighbors", []),
+            "top_k": _k,
+            "cluster_id": int(_cid),                 # ★ 실제 전환된 cluster
+            "top1_distance": data.get("top1_distance"),
+            "neighbors": data.get("results", data.get("neighbors", [])),
             "cluster_persona_summary": data.get("cluster_persona_summary"),
         }
     except Exception as e:
         logger.warning("reroute_cross_cluster_retriever_failed", error=str(e))
-        return {"cluster_id": None, "neighbors": [], "cluster_persona_summary": None,
+        return {"top_k": _k, "cluster_id": None, "top1_distance": None,
+                "neighbors": [], "cluster_persona_summary": None,
                 "_degraded": True, "_error": str(e)}
 
 

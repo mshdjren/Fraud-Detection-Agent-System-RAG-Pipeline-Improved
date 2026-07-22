@@ -507,6 +507,82 @@ def run_evaluation(
             rr_metrics["coreset_epsilon_recall"] = calc.calculate_coreset_epsilon_recall(
                 predictions, gt_arrays["gt_top5_dist"], epsilon=0.1)
 
+    # ── 10. ★ [재설계 요청 7] Agent nd 이중 리포트 ──────────────
+    #   (1) agent_nd_auroc : agent loop가 최종 판정에 쓴 nd(재검색 시 patchcore,
+    #       아니면 raw)의 연속 score AUROC — threshold 무관, 순위 품질.
+    #   (2) cls_at_nd_threshold : 그 nd를 CLS_ND_THRESHOLD로 이분한 실제 판정의
+    #       accuracy/FNR/FPR (best_threshold가 아니라 서빙과 동일한 고정 임계).
+    #   추가로 재검색군(patchcore) vs 비재검색군(raw) 분리 AUROC — 두 척도가
+    #   한 임계를 공유해도 되는지(미스캘리브레이션 여부)를 직접 진단.
+    import os as _os
+    CLS_ND_THRESHOLD = float(_os.getenv("CLS_ND_THRESHOLD", "0.5"))
+    nd_dual: Dict = {}
+    if pipeline_mode == "agent":
+        def _final_entry(p):
+            for r in (p.get("agent_rounds") or []):
+                if r.get("round") == "final":
+                    return r
+            return {}
+        _nd, _y, _researched = [], [], []
+        for p, lbl in zip(predictions, gt_sub):
+            if p.get("error"):
+                continue
+            fe = _final_entry(p)
+            v = fe.get("nd_final")
+            if v is None:
+                continue
+            _nd.append(float(v)); _y.append(int(lbl))
+            _researched.append(bool(fe.get("researched")))
+        _nd = np.array(_nd); _y = np.array(_y); _researched = np.array(_researched)
+
+        def _auroc(scores, labels):
+            if len(labels) < 3 or len(set(labels.tolist())) < 2:
+                return None
+            try:
+                from sklearn.metrics import roc_auc_score
+                return round(float(roc_auc_score(labels, scores)), 4)
+            except Exception:
+                # rank 기반 fallback (sklearn 부재 시)
+                order = scores.argsort()
+                ranks = np.empty_like(order, dtype=float); ranks[order] = np.arange(1, len(scores) + 1)
+                n_pos = labels.sum(); n_neg = len(labels) - n_pos
+                if n_pos == 0 or n_neg == 0:
+                    return None
+                auc = (ranks[labels == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
+                return round(float(auc), 4)
+
+        def _cls_at(scores, labels, thr):
+            if len(labels) == 0:
+                return None
+            pred = (scores >= thr).astype(int)
+            tp = int(((pred == 1) & (labels == 1)).sum()); fn = int(((pred == 0) & (labels == 1)).sum())
+            fp = int(((pred == 1) & (labels == 0)).sum()); tn = int(((pred == 0) & (labels == 0)).sum())
+            n = len(labels)
+            return {
+                "threshold": thr, "n": n,
+                "accuracy": round((tp + tn) / max(n, 1), 4),
+                "fnr": round(fn / max(tp + fn, 1), 4),
+                "fpr": round(fp / max(fp + tn, 1), 4),
+                "recall": round(tp / max(tp + fn, 1), 4),
+                "tp": tp, "fn": fn, "fp": fp, "tn": tn,
+            }
+
+        nd_dual = {
+            "n": int(len(_nd)),
+            "n_researched": int(_researched.sum()),
+            "n_raw": int((~_researched).sum()),
+            "cls_nd_threshold": CLS_ND_THRESHOLD,
+            # (1) 연속 nd AUROC (threshold 무관)
+            "agent_nd_auroc_all": _auroc(_nd, _y),
+            # (2) 고정 임계(CLS_ND_THRESHOLD) 판정 지표 = 서빙 실현값
+            "cls_at_nd_threshold": _cls_at(_nd, _y, CLS_ND_THRESHOLD),
+            # (3) 척도 분리 진단 — 두 분포가 한 임계를 공유해도 되는가
+            "researched_nd_auroc": _auroc(_nd[_researched], _y[_researched]) if _researched.any() else None,
+            "raw_nd_auroc":        _auroc(_nd[~_researched], _y[~_researched]) if (~_researched).any() else None,
+            "researched_mean_nd":  round(float(_nd[_researched].mean()), 4) if _researched.any() else None,
+            "raw_mean_nd":         round(float(_nd[~_researched].mean()), 4) if (~_researched).any() else None,
+        }
+
     # ── 결과 취합 ────────────────────────────────────────────
     report = {
         "experiment_case":    experiment_case,
@@ -518,6 +594,7 @@ def run_evaluation(
         "threshold_info":     threshold_info,   # best threshold + ROC 곡선
         "dist_auroc":         dist_auroc,
         "anomaly_auroc":      anomaly_auroc,
+        "agent_nd_dual":      nd_dual,               # ★ [요청 7] nd 이중 리포트
         "distance_at_threshold": dist_at_thr,   # 비교 표용
         "agent_at_threshold": llm_at_thr,       # 비교 표용
         "boundary":           boundary,
@@ -652,28 +729,36 @@ async def main():
         print(f"  wm direction         : cm {_ad.get('cm_n')} ({_ad.get('cm_ratio')})  "
               f"ni {_ad.get('ni_n')} ({_ad.get('ni_ratio')})  "
               f"none {_ad.get('wm_none_n')}  [ambiguous rounds={_ad.get('wm_rounds_n')}]")
-    # ★ [잔여 실험 B] nd_round0 vs nd_final — min-fusion이 판 바꾼 규모.
-    #   해석 주의: n_rounds==1(재검색 없음)은 정의상 nd_round0==nd_final —
-    #   분모에 섞으면 "improved 0%"처럼 보이는 착시가 생긴다. 재검색 수행
-    #   건(n_rounds≥2)만 분모로 삼고, 변경 건은 전/후 값을 모두 명시한다.
+    # ── ★ [요청 7] Agent nd 이중 리포트 ──────────────────────
     if args.pipeline_mode == "agent":
-        _all = [p for p in predictions if not p.get("error")
-                and p.get("_nd_round0") is not None and p.get("_nd_final") is not None]
-        _loop = [p for p in _all if (p.get("_nd_n_rounds") or 1) >= 2]
-        _chg  = [p for p in _loop if p["_nd_final"] < p["_nd_round0"] - 1e-9]
-        print(f"\n  [nd min-fusion] final엔트리 n={len(_all)}  "
-              f"재검색 수행(rounds≥2)={len(_loop)}  개선={len(_chg)}"
-              + (f" ({len(_chg)/len(_loop):.1%} of loop)" if _loop else ""))
-        if _chg:
-            _b = sum(p["_nd_round0"] for p in _chg) / len(_chg)
-            _a = sum(p["_nd_final"]  for p in _chg) / len(_chg)
-            print(f"    개선 건 평균: nd {_b:.4f} → {_a:.4f}  (Δ{_a-_b:+.4f})")
-            for p in _chg[:8]:
-                print(f"    idx={p.get('idx', p.get('test_idx', '?'))}: "
-                      f"{p['_nd_round0']:.4f} → {p['_nd_final']:.4f} "
-                      f"(rounds={p.get('_nd_n_rounds')}, cls={p.get('classification')})")
-        elif not _loop:
-            print("    (재검색이 한 번도 발동하지 않음 — expand/reroute gate 조건 확인)")
+        _nd = report.get("agent_nd_dual") or {}
+        _cls = _nd.get("cls_at_nd_threshold") or {}
+        print(f"\n  [agent nd 이중 리포트] n={_nd.get('n')}  "
+              f"(재검색 {_nd.get('n_researched')} / raw {_nd.get('n_raw')})")
+        print(f"    (1) agent nd AUROC (연속, threshold 무관) : {_nd.get('agent_nd_auroc_all')}")
+        print(f"    (2) cls@CLS_ND_THRESHOLD={_nd.get('cls_nd_threshold')} → "
+              f"acc {_cls.get('accuracy')} / FNR {_cls.get('fnr')} / FPR {_cls.get('fpr')}")
+        print(f"    (3) 척도분리 AUROC — 재검색군(patchcore) {_nd.get('researched_nd_auroc')} "
+              f"(mean nd {_nd.get('researched_mean_nd')}) | "
+              f"raw군 {_nd.get('raw_nd_auroc')} (mean nd {_nd.get('raw_mean_nd')})")
+        print(f"       ↑ 두 AUROC/mean 차가 크면 한 임계 공유가 미스캘리브레이션 신호")
+
+        # ── ★ [요청 5] round0/round1 재검색 시간 ──
+        _r0 = [p.get("latency_ms", {}).get("base_retrieve") for p in predictions
+               if not p.get("error") and isinstance(p.get("latency_ms"), dict)
+               and p["latency_ms"].get("base_retrieve") is not None]
+        _r1 = []
+        for p in predictions:
+            for r in (p.get("agent_rounds") or []):
+                if isinstance(r.get("round"), int) and r.get("research_ms") is not None:
+                    _r1.append(float(r["research_ms"]))
+        import statistics as _st2
+        if _r0:
+            print(f"    round0 retrieve      : mean {_st2.mean(_r0):.1f}ms  n={len(_r0)}")
+        if _r1:
+            print(f"    round1 재검색(tool)   : mean {_st2.mean(_r1):.1f}ms  n={len(_r1)}")
+        else:
+            print(f"    round1 재검색(tool)   : (재검색 발동 0건 또는 research_ms 미기록)")
     # routing 정확도: 서빙 primary_cluster_id vs GT cluster (gt_cluster_tree)
     _r = [(p.get("primary_cluster_id"), p.get("_gt_cluster"))
           for p in predictions if not p.get("error")
