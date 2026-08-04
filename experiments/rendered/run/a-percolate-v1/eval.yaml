@@ -1,0 +1,179 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evaluation-sa
+  namespace: elastic
+  annotations:
+    iam.gke.io/gcp-service-account: evaluation-sa@kakaoo-501107.iam.gserviceaccount.com
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: a-percolate-v1
+  namespace: elastic
+  labels:
+    app: evaluation
+    version: agentic-eval
+    pipeline: agent-loop
+    step: inference
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: evaluation
+        pipeline: agent-loop
+        step: inference
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values:
+                - batch-node
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: evaluation-sa
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: agent-eval-inference
+        image: python:3.10-slim
+        env:
+        - name: ORCHESTRATOR_URL
+          value: http://anomaly-orchestrator:80
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+        - name: EVAL_JSONL_GCS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EVAL_JSONL_GCS
+        - name: EVAL_SOURCE
+          value: smoke
+        - name: PIPELINE_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PIPELINE_MODE
+        - name: RESEARCH_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: RESEARCH_MODE
+        - name: ROUTER_CANDIDATE_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ROUTER_CANDIDATE_MODE
+        - name: CLS_ND_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CLS_ND_THRESHOLD
+        - name: RUN_ID
+          value: a-percolate-v1
+        - name: N_SAMPLES
+          value: '100'
+        - name: START_INDEX
+          value: '26000'
+        - name: CORESET_PERCENTAGE
+          value: '100'
+        - name: TIMEOUT
+          value: '1200'
+        - name: AGENT_CONCURRENCY
+          value: '1'
+        - name: BOUNDARY_ONLY
+          value: 'false'
+        - name: GCS_OUTPUT_BUCKET
+          value: gs://fraud_ecomm/evaluation/agent-eval
+        - name: RUN_NAME
+          value: a-percolate-v1
+        command:
+        - /bin/bash
+        - -c
+        - "set -e\necho \"================================================\"\necho\
+          \ \" Agent Loop Evaluation — Batch Inference\"\necho \"  orchestrator  \
+          \     : ${ORCHESTRATOR_URL}\"\necho \"  experiment_case    : ${EXPERIMENT_CASE}\"\
+          \necho \"  percolate_version  : ${PERCOLATE_QUERY_VERSION}\"\necho \"  n_samples\
+          \          : ${N_SAMPLES}  (start=${START_INDEX})\"\necho \"  boundary_only\
+          \      : ${BOUNDARY_ONLY}\"\necho \"================================================\"\
+          \n\n# 기존 smoke yaml 대비 scikit-learn / matplotlib 추가\npip install --no-cache-dir\
+          \ \\\n  numpy pandas pyarrow httpx structlog \\\n  scikit-learn matplotlib\
+          \ \\\n  google-cloud-storage\n\ncd /app\n\n# boundary_only 플래그 처리\nBOUNDARY_FLAG=\"\
+          \"\nif [ \"${BOUNDARY_ONLY}\" = \"true\" ]; then\n  BOUNDARY_FLAG=\"--boundary-only\"\
+          \nfi\n\npython agent_batch_inference.py \\\n  --experiment-case    ${EXPERIMENT_CASE}\
+          \ \\\n  --percolate-version  ${PERCOLATE_QUERY_VERSION} \\\n  --coreset-percentage\
+          \ ${CORESET_PERCENTAGE} \\\n  --n-samples          ${N_SAMPLES} \\\n  --start-index\
+          \        ${START_INDEX} \\\n  --timeout            ${TIMEOUT} \\\n  --output-dir\
+          \         /results/agent_eval/${RUN_NAME} \\\n  --eval-source ${EVAL_SOURCE:-eval_set}\
+          \ \\\n  # --gcs-upload ${AGENT_EVAL_GCS_PREFIX}\n  ${BOUNDARY_FLAG}\n\n\
+          # 결과 확인\necho \"--- agent_eval_report.json (summary) ---\"\n[ -f /results/agent_eval/${RUN_NAME}/agent_eval_report.json\
+          \ ] && \\\n  python3 -c \"\nimport json\nr = json.load(open('/results/agent_eval/${RUN_NAME}/agent_eval_report.json'))\n\
+          s = r.get('agent_summary', {})\nprint('distance_auroc :', r.get('dist_auroc',{}).get('distance_auroc'))\n\
+          print('agent_auroc    :', r.get('anomaly_auroc',{}).get('auroc'))\nprint('boundary_fnr\
+          \   :', s.get('boundary_fnr'))\nprint('expand_rate    :', s.get('expand_rate'))\n\
+          print('latency_p95_ms :', s.get('latency_total_p95_ms'))\n\"\n\n# GCS 업로드\
+          \ (google-cloud-storage로 직접 업로드)\npython3 -c \"\nimport os\nfrom google.cloud\
+          \ import storage\nrun_name = os.environ.get('RUN_NAME', 'unnamed')\nbucket_url\
+          \ = os.environ.get('GCS_OUTPUT_BUCKET', '')\nif not bucket_url.startswith('gs://'):\n\
+          \    print('[skip] GCS_OUTPUT_BUCKET 미설정')\n    exit(0)\nbucket_url = bucket_url.replace('gs://',\
+          \ '')\nbucket_name, *prefix_parts = bucket_url.split('/')\nprefix = '/'.join(prefix_parts\
+          \ + [run_name])          # ★ prefix에 run_name 추가\nclient = storage.Client()\n\
+          bucket = client.bucket(bucket_name)\nlocal_dir = f'/results/agent_eval/{run_name}'\
+          \          # ★ 로컬도 run별\nfor fname in ['agent_predictions.json', 'agent_eval_report.json']:\n\
+          \    fpath = f'{local_dir}/{fname}'\n    if os.path.exists(fpath):\n   \
+          \     blob = bucket.blob(f'{prefix}/{fname}')\n        blob.upload_from_filename(fpath)\n\
+          \        print(f'[GCS] uploaded: gs://{bucket_name}/{prefix}/{fname}')\n\
+          \"\n"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app/gt_loader.py
+          subPath: gt_loader.py
+        - name: code-volume
+          mountPath: /app/evaluation_metrics.py
+          subPath: evaluation_metrics.py
+        - name: agent-eval-code-volume
+          mountPath: /app/agent_batch_inference.py
+          subPath: agent_batch_inference.py
+        - name: agent-eval-code-volume
+          mountPath: /app/agent_eval_metrics.py
+          subPath: agent_eval_metrics.py
+        - name: agent-eval-code-volume
+          mountPath: /app/agent_latency.py
+          subPath: agent_latency.py
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code
+      - name: agent-eval-code-volume
+        configMap:
+          name: evaluation-agent-eval-code

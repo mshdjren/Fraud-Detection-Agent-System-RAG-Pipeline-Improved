@@ -119,6 +119,10 @@ def _render_rounds(result: dict) -> None:
     with st.expander("🧭 라운드별 판정 (nd / sufficiency / what_missing)", expanded=True):
         rows = [{
             "round":        r.get("round"),
+            "wm_type":      r.get("wm_type"),
+            "nd_global":    r.get("nd_global"),
+            "flip":         r.get("flip"),
+            "contrast":     r.get("contrast_axis"),
             "nd":           r.get("nd", r.get("nd_final")),
             "nd_source":    r.get("nd_source"),
             "reweight_w":   r.get("reweight_w"),
@@ -184,7 +188,7 @@ def render_result(result: dict) -> None:
     cls, conf = result.get("classification", "UNKNOWN"), result.get("confidence", 0)
 
     st.markdown(f"##### {_mode_badge(mode)}")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("판정", _badge(cls))
     c2.metric("확신도", f"{conf}%",
               help=("모델 confidence (3-key 출력)" if mode == "forward"
@@ -193,6 +197,21 @@ def render_result(result: dict) -> None:
               help="agent는 재검색 시 PatchCore top-5 nd, 아니면 raw top-1 nd로 판정")
     lat = (result.get("latency_ms") or {}).get("total") or result.get("_client_latency_ms", 0)
     c4.metric("latency", f"{lat/1000:.1f}s")
+    # ★ [V3] verify_global 트레이스 — nd_global/flip (legacy 실행 시 "—")
+    _rounds_v3 = result.get("agent_rounds") or []
+    _ndg = next((r.get("nd_global") for r in reversed(_rounds_v3)
+                 if isinstance(r, dict) and r.get("nd_global") is not None), None)
+    _flip = any(r.get("flip") for r in _rounds_v3 if isinstance(r, dict))
+    c5.metric("nd_global", f"{_ndg:.4f}" if _ndg is not None else "—",
+              delta=("flip → NORMAL" if _flip else None),
+              help="verify_global(전역 HNSW) nd — cluster 제한 ε 교정값 (v3 모드 전용)")
+    _wm = next((r for r in reversed(_rounds_v3)
+                if isinstance(r, dict) and r.get("wm_type")), None)
+    if _wm:
+        st.caption(f"**wm[{_wm['wm_type']}]** "
+                   f"{', '.join(_wm.get('wm_axes') or [])} — {_wm.get('wm_rationale') or ''}"
+                   + (f"  ·  contrast: {_wm.get('contrast_axis')}"
+                      if _wm.get('contrast_axis') else ""))
 
     if mode == "forward":
         # ── forward: reasoning(모델 자유 출력)이 곧 설명 — agent 전용 UI는 렌더 안 함 ──
@@ -359,6 +378,9 @@ with st.sidebar:
                 st_mermaid(mermaid_txt, height=560)
                 st.caption("🟠 evaluator LLM(what_missing 1회) · "
                            "🔵 라우팅·planner·판정(코드) · 🟢 종단")
+                # mermaid.js 파싱 실패 시 빈 박스만 보이므로, 원문을 fallback으로 노출
+                with st.expander("mermaid 원문 (렌더 실패 시 확인)"):
+                    st.code(mermaid_txt, language="mermaid")
             else:
                 st.warning("Controller `/graph/mermaid` 응답 없음 — controller pod 확인.")
     else:

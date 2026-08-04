@@ -562,7 +562,314 @@ class MetricCalculator:
         if "candidate_recall_top5"   in s: goals["candidate_recall >= 0.85"]  = s["candidate_recall_top5"] >= 0.85
         return goals
 
+    # ──────────────────────────────────────────────────────────
+    # ★ [EXP] Research Effect — 재검색 전/후 nd 판정 변화의 인과 분해
+    # ──────────────────────────────────────────────────────────
+    #  입력은 controller finalize가 round_log에 남기는 {nd_round0, nd_final,
+    #  researched} 3키(= agent_batch_inference가 _nd_round0/_nd_final/
+    #  _researched로 승격한 값). 재검색이 verdict를 바꾸지 못하더라도 Δnd
+    #  방향성/선택 품질은 살아 있으므로, "효과 없음"과 "측정 불가"를 구분한다.
+    #
+    #  임계 3-view (핵심 설계):
+    #    fixed           : CLS_ND_THRESHOLD 고정 — 서빙 실제 효과
+    #    pre_best_frozen : pre의 Youden 임계를 post에 그대로 적용
+    #                      → 임계 재탐색 이득을 배제하고 nd 이동 효과만 격리 (주 지표)
+    #    each_best       : pre/post 각자 best — 상한 성능(참고)
+    def calculate_research_effect(
+        self,
+        predictions: List[Dict],
+        labels,
+        *,
+        cls_threshold: float = 0.42,
+        boundary: tuple = (0.3, 0.55),
+        max_samples_listed: int = 50,
+    ) -> Dict:
+        import math
+
+        lo, hi = float(boundary[0]), float(boundary[1])
+
+        # ── 1) per-sample 추출 ────────────────────────────────
+        rows: List[Dict] = []
+        for i, (p, lb) in enumerate(zip(predictions, list(labels))):
+            if p.get("error"):
+                continue
+            pre  = p.get("_nd_round0")
+            post = p.get("_nd_final")
+            # ★ 방어: harness가 _nd_* 승격에 실패해도 agent_rounds의 final
+            #   엔트리에서 직접 복구한다(nd_dual과 동일 경로 → 반드시 성공).
+            if pre is None or post is None:
+                _fin = next((r for r in (p.get("agent_rounds") or [])
+                             if isinstance(r, dict) and r.get("round") == "final"), {})
+                pre  = _fin.get("nd_round0") if pre  is None else pre
+                post = _fin.get("nd_final")  if post is None else post
+                if p.get("_researched") is None:
+                    p["_researched"] = bool(_fin.get("researched", False))
+            if pre is None or post is None:
+                continue
+            pre, post = float(pre), float(post)
+            rows.append({
+                "idx":        int(p.get("idx", i)),
+                "label":      int(lb),
+                "nd_pre":     round(pre, 4),
+                "nd_post":    round(post, 4),
+                "delta_nd":   round(post - pre, 4),
+                # band는 재검색 대상 선정 기준(= 재검색 전 nd)으로 정의한다
+                "band":       "ambiguous" if (lo <= pre < hi) else "confident",
+                "researched": bool(p.get("_researched", (post != pre))),
+                "wm_type":    p.get("_wm_type"),
+                "nd_source":  p.get("_nd_source"),
+                "research_ms": p.get("_research_ms"),
+            })
+
+        if not rows:
+            _has_rounds = sum(1 for p in predictions if p.get("agent_rounds"))
+            return {"n": 0, "_note": "no (nd_round0, nd_final) pair found",
+                    "_diag": {"n_predictions": len(predictions),
+                              "n_with_agent_rounds": _has_rounds,
+                              "hint": ("controller round_log의 final 엔트리 부재 — "
+                                       "controller.py 재배포 여부 확인")}}
+
+        pre_arr  = np.array([r["nd_pre"]  for r in rows], dtype=float)
+        post_arr = np.array([r["nd_post"] for r in rows], dtype=float)
+        y        = np.array([r["label"]   for r in rows], dtype=int)
+        n = len(rows)
+
+        # ── 2) 보조 함수 ──────────────────────────────────────
+        def _auroc(scores):
+            if len(set(y.tolist())) < 2:
+                return None
+            try:
+                from sklearn.metrics import roc_auc_score
+                return round(float(roc_auc_score(y, scores)), 4)
+            except Exception:
+                order = scores.argsort()
+                ranks = np.empty_like(order, dtype=float)
+                ranks[order] = np.arange(1, len(scores) + 1)
+                n_pos = int(y.sum()); n_neg = n - n_pos
+                if n_pos == 0 or n_neg == 0:
+                    return None
+                return round(float((ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2)
+                                   / (n_pos * n_neg)), 4)
+
+        def _best_thr(scores):
+            """Youden J 최대점. sklearn 없으면 후보 스캔."""
+            try:
+                from sklearn.metrics import roc_curve
+                fpr, tpr, thr = roc_curve(y, scores)
+                j = tpr - fpr
+                return float(thr[int(np.argmax(j))])
+            except Exception:
+                cands = np.unique(scores)
+                best, best_j = float(cls_threshold), -1.0
+                for t in cands:
+                    pred = (scores >= t).astype(int)
+                    tp = int(((pred == 1) & (y == 1)).sum()); fn = int(((pred == 0) & (y == 1)).sum())
+                    fp = int(((pred == 1) & (y == 0)).sum()); tn = int(((pred == 0) & (y == 0)).sum())
+                    tpr = tp / max(tp + fn, 1); fpr = fp / max(fp + tn, 1)
+                    if tpr - fpr > best_j:
+                        best_j, best = tpr - fpr, float(t)
+                return best
+
+        def _conf(scores, thr, mask=None):
+            m = np.ones(len(scores), dtype=bool) if mask is None else mask
+            if m.sum() == 0:
+                return {"n": 0}
+            sc, yy = scores[m], y[m]
+            pred = (sc >= thr).astype(int)
+            tp = int(((pred == 1) & (yy == 1)).sum()); fn = int(((pred == 0) & (yy == 1)).sum())
+            fp = int(((pred == 1) & (yy == 0)).sum()); tn = int(((pred == 0) & (yy == 0)).sum())
+            npos, nneg = tp + fn, fp + tn
+            return {
+                "n": int(m.sum()), "TP": tp, "FP": fp, "TN": tn, "FN": fn,
+                "TPR": round(tp / npos, 4) if npos else None,
+                "FNR": round(fn / npos, 4) if npos else None,
+                "FPR": round(fp / nneg, 4) if nneg else None,
+                "TNR": round(tn / nneg, 4) if nneg else None,
+                "accuracy": round((tp + tn) / max(int(m.sum()), 1), 4),
+            }
+
+        def _wilson(k, tot, z=1.96):
+            if tot == 0:
+                return [None, None]
+            ph = k / tot
+            d  = 1 + z * z / tot
+            c  = ph + z * z / (2 * tot)
+            m  = z * math.sqrt(ph * (1 - ph) / tot + z * z / (4 * tot * tot))
+            return [round(max(0.0, (c - m) / d), 4), round(min(1.0, (c + m) / d), 4)]
+
+        amb_m  = np.array([r["band"] == "ambiguous" for r in rows])
+        conf_m = ~amb_m
+        res_m  = np.array([r["researched"] for r in rows])
+
+        # ── 3) 임계 3-view ────────────────────────────────────
+        thr_pre_best  = _best_thr(pre_arr)
+        thr_post_best = _best_thr(post_arr)
+        views = {
+            "fixed":           {"pre": float(cls_threshold), "post": float(cls_threshold)},
+            "pre_best_frozen": {"pre": thr_pre_best,         "post": thr_pre_best},
+            "each_best":       {"pre": thr_pre_best,         "post": thr_post_best},
+        }
+
+        by_view: Dict = {}
+        for vname, t in views.items():
+            by_view[vname] = {
+                "threshold_pre": round(t["pre"], 4), "threshold_post": round(t["post"], 4),
+                "overall":   {"pre": _conf(pre_arr, t["pre"]),
+                              "post": _conf(post_arr, t["post"])},
+                "ambiguous": {"pre": _conf(pre_arr, t["pre"], amb_m),
+                              "post": _conf(post_arr, t["post"], amb_m)},
+                "confident": {"pre": _conf(pre_arr, t["pre"], conf_m),
+                              "post": _conf(post_arr, t["post"], conf_m)},
+            }
+            # ★ 대조군 불변성: 재검색 안 한 confident군은 pre==post 여야 정상
+            by_view[vname]["confident"]["_invariant_ok"] = (
+                by_view[vname]["confident"]["pre"] == by_view[vname]["confident"]["post"]
+            )
+
+        # ── 4) 판정 전이 (주 지표 = pre_best_frozen) ──────────
+        MAIN = "pre_best_frozen"
+        t_main = views[MAIN]
+        pred_pre  = (pre_arr  >= t_main["pre"]).astype(int)
+        pred_post = (post_arr >= t_main["post"]).astype(int)
+        ok_pre, ok_post = (pred_pre == y), (pred_post == y)
+
+        rescued_m  = (~ok_pre) & ok_post          # 오답 → 정답
+        degraded_m = ok_pre & (~ok_post)          # 정답 → 오답
+        flip_m     = pred_pre != pred_post
+
+        def _dump(mask):
+            out = []
+            for r, m in zip(rows, mask):
+                if m:
+                    out.append({k: r[k] for k in
+                                ("idx", "label", "nd_pre", "nd_post", "delta_nd",
+                                 "band", "wm_type", "researched")})
+            return out[:max_samples_listed]
+
+        def _band_count(mask):
+            return {"ambiguous": int((mask & amb_m).sum()),
+                    "confident": int((mask & conf_m).sum())}
+
+        n_res = int(res_m.sum())
+        transitions = {
+            "main_view":      MAIN,
+            "n_flip":         int(flip_m.sum()),
+            "flip_rate":      round(float(flip_m.sum()) / n, 4),
+            "rescued":  {"n": int(rescued_m.sum()),  "by_band": _band_count(rescued_m),
+                         "samples": _dump(rescued_m)},
+            "degraded": {"n": int(degraded_m.sum()), "by_band": _band_count(degraded_m),
+                         "samples": _dump(degraded_m)},
+            "stable_correct": int((ok_pre & ok_post).sum()),
+            "stable_wrong":   int(((~ok_pre) & (~ok_post)).sum()),
+            "net_gain":       int(rescued_m.sum()) - int(degraded_m.sum()),
+        }
+
+        # ── 5) Δnd 분포 + 방향 정확도 ─────────────────────────
+        #   verdict가 안 바뀌어도 살아 있는 신호. label=1이면 nd↑, label=0이면 nd↓가 옳다.
+        d = post_arr - pre_arr
+        d_res = d[res_m] if n_res else np.array([])
+        moved = res_m & (np.abs(d) > 1e-9)
+        dir_ok = ((d[moved] > 0) == (y[moved] == 1)) if moved.sum() else np.array([])
+
+        def _wm_delta(t):
+            m = res_m & np.array([r["wm_type"] == t for r in rows])
+            if m.sum() == 0:
+                return {"n": 0}
+            dd = d[m]
+            return {"n": int(m.sum()), "mean": round(float(dd.mean()), 4),
+                    "mean_abs": round(float(np.abs(dd).mean()), 4)}
+
+        delta_nd = {
+            "n_researched": n_res,
+            "mean":     round(float(d_res.mean()), 4) if n_res else None,
+            "median":   round(float(np.median(d_res)), 4) if n_res else None,
+            "mean_abs": round(float(np.abs(d_res).mean()), 4) if n_res else None,
+            "p10":      round(float(np.percentile(d_res, 10)), 4) if n_res else None,
+            "p90":      round(float(np.percentile(d_res, 90)), 4) if n_res else None,
+            "n_moved":  int(moved.sum()),
+            "directional_accuracy": (round(float(dir_ok.mean()), 4)
+                                     if len(dir_ok) else None),
+            "by_wm_type": {"ni": _wm_delta("ni"), "cm": _wm_delta("cm")},
+        }
+
+        # ── 6) abstention 선택 품질 ───────────────────────────
+        wrong_pre = ~ok_pre
+        selection = {
+            "n_ambiguous": int(amb_m.sum()),
+            "ambiguous_precision": (round(float((amb_m & wrong_pre).sum() / amb_m.sum()), 4)
+                                    if amb_m.sum() else None),
+            "ambiguous_recall":    (round(float((amb_m & wrong_pre).sum() / wrong_pre.sum()), 4)
+                                    if wrong_pre.sum() else None),
+            "missed": int((conf_m & wrong_pre).sum()),   # confident인데 오답 = 기회 상실
+        }
+
+        # ── 7) 비용 ───────────────────────────────────────────
+        ms = [float(r["research_ms"]) for r in rows
+              if r["researched"] and r.get("research_ms") is not None]
+        n_flip, n_resc = transitions["n_flip"], transitions["rescued"]["n"]
+        total_ms = float(np.sum(ms)) if ms else None
+        cost = {
+            "n_researched": n_res,
+            "research_ms_mean": round(float(np.mean(ms)), 2) if ms else None,
+            "research_ms_total": round(total_ms, 2) if total_ms is not None else None,
+            "ms_per_flip":   (round(total_ms / n_flip, 2) if (total_ms and n_flip) else None),
+            "ms_per_rescue": (round(total_ms / n_resc, 2) if (total_ms and n_resc) else None),
+        }
+
+        result = {
+            "n": n,
+            "cls_threshold": float(cls_threshold),
+            "boundary": [lo, hi],
+            "auroc": {"pre": _auroc(pre_arr), "post": _auroc(post_arr)},
+            "by_view":     by_view,
+            "transitions": transitions,
+            "delta_nd":    delta_nd,
+            "selection":   selection,
+            "cost":        cost,
+            "ci95": {
+                "flip_rate":    _wilson(n_flip, n),
+                "rescued_rate": _wilson(n_resc, max(n_res, 1)),
+            },
+        }
+        if result["auroc"]["pre"] is not None and result["auroc"]["post"] is not None:
+            result["auroc"]["delta"] = round(result["auroc"]["post"] - result["auroc"]["pre"], 4)
+        if n_res < 30:
+            result["_warning"] = (f"n_researched={n_res} — flip 1건이 "
+                                  f"{round(100.0 / max(n_res, 1), 1)}%p. "
+                                  f"결론은 n>=200에서 재확인 필요")
+
+        self._summary["research_net_gain"]  = transitions["net_gain"]
+        self._summary["research_flip_rate"] = transitions["flip_rate"]
+        self._summary["research_dir_acc"]   = delta_nd["directional_accuracy"]
+        logger.info("research_effect_computed", n=n, n_researched=n_res,
+                    net_gain=transitions["net_gain"],
+                    dir_acc=delta_nd["directional_accuracy"])
+        return result
+
     def get_summary(self) -> Dict:
         return {"experiment_case": self.experiment_case,
                 "coreset_percentage": self.coreset_percentage,
                 **self._summary}
+
+
+# ============================================================
+# ★ [V3] 선택 지표 — _nd_global 컬럼이 있으면 별도 AUROC 병기
+#   (legacy 리포트와 혼합 금지: score_column을 명시해 반환)
+# ============================================================
+def compute_nd_global_auroc(predictions):
+    try:
+        from sklearn.metrics import roc_auc_score
+    except ImportError:
+        return None
+    ys, ss = [], []
+    for p in predictions:
+        g = p.get("_nd_global")
+        gt = p.get("gt_label", p.get("label"))
+        if g is None or gt is None:
+            continue
+        ys.append(1 if str(gt).upper() in ("1", "ABNORMAL") else 0)
+        ss.append(float(g))
+    if len(set(ys)) < 2:
+        return None
+    return {"score_column": "_nd_global", "n": len(ys),
+            "auroc": round(float(roc_auc_score(ys, ss)), 4)}

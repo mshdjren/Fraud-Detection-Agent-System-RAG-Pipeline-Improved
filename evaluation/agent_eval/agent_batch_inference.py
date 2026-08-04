@@ -55,6 +55,16 @@ ORCHESTRATOR_URL = os.getenv("ORCHESTRATOR_URL", "http://anomaly-orchestrator:80
 #     (termination=="forward" 여부)로 감지해 경고를 남긴다.
 PIPELINE_MODE_DEFAULT = os.getenv("PIPELINE_MODE", "agent").lower()
 
+# L48 (ORCHESTRATOR_URL 아래)
+_AXIS_ENV_KEYS = ("EXPERIMENT_CASE", "PERCOLATE_QUERY_VERSION", "ENABLE_BUCKETIZATION",
+                  "BUCKET_TOLERANCE", "BUCKET_MIN_MATCH", "VEC_INDEX_CORESET_PCT",
+                  "VEC_QUANT", "HNSW_M", "HNSW_EF_CONSTRUCTION", "VEC_INDEX_SUFFIX",
+                  "KNN_NUM_CANDIDATES", "RETRIEVER_OVERSAMPLE", "SEARCH_MODE",
+                  "TOOL_EXECUTION_MODE", "TOOL_GATE_ENABLE", "RESEARCH_MODE",
+                  "GGUF_QUANT", "ENABLE_KV_CACHE")
+
+def _collect_axes() -> Dict[str, Optional[str]]:
+    return {k: os.getenv(k) for k in _AXIS_ENV_KEYS if os.getenv(k) is not None}
 
 def _resolve_eval_blob(blob: str, pipeline_mode: str) -> str:
     """NB01-04(v3) stage stem 정합 — S2/S4 eval jsonl 자동 매핑.
@@ -107,6 +117,35 @@ async def call_agent_detect(
         result["_nd_round0"] = (_fin or {}).get("nd_round0")
         result["_nd_final"]  = (_fin or {}).get("nd_final")
         result["_nd_n_rounds"] = (_fin or {}).get("n_rounds")   # 1이면 재검색 없음
+        result["_researched"]  = bool((_fin or {}).get("researched", False))
+        result["_nd_source"]   = (_fin or {}).get("nd_source")
+
+        # ★ [EXP] Recall@5 입력 — controller round_entry의 neighbor_oidx를 승격.
+        #   orchestrator PipelineResponse에 이웃이 없어 recall@5가 0으로
+        #   나오던 원인을 agent_rounds 경유로 해소한다.
+        #   round 0(=base retrieve 결과)을 우선 사용하고, 없으면 첫 유효 라운드.
+        _num_rounds = [r for r in rounds if isinstance(r.get("round"), int)]
+        _oidx = next((r.get("neighbor_oidx") for r in _num_rounds
+                      if r.get("neighbor_oidx")), None)
+        if _oidx:
+            result["retrieved_original_indices"] = [int(v) for v in _oidx]
+
+        # ★ [EXP] 재검색 소요 시간 (round>=1 엔트리에만 존재)
+        result["_research_ms"] = next((r.get("research_ms") for r in reversed(_num_rounds)
+                                       if r.get("research_ms") is not None), None)
+
+        # ── ★ [V3] typed wm + verify_global/contrast 트레이스 승격 ──────────
+        #   controller round_entry의 v3 키를 per-sample 최상위 컬럼으로 복사.
+        #   (v2/legacy 실행에서는 전부 None — 리포트 스키마 하위호환)
+        _last = next((r for r in reversed(rounds)
+                      if isinstance(r.get("round"), int)), {}) if rounds else {}
+        for _k in ("wm_type", "wm_axes", "wm_rationale", "nd_global", "flip",
+                   "global_cluster", "contrast_axis", "contrast_distance",
+                   "research_mode"):
+            result[f"_{_k}"] = next((r.get(_k) for r in reversed(rounds)
+                                     if isinstance(r, dict) and r.get(_k) is not None),
+                                    None)
+        result["_candidate_mode"] = os.getenv("ROUTER_CANDIDATE_MODE", "static")
 
         # ── ★ [batch_inference V5.1 포팅] router-retriever 상세 지표 소스 ──
         #   top_5_clusters(순위 보존)에서 두 dict를 만든다:
@@ -313,46 +352,99 @@ async def run_batch(args) -> List[Dict]:
     predictions: List[Dict] = []
     n_err = 0
 
-    async with httpx.AsyncClient() as client:
-        for i, idx in enumerate(indices):
-            tc = loader.get_test_case(
-                idx, test_data, test_emb,
-                percolate_version=args.percolate_version,
-                experiment_case=args.experiment_case,
-            )
-            result = await call_agent_detect(client, tc, args.timeout)
-            if result is None:
-                n_err += 1
-                predictions.append({
-                    "idx": idx,
-                    "error": True,
-                    "_gt_label": int(gt_labels[idx]),
-                })
-                continue
+    CONCURRENCY = int(os.getenv("AGENT_CONCURRENCY", "4"))
+    _sem  = asyncio.Semaphore(CONCURRENCY)
+    _done = {"n": 0}
 
-            result["idx"]       = idx
-            result["_gt_label"] = int(gt_labels[idx])
+    async def _one(i: int, idx: int, client) -> Dict:
+        tc = loader.get_test_case(
+            idx, test_data, test_emb,
+            percolate_version=args.percolate_version,
+            experiment_case=args.experiment_case,
+        )
+        async with _sem:                       # ★ 서버 동시 부하 상한
+            result = await call_agent_detect(client, tc, args.timeout)
+
+        if result is None:
+            out = {"idx": idx, "error": True, "_gt_label": int(gt_labels[idx])}
+        else:
+            out = result
+            out["idx"]       = idx
+            out["_gt_label"] = int(gt_labels[idx])
             # ── GT cluster 연결 (gt_loader.gt_cluster_tree) → routing 정확도 측정 ──
             if gt_clusters is not None:
-                result["_gt_cluster"] = int(gt_clusters[idx])
+                out["_gt_cluster"] = int(gt_clusters[idx])
             # ── eval_set 모드: NB 메타 부착 (nd 카테고리 / teacher 참조 / NB nd) ──
             if idx in eval_meta:
                 em = eval_meta[idx]
-                result["_category"] = _nd_category(em["nb_nd"])
-                result["_nb_nd"]    = em["nb_nd"]      # 오프라인(576d GT-kNN) nd
-                result["_teacher"]  = em["teacher"]    # teacher 응답 (NB03 Section B 참조)
+                out["_category"] = _nd_category(em["nb_nd"])
+                out["_nb_nd"]    = em["nb_nd"]      # 오프라인(576d GT-kNN) nd
+                out["_teacher"]  = em["teacher"]    # teacher 응답 (NB03 Section B 참조)
             else:
-                result["_category"] = "smoke"
-            predictions.append(result)
+                out["_category"] = "smoke"
 
-            # 진행 상황 출력 (10건마다)
-            if (i + 1) % 10 == 0 or i == 0:
-                ok_n = sum(1 for p in predictions if not p.get("error"))
-                logger.info("batch_progress",
-                            done=i + 1, total=len(indices),
-                            ok=ok_n, err=n_err)
+        # 진행 상황 출력 (10건마다) — 완료 순서 기준
+        _done["n"] += 1
+        if _done["n"] % 10 == 0 or _done["n"] == 1:
+            logger.info("batch_progress", done=_done["n"], total=len(indices),
+                        concurrency=CONCURRENCY)
+        return out
 
-    print(f"\n[batch] DONE  n={len(predictions)}  errors={n_err}")
+    _limits = httpx.Limits(max_connections=CONCURRENCY * 2,
+                           max_keepalive_connections=CONCURRENCY * 2)
+    async with httpx.AsyncClient(limits=_limits) as client:
+        # ★ gather는 입력 순서를 보존 — predictions[i] ↔ indices[i] 정렬이
+        #   gt_arrays(= np.asarray(...)[indices])와 맞아야 하므로 필수.
+        predictions = list(await asyncio.gather(
+            *[_one(i, idx, client) for i, idx in enumerate(indices)]
+        ))
+
+    n_err = sum(1 for p in predictions if p.get("error"))
+    print(f"\n[batch] DONE  n={len(predictions)}  errors={n_err}  concurrency={CONCURRENCY}")
+
+    # CONCURRENCY = int(os.getenv("AGENT_CONCURRENCY", "4"))
+    # _sem = asyncio.Semaphore(CONCURRENCY)
+
+    # async with httpx.AsyncClient() as client:
+    #     for i, idx in enumerate(indices):
+    #         tc = loader.get_test_case(
+    #             idx, test_data, test_emb,
+    #             percolate_version=args.percolate_version,
+    #             experiment_case=args.experiment_case,
+    #         )
+    #         result = await call_agent_detect(client, tc, args.timeout)
+    #         if result is None:
+    #             n_err += 1
+    #             predictions.append({
+    #                 "idx": idx,
+    #                 "error": True,
+    #                 "_gt_label": int(gt_labels[idx]),
+    #             })
+    #             continue
+
+    #         result["idx"]       = idx
+    #         result["_gt_label"] = int(gt_labels[idx])
+    #         # ── GT cluster 연결 (gt_loader.gt_cluster_tree) → routing 정확도 측정 ──
+    #         if gt_clusters is not None:
+    #             result["_gt_cluster"] = int(gt_clusters[idx])
+    #         # ── eval_set 모드: NB 메타 부착 (nd 카테고리 / teacher 참조 / NB nd) ──
+    #         if idx in eval_meta:
+    #             em = eval_meta[idx]
+    #             result["_category"] = _nd_category(em["nb_nd"])
+    #             result["_nb_nd"]    = em["nb_nd"]      # 오프라인(576d GT-kNN) nd
+    #             result["_teacher"]  = em["teacher"]    # teacher 응답 (NB03 Section B 참조)
+    #         else:
+    #             result["_category"] = "smoke"
+    #         predictions.append(result)
+
+    #         # 진행 상황 출력 (10건마다)
+    #         if (i + 1) % 10 == 0 or i == 0:
+    #             ok_n = sum(1 for p in predictions if not p.get("error"))
+    #             logger.info("batch_progress",
+    #                         done=i + 1, total=len(indices),
+    #                         ok=ok_n, err=n_err)
+
+    # print(f"\n[batch] DONE  n={len(predictions)}  errors={n_err}")
     # ── 서버 mode 불일치 감지: forward 모드 요청인데 agent 응답(또는 반대) ──
     _n_fwd = sum(1 for p in predictions
                  if not p.get("error") and p.get("termination") == "forward")
@@ -377,10 +469,20 @@ async def run_batch(args) -> List[Dict]:
     for _k, _aliases in (("gt_cluster_tree", ("gt_cluster_tree", "gt_cluster_id")),
                          ("gt_top5_cluster_ids",  ("gt_top5_cluster_ids",)),
                          ("gt_top5_cluster_dist", ("gt_top5_cluster_dist",)),
-                         ("gt_top5_dist",         ("gt_top5_dist",))):
+                         ("gt_top5_dist",         ("gt_top5_dist",)),
+                         ("gt_top5_indices",      ("gt_top5_indices",)),                 # ★
+                         ("gt_top5_indices_coreset_adjusted",
+                          ("gt_top5_indices_coreset_adjusted",)),
+                         ):
         _a = next((gt_data.get(_al) for _al in _aliases if gt_data.get(_al) is not None), None)
         if _a is not None:
             gt_arrays[_k] = np.asarray(_a)[indices]
+
+    # ★ [EXP] 스칼라는 indices 슬라이싱 대상이 아니므로 별도 보관
+    gt_arrays["_scalars"] = {
+        "coreset_coverage_rate": float(gt_data.get("coreset_coverage_rate", 1.0)),
+        "n_coreset_train":       int(gt_data.get("n_coreset_train", 0)),
+    }
 
     return predictions, gt_labels, indices, wall, gt_arrays
 
@@ -506,7 +608,18 @@ def run_evaluation(
         if gt_arrays.get("gt_top5_dist") is not None:
             rr_metrics["coreset_epsilon_recall"] = calc.calculate_coreset_epsilon_recall(
                 predictions, gt_arrays["gt_top5_dist"], epsilon=0.1)
-
+        # ★ [EXP] Recall@5 (raw / coreset-adjusted) — percolate·quant 축의 핵심 지표
+        if (gt_arrays.get("gt_top5_indices") is not None
+                and gt_arrays.get("gt_top5_indices_coreset_adjusted") is not None
+                and hasattr(calc, "calculate_retrieval_recall_dual")):
+            _sc = gt_arrays.get("_scalars", {})
+            rr_metrics["retrieval_recall"] = calc.calculate_retrieval_recall_dual(
+                predictions,
+                gt_arrays["gt_top5_indices"],
+                gt_arrays["gt_top5_indices_coreset_adjusted"],
+                coreset_coverage_rate=_sc.get("coreset_coverage_rate", 1.0),
+                n_coreset_train=_sc.get("n_coreset_train", 0),
+            )
     # ── 10. ★ [재설계 요청 7] Agent nd 이중 리포트 ──────────────
     #   (1) agent_nd_auroc : agent loop가 최종 판정에 쓴 nd(재검색 시 patchcore,
     #       아니면 raw)의 연속 score AUROC — threshold 무관, 순위 품질.
@@ -583,8 +696,28 @@ def run_evaluation(
             "raw_mean_nd":         round(float(_nd[~_researched].mean()), 4) if (~_researched).any() else None,
         }
 
+    # ── 10-b. ★ [EXP] Research Effect — 재검색 전/후 판정 변화 인과 분해 ──
+    #   nd_dual이 "최종 nd 한 벌"만 보는 것과 달리, (nd_round0 → nd_final)
+    #   쌍을 직접 비교해 band별 confusion / 판정 전이 / Δnd 방향성 /
+    #   abstention 선택 품질 / 비용을 한 블록으로 낸다.
+    #   verdict가 안 바뀌어도 directional_accuracy는 살아 있으므로,
+    #   "재검색 효과 없음"과 "효과를 측정 못 함"을 구분할 수 있다.
+    research_effect: Dict = {}
+    if pipeline_mode == "agent" and hasattr(calc, "calculate_research_effect"):
+        try:
+            research_effect = calc.calculate_research_effect(
+                predictions, gt_sub,
+                cls_threshold=CLS_ND_THRESHOLD,
+                boundary=(BOUNDARY_LOW, BOUNDARY_HIGH),
+            )
+        except Exception as _e:
+            logger.warning("research_effect_failed", error=str(_e))
+            research_effect = {"_error": str(_e)}
+
     # ── 결과 취합 ────────────────────────────────────────────
     report = {
+        "run_id":             os.getenv("RUN_ID", "unspecified"),   # ★
+        "axes":               _collect_axes(),                       # ★
         "experiment_case":    experiment_case,
         "pipeline_mode":      pipeline_mode,
         "wall_time":          wall,                    # ★ 총/건당 실험 시간
@@ -595,6 +728,7 @@ def run_evaluation(
         "dist_auroc":         dist_auroc,
         "anomaly_auroc":      anomaly_auroc,
         "agent_nd_dual":      nd_dual,               # ★ [요청 7] nd 이중 리포트
+        "research_effect":    research_effect,      # ★ [EXP] 재검색 인과 분해
         "distance_at_threshold": dist_at_thr,   # 비교 표용
         "agent_at_threshold": llm_at_thr,       # 비교 표용
         "boundary":           boundary,
@@ -635,7 +769,8 @@ async def main():
     parser.add_argument("--n-samples",           type=int, default=200)
     parser.add_argument("--start-index",         type=int, default=0)
     parser.add_argument("--timeout",             type=int, default=300)
-    parser.add_argument("--output-dir",          type=str, default="./results/agent_eval")
+    parser.add_argument("--output-dir",          type=str,
+                        default=f"./results/agent_eval/{os.getenv('RUN_NAME', 'local')}")
     parser.add_argument("--boundary-only",       action="store_true",
                         help="boundary zone 샘플(0.3~0.55)만 대상으로 실행")
     parser.add_argument("--pipeline-mode",       type=str, default=PIPELINE_MODE_DEFAULT,
@@ -759,6 +894,46 @@ async def main():
             print(f"    round1 재검색(tool)   : mean {_st2.mean(_r1):.1f}ms  n={len(_r1)}")
         else:
             print(f"    round1 재검색(tool)   : (재검색 발동 0건 또는 research_ms 미기록)")
+
+        # ── ★ [EXP] Research Effect — 재검색 인과 분해 ──────────
+        _re = report.get("research_effect") or {}
+        if _re.get("n"):
+            _tr, _dn, _sel, _cst = (_re.get("transitions", {}), _re.get("delta_nd", {}),
+                                    _re.get("selection", {}), _re.get("cost", {}))
+            _v  = (_re.get("by_view", {}) or {}).get(_tr.get("main_view", "pre_best_frozen"), {})
+            print(f"\n  [재검색 효과] n={_re.get('n')} / 재검색 {_dn.get('n_researched')}건  "
+                  f"(주 임계 view={_tr.get('main_view')} thr={_v.get('threshold_pre')})")
+            print(f"    AUROC  pre {(_re.get('auroc') or {}).get('pre')} → "
+                  f"post {(_re.get('auroc') or {}).get('post')}  "
+                  f"(Δ {(_re.get('auroc') or {}).get('delta')})")
+            for _b in ("ambiguous", "confident"):
+                _pb, _pa = (_v.get(_b, {}) or {}).get("pre", {}), (_v.get(_b, {}) or {}).get("post", {})
+                if not _pb.get("n"):
+                    continue
+                _inv = "" if _b == "confident" and _v.get(_b, {}).get("_invariant_ok", True) \
+                       else ("  ⚠ 대조군 변동" if _b == "confident" else "")
+                print(f"    [{_b:<9}] n={_pb.get('n')}  "
+                      f"pre  TPR {_pb.get('TPR')} FPR {_pb.get('FPR')} "
+                      f"FNR {_pb.get('FNR')} TNR {_pb.get('TNR')} acc {_pb.get('accuracy')}")
+                print(f"    {'':<12}  post TPR {_pa.get('TPR')} FPR {_pa.get('FPR')} "
+                      f"FNR {_pa.get('FNR')} TNR {_pa.get('TNR')} acc {_pa.get('accuracy')}{_inv}")
+            print(f"    전이  flip {_tr.get('n_flip')}  "
+                  f"rescued {(_tr.get('rescued') or {}).get('n')} {(_tr.get('rescued') or {}).get('by_band')}  "
+                  f"degraded {(_tr.get('degraded') or {}).get('n')} {(_tr.get('degraded') or {}).get('by_band')}  "
+                  f"→ net_gain {_tr.get('net_gain')}")
+            print(f"    Δnd   mean {_dn.get('mean')}  |Δ| {_dn.get('mean_abs')}  "
+                  f"moved {_dn.get('n_moved')}  방향정확도 {_dn.get('directional_accuracy')}")
+            print(f"          by_wm  ni={_dn.get('by_wm_type', {}).get('ni')}  "
+                  f"cm={_dn.get('by_wm_type', {}).get('cm')}")
+            print(f"    선택  ambiguous_precision {_sel.get('ambiguous_precision')} / "
+                  f"recall {_sel.get('ambiguous_recall')} / missed {_sel.get('missed')}")
+            print(f"    비용  mean {_cst.get('research_ms_mean')}ms  "
+                  f"ms/rescue {_cst.get('ms_per_rescue')}")
+            if _re.get("_warning"):
+                print(f"    ⚠ {_re['_warning']}")
+        elif args.pipeline_mode == "agent":
+            print(f"\n  [재검색 효과] 계산 불가 — _nd_round0/_nd_final 쌍 없음 "
+                  f"(controller round_log의 final 엔트리 확인)")
     # routing 정확도: 서빙 primary_cluster_id vs GT cluster (gt_cluster_tree)
     _r = [(p.get("primary_cluster_id"), p.get("_gt_cluster"))
           for p in predictions if not p.get("error")

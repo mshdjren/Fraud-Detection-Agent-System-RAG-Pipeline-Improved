@@ -420,6 +420,53 @@ class AgentMetricCalculator(MetricCalculator):
         self._agent_summary["ni_ratio"]     = result["ni_ratio"]
         return result
 
+    # ============================================================
+    # ★ [V3] 검색 품질 지표 — verdict/AUROC와 독립인 evidence-completing 축
+    # ============================================================
+    def compute_retrieval_quality(self, predictions: list) -> dict:
+        """v3 트레이스(_nd_global/_flip/_wm_type/_contrast_*)로 검색 품질 요약.
+        legacy 실행(필드 전부 None)에서는 counts=0인 무해한 dict 반환."""
+        import numpy as _np
+        nd0, ndg, flips, band_n = [], [], 0, 0
+        wm_types, contrast_n, contrast_ratio = {}, 0, []
+        flip_normal = flip_total = 0
+        for p in predictions:
+            g = p.get("_nd_global")
+            b = p.get("_distance_band")
+            wt = p.get("_wm_type")
+            if wt:
+                wm_types[wt] = wm_types.get(wt, 0) + 1
+            if b == "boundary":
+                band_n += 1
+                if p.get("_flip"):
+                    flip_total += 1
+                    if str(p.get("gt_label", p.get("label", ""))).upper() in ("0", "NORMAL"):
+                        flip_normal += 1
+            if g is not None:
+                _n0 = p.get("_nd_round0") or p.get("_nd_final")
+                if _n0:
+                    nd0.append(float(_n0)); ndg.append(float(g))
+            cd, t1 = p.get("_contrast_distance"), p.get("top_1_distance")
+            if cd is not None:
+                contrast_n += 1
+                if t1:
+                    contrast_ratio.append(float(cd) / max(float(t1), 1e-9))
+        eps = ([max(a / max(b_, 1e-9) - 1.0, 0.0) for a, b_ in zip(nd0, ndg)]
+               if ndg else [])
+        rq = {
+            "verify_global_n":   len(ndg),
+            "epsilon_median":    round(float(_np.median(eps)), 4) if eps else None,
+            "epsilon_p90":       round(float(_np.percentile(eps, 90)), 4) if eps else None,
+            "flip_rate_boundary": round(flip_total / max(band_n, 1), 4),
+            "flip_normal_purity": round(flip_normal / max(flip_total, 1), 4) if flip_total else None,
+            "wm_type_dist":      wm_types,
+            "contrast_usage_n":  contrast_n,
+            "contrast_dist_ratio_median": (round(float(_np.median(contrast_ratio)), 4)
+                                           if contrast_ratio else None),
+        }
+        self._agent_summary["retrieval_quality"] = rq
+        return rq
+
     # ── 3-5. Agent Latency Breakdown ────────────────────────
 
     def calculate_agent_latency_breakdown(

@@ -43,6 +43,7 @@ import re
 import json
 import time
 import logging
+import threading                      # ★ 추가: llama.cpp 단일 슬롯 직렬화용
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 
@@ -74,6 +75,7 @@ TORCH_DTYPE_STR  = os.getenv("TORCH_DTYPE",      "float32")
 # ── 서빙 백엔드 스위치 ────────────────────────────────────────
 MODEL_BACKEND  = os.getenv("MODEL_BACKEND", "hf").lower()   # "hf" | "gguf"
 GGUF_FILENAME  = os.getenv("GGUF_FILENAME", "model_q4.gguf")
+GGUF_QUANT     = os.getenv("GGUF_QUANT", "q8_0")            # ★ 신규 (관측/로그용)
 N_CTX          = int(os.getenv("N_CTX", "2048"))
 assert MODEL_BACKEND in ("hf", "gguf"), f"unknown MODEL_BACKEND: {MODEL_BACKEND}"
 
@@ -94,10 +96,26 @@ ENABLE_CONTINUOUS_BATCHING = os.getenv("ENABLE_CONTINUOUS_BATCHING", "false").lo
 ADAPTER_PATH = os.getenv("ADAPTER_LOCAL_DIR", "/data/adapter")
 
 ENABLE_KV_CACHE = os.getenv("ENABLE_KV_CACHE", "false").lower() == "true"
-KV_CACHE_MB     = int(os.getenv("KV_CACHE_MB", "256"))
+# ⚠ [dead] LlamaRAMCache는 _load_model_gguf()에서 의도적으로 비활성화되어
+#   있으므로(full-prompt hash cache → 동적 프롬프트에서 hit rate ~0) 이 두
+#   값은 현재 실제 캐시를 만들지 않는다. 정적 prefix 재사용은 llama.cpp의
+#   n_tokens 접두 매칭이 자동 수행하며, 그 효과는 gguf_infer_timing 로그의
+#   kv_reused_tokens / kv_reuse_ratio 로 관측한다.
+KV_CACHE_MB     =int(os.getenv("KV_CACHE_MB", "256"))
+LLAMA_N_BATCH     =int(os.getenv("LLAMA_N_BATCH", "512"))
+LLAMA_N_UBATCH     =int(os.getenv("LLAMA_N_UBATCH", "512"))
+
+# ★ [EXP] TTFT/TPOT 측정용 stream 경로. false면 기존 non-stream 경로 유지.
+ENABLE_TTFT_PROBE = os.getenv("ENABLE_TTFT_PROBE", "true").lower() == "true"
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
+
+# ── [S5] GT 임계 — NB01 s5_wm_type_gt 단일 출처 ──────────────
+Z_TAU = float(os.getenv("Z_TAU", "1.5"))
+NI_SPREAD_TAU = float(os.getenv("NI_SPREAD_TAU", "0.05"))
+W_CAT = float(os.getenv("W_CAT", "0.50"))
+P_MISS = float(os.getenv("P_MISS", "0.10"))
 
 logger = structlog.get_logger()
 
@@ -117,6 +135,15 @@ batch_inference_size = Histogram(
     buckets=[1, 2, 3, 4, 5, 6, 7, 8],
 )
 
+analyzer_ttft = Histogram(
+    "analyzer_ttft_seconds", "Time to first token (gguf)",
+    buckets=[0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 40])
+analyzer_tpot = Histogram(
+    "analyzer_tpot_ms", "Time per output token (ms)",
+    buckets=[10, 25, 50, 100, 200, 400, 800, 1600])
+analyzer_out_tokens = Histogram(
+    "analyzer_output_tokens", "Output token count",
+    buckets=[8, 16, 24, 32, 48, 64, 96, 128])
 # ===========================
 # 모델 로드 (startup)
 # ===========================
@@ -124,6 +151,18 @@ batch_inference_size = Histogram(
 _model     = None       # hf: AutoModelForCausalLM merged / gguf: llama_cpp.Llama
 _tokenizer = None       # hf: AutoTokenizer / gguf: 사용 안 함 (None 유지)
 
+# ★ llama_cpp.Llama는 내부 KV(self.n_tokens, self._input_ids)를 공유하는
+#   단일 슬롯 객체이고 thread-safe가 아니다. /analyze가 asyncio.to_thread로
+#   워커 스레드에 던지므로, 동시 요청이 오면 서로의 KV를 덮어써 출력이
+#   섞이거나 깨진다. 모델 호출 구간 전체를 이 락으로 직렬화한다.
+#   (HF 백엔드도 동일 객체 재진입이므로 같은 락을 공유)
+_MODEL_LOCK = threading.Lock()
+
+# ★ KV prefix 재사용 관측용 — llama_cpp는 직전 요청(self._input_ids)과
+#   토큰 접두를 비교해 일치 구간의 KV를 자동 재사용한다(범위 지정 API 없음).
+#   정적 prefix(system+instruction)가 매 요청 동일하므로, 2번째 호출부터
+#   prefill 토큰 수가 줄어드는지로 히트 여부를 간접 확인한다.
+_INFER_STAT = {"n": 0, "first_ms": None, "lock_wait_ms_sum": 0.0}
 
 def load_model():
     global _model, _tokenizer
@@ -151,12 +190,21 @@ def _load_model_gguf(t0: float):
         model_path=gguf_path,
         n_ctx=N_CTX,
         n_threads=n_threads,
+        n_threads_batch=int(os.getenv("OMP_NUM_THREADS_BATCH", str(n_threads))),  # ★ prefill용
+        n_batch=int(os.getenv("LLAMA_N_BATCH", "512")),       # ★ prefill 청크
+        n_ubatch=int(os.getenv("LLAMA_N_UBATCH", "512")),     # ★
+        use_mmap=True,
+        use_mlock=os.getenv("LLAMA_MLOCK", "true").lower() == "true",  # ★ 페이지폴트 방지
+        logits_all=False,
         verbose=False,
     )
-    if ENABLE_KV_CACHE:                                    # ★ 추가
-        from llama_cpp import LlamaRAMCache
-        _model.set_cache(LlamaRAMCache(capacity_bytes=KV_CACHE_MB * 1024 * 1024))
-        logger.info("kv_cache_enabled", cap_mb=KV_CACHE_MB)
+    if ENABLE_KV_CACHE:
+        # ★ LlamaRAMCache = full-prompt hash cache. 프롬프트가 매 요청 달라지는
+        #   본 서비스에서는 히트율 0이고 state 복사 오버헤드만 발생한다(NB03 실측).
+        #   정적 prefix(system+instruction) 재사용은 llama.cpp 내부 n_tokens
+        #   접두 매칭이 자동 수행하므로 set_cache가 필요 없다.
+        logger.warning("kv_ram_cache_disabled_by_design",
+                        reason="full-prompt hash cache; ~0 hit rate for dynamic prompts")
     # logger.info("gguf_model_loaded", elapsed_s=f"{time.time()-t0:.1f}", path=gguf_pa
     logger.info("gguf_model_loaded", elapsed_s=f"{time.time()-t0:.1f}", path=gguf_path)
 
@@ -211,7 +259,7 @@ def _load_model_hf(t0: float):
 # ===========================
 
 # ── neighbor feature 표시에서 제외할 non-feature 키 (retriever SearchResult 필드) ──
-_NON_FEATURE_KEYS = {"es_doc_id", "original_index", "cluster_id", "distance", "score"}
+_NON_FEATURE_KEYS = {"es_doc_id", "original_index", "cluster_id", "distance", "score", "features"}
 
 
 def _format_top5_neighbors(top_k_results: List[Dict]) -> str:
@@ -272,6 +320,35 @@ PIPELINE_MODE = os.getenv("PIPELINE_MODE", "agent").lower()
 #   ★ [NB v3 정합] 기본값 v1→v2 — 현행 어댑터(S2 forward / S4 agent 1-key)는
 #   전부 prompt v2로 학습됨. v1은 구 어댑터 롤백 시에만 env로 지정.
 PROMPT_VERSION = os.getenv("PROMPT_VERSION", "v2").lower()
+
+# ★ [V3] typed what_missing 스키마 — "v2"(자유텍스트) | "v3"(cm|ni|accept + 근거)
+#   cls/sufficiency는 v2와 동일하게 nd 결정론 유지. 모델 자유 출력은 여전히
+#   1-key(what_missing)이며, 값의 형식만 typed로 바뀐다 (S5 학습 데이터 정합).
+WM_SCHEMA = os.getenv("WM_SCHEMA", "v3" if PROMPT_VERSION == "v3" else "v2").lower()
+
+# v3 instruction 후미 블록 — v2 빌더의 evidence 레이아웃은 그대로 재사용하고
+# (캐시/train-serve 정합), 출력 스펙만 교체한다. NB01-04 teacher 생성도 이
+# 상수를 import해 동일 문구로 학습 데이터를 만든다 (단일 출처).
+# ★ [V3] instruction 단일 출처 = prompts.EVALUATOR_INSTRUCTION_V3
+#   (v2와 동일 구조의 "<direction>: <evidence>" 1-key — NB01-04 teacher 생성도
+#    같은 상수를 import해 train-serve 문구 100% 일치)
+AGENT_WM_INSTRUCTION_V3 = getattr(prompts, "EVALUATOR_INSTRUCTION_V3", None)
+
+
+_WM_TYPED_RE = re.compile(
+    r"\s*(cluster_mismatch|neighbor_insufficient|accept)\s*[::]?\s*([^—]*?)\s*(?:—\s*(.*))?$",
+    re.IGNORECASE | re.DOTALL)
+
+def _parse_wm_typed(wm: Optional[str]):
+    """typed wm → (wm_type, wm_axes, wm_rationale). 실패 시 (None, [], 원문)."""
+    if not wm:
+        return None, [], None
+    m = _WM_TYPED_RE.match(str(wm))
+    if not m:
+        return None, [], str(wm)
+    t = m.group(1).lower()
+    axes = [a.strip() for a in (m.group(2) or "").split(",") if a.strip()]
+    return t, axes, (m.group(3) or "").strip() or None
 CLS_ND_THRESHOLD       = float(os.getenv("CLS_ND_THRESHOLD", "0.5"))   # nd>=0.5 → ABNORMAL
 
 SUFFICIENCY_BOUNDARY_LOW  = float(os.getenv("SUFFICIENCY_BOUNDARY_LOW",  "0.3"))
@@ -311,12 +388,24 @@ def build_user_prompt(
     # ★ [PROMPT v2] 신 레이아웃 — prompts.py v2 빌더 재사용 (단일 소스).
     #   top-1 feature는 retriever 결과 dict에서 직접 추출 (coreset_map 불필요,
     #   retriever가 feature 미반환이면 합의 라인이 자동 생략됨).
-    if PROMPT_VERSION == "v2":
+    if PROMPT_VERSION in ("v2", "v3"):   # ★ v3: 동일 evidence 레이아웃 + V3 instruction(빌더 내장)
         _nb = top_k_normal_results[:3]
         # _t1 = {k: v for k, v in (_nb[0] if _nb else {}).items()
             #    if k not in _NON_FEATURE_KEYS and v is not None} or None
-        _tk = [{k:v for k,v in nb.items() if k not in _NON_FEATURE_KEYS 
-                and v is not None} for nb in _nb[:3]]
+        _tk = []
+        for nb in _nb[:3]:
+            f = nb.get("features")
+            if not f:                                   # 하위호환: flat dict
+                f = {k: v for k, v in nb.items()
+                     if k not in _NON_FEATURE_KEYS and v is not None}
+            _tk.append(f or {})
+        if not any(_tk):
+            # ★ 이 경우 프롬프트에서 agrees/differs 줄이 통째로 사라져
+            #   neighbor_insufficient 판정이 불가능해진다 (조용한 실패).
+            logger.error("neighbor_features_missing",
+                         hint="retriever _source에 feature 컬럼 포함 여부 확인",
+                         nb_keys=list((_nb[0] or {}).keys())[:12],
+                         n_neighbors=len(_nb))
         _oi = [int(r.get("original_index", -1)) for r in _nb]
         _ds = [float(r.get("distance", 0.0)) for r in _nb]
         _builder = (prompts.build_analyzer_user_prompt_forward_v2
@@ -327,6 +416,8 @@ def build_user_prompt(
                        persona=persona, topk_feats=_tk)
         nd = prompts.normalize_dist(top1_distance)
         suf = _suf_from_nd(nd)
+        # ★ [V3] instruction은 prompts 빌더가 PROMPT_VERSION==v3일 때 내장 —
+        #   여기서 후미 append하지 않는다 (v2 방식과 동일한 단일 출처 구조).
         if PIPELINE_MODE != "forward" and ANALYZER_DECISION_MODE == "det":
             # 주입은 가변 후미(캐시 무영향) — v2 evaluator 학습도 동일 위치
             _up += f"\n\n[SYSTEM-COMPUTED] retrieval_sufficiency = {suf.upper()}"
@@ -401,31 +492,122 @@ def _extract_json(pred_txt: str) -> str:
         return pred_txt.split("```")[1].strip()
     return pred_txt
 
+def run_inference(user_prompt: str, meta: Optional[Dict] = None) -> Dict:
+    """단건 추론. 백엔드에 따라 HF generate() 또는 llama_cpp completion을 탄다.
 
-def run_inference(user_prompt: str) -> Dict:
-    """단건 추론. 백엔드에 따라 HF generate() 또는 llama_cpp completion을 탄다."""
+    ★ 동시성: _MODEL_LOCK으로 모델 호출을 직렬화한다. LLM 구간은 어차피
+      직렬이지만, 호출자(=/analyze)의 프롬프트 빌드·HTTP·파싱 구간은 겹쳐
+      처리되므로 클라이언트 동시성(AGENT_CONCURRENCY>1)에서 wall-clock 이득이 있다.
+    """
     prompt = (
         f"<|im_start|>system\n{prompts.SYSTEM_PROMPT}<|im_end|>\n"
         f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
         f"<|im_start|>assistant\n"
     )
 
-    if MODEL_BACKEND == "gguf":
-        out = _model(
-            prompt, max_tokens=MAX_NEW_TOKENS, temperature=0.0,
-            stop=["<|im_end|>"],
-        )
-        pred_txt = out["choices"][0]["text"].strip()
-    else:
-        inputs = _tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(DEVICE)
-        with torch.no_grad():
-            out = _model.generate(
-                **inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
-                temperature=None, top_p=None, top_k=None,
-                pad_token_id=_tokenizer.pad_token_id, eos_token_id=_tokenizer.eos_token_id,
+    _t_q = time.perf_counter()
+    with _MODEL_LOCK:                                   # ★ 모델 접근 직렬화
+        _t_i = time.perf_counter()
+        wait_ms = (_t_i - _t_q) * 1000.0
+
+        if MODEL_BACKEND == "gguf":
+            # ★ [KV prefix 관측] 호출 직전 llama_cpp 내부 상태를 읽어둔다.
+            #   _input_ids = 직전 요청의 토큰열. 새 프롬프트와의 공통 접두
+            #   길이만큼 KV가 재사용되고, 나머지만 prefill된다.
+            _prev_ids = getattr(_model, "_input_ids", None)
+            _prev_n   = int(getattr(_model, "n_tokens", 0) or 0)
+            try:
+                _cur_ids = _model.tokenize(prompt.encode("utf-8"), add_bos=True, special=True)
+            except Exception:
+                _cur_ids = None
+
+            _reuse = 0
+            if _cur_ids is not None and _prev_ids is not None and _prev_n > 0:
+                for _a, _b in zip(list(_prev_ids)[:_prev_n], _cur_ids[:-1]):
+                    if int(_a) != int(_b):
+                        break
+                    _reuse += 1
+
+            # ── 생성 ──────────────────────────────────────────────
+            # ★ [EXP] ENABLE_TTFT_PROBE=true 이면 stream=True 로 첫 토큰 시각을
+            #   확보해 TTFT/TPOT를 분해한다. 샘플링 파라미터는 non-stream 경로와
+            #   동일하므로 출력은 동치(NB03 A/B 검증 조건 유지). 단 stream 응답에는
+            #   out["usage"]가 없으므로 _n_out은 chunk 수로 센다.
+            _ttft = None
+            if ENABLE_TTFT_PROBE:
+                _chunks = []
+                for _ch in _model(
+                    prompt, max_tokens=MAX_NEW_TOKENS, temperature=0.0,
+                    repeat_penalty=1.0, top_k=1, top_p=1.0,
+                    stop=["<|im_end|>"], stream=True,
+                ):
+                    if _ttft is None:
+                        _ttft = time.perf_counter() - _t_i
+                    _chunks.append(_ch["choices"][0]["text"])
+                pred_txt = "".join(_chunks).strip()
+                _n_out   = len(_chunks)
+            else:
+                out = _model(
+                    prompt, max_tokens=MAX_NEW_TOKENS, temperature=0.0,
+                    repeat_penalty=1.0, top_k=1, top_p=1.0,   # ★ HF greedy와 동치(NB03 A/B 검증)
+                    stop=["<|im_end|>"],
+                )
+                pred_txt = out["choices"][0]["text"].strip()
+                _n_out   = int((out.get("usage") or {}).get("completion_tokens", -1))
+
+            _n_prompt = len(_cur_ids) if _cur_ids is not None else -1
+            _infer_ms = (time.perf_counter() - _t_i) * 1000.0
+
+            # ★ [EXP] TTFT / TPOT 기록 — TTFT는 lock 획득 시점(_t_i) 기준이므로
+            #   큐 대기(lock_wait_ms)를 제외한 순수 prefill 시간이 된다.
+            _tpot_ms = None
+            if _ttft is not None and _n_out > 0:
+                _tpot_ms = (_infer_ms - _ttft * 1000.0) / max(_n_out - 1, 1)
+                analyzer_ttft.observe(_ttft)
+                analyzer_tpot.observe(_tpot_ms)
+                analyzer_out_tokens.observe(_n_out)
+                if meta is not None:
+                    meta.update({
+                        "ttft_ms":         round(_ttft * 1000, 2),
+                        "tpot_ms":         round(_tpot_ms, 2),
+                        "n_output_tokens": _n_out,
+                    })
+
+            _INFER_STAT["n"] += 1
+            _INFER_STAT["lock_wait_ms_sum"] += wait_ms
+            if _INFER_STAT["first_ms"] is None:
+                _INFER_STAT["first_ms"] = _infer_ms
+            logger.info(
+                "gguf_infer_timing",
+                call_n=_INFER_STAT["n"],
+                infer_ms=round(_infer_ms, 1),
+                lock_wait_ms=round(wait_ms, 1),
+                prompt_tokens=_n_prompt,
+                out_tokens=_n_out,
+                ttft_ms=(round(_ttft * 1000, 1) if _ttft is not None else None),   # ★ [EXP]
+                tpot_ms=(round(_tpot_ms, 1) if _tpot_ms is not None else None),    # ★ [EXP]
+                # ★ prefix 재사용 지표: 이 값이 0에 머물면 정적 prefix가
+                #   요청마다 달라지고 있다는 뜻(= 캐시 미작동).
+                kv_reused_tokens=_reuse,
+                kv_reuse_ratio=(round(_reuse / _n_prompt, 3) if _n_prompt > 0 else None),
+                prefill_tokens=(_n_prompt - _reuse) if _n_prompt > 0 else None,
+                speedup_vs_first=(round(_INFER_STAT["first_ms"] / _infer_ms, 2)
+                                  if _infer_ms > 0 else None),
             )
-        decoded = _tokenizer.decode(out[0], skip_special_tokens=False)
-        pred_txt = decoded.split("<|im_start|>assistant\n")[-1].split("<|im_end|>")[0].strip()
+        else:
+            inputs = _tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(DEVICE)
+            with torch.no_grad():
+                out = _model.generate(
+                    **inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
+                    temperature=None, top_p=None, top_k=None,
+                    pad_token_id=_tokenizer.pad_token_id, eos_token_id=_tokenizer.eos_token_id,
+                )
+            decoded = _tokenizer.decode(out[0], skip_special_tokens=False)
+            pred_txt = decoded.split("<|im_start|>assistant\n")[-1].split("<|im_end|>")[0].strip()
+            logger.info("hf_infer_timing",
+                        infer_ms=round((time.perf_counter() - _t_i) * 1000.0, 1),
+                        lock_wait_ms=round(wait_ms, 1),
+                        prompt_tokens=int(inputs["input_ids"].shape[1]))
 
     logger.info("model_raw_output", backend=MODEL_BACKEND,
                 pred_txt_len=len(pred_txt), pred_txt_preview=pred_txt[:300])
@@ -436,6 +618,40 @@ def run_inference(user_prompt: str) -> Dict:
     except json.JSONDecodeError as e:
         logger.error("model_output_json_parse_failed", error=str(e), pred_txt_full=pred_txt)
         raise
+# def run_inference(user_prompt: str) -> Dict:
+#     """단건 추론. 백엔드에 따라 HF generate() 또는 llama_cpp completion을 탄다."""
+#     prompt = (
+#         f"<|im_start|>system\n{prompts.SYSTEM_PROMPT}<|im_end|>\n"
+#         f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
+#         f"<|im_start|>assistant\n"
+#     )
+
+#     if MODEL_BACKEND == "gguf":
+#         out = _model(
+#             prompt, max_tokens=MAX_NEW_TOKENS, temperature=0.0,
+#             stop=["<|im_end|>"],
+#         )
+#         pred_txt = out["choices"][0]["text"].strip()
+#     else:
+#         inputs = _tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(DEVICE)
+#         with torch.no_grad():
+#             out = _model.generate(
+#                 **inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
+#                 temperature=None, top_p=None, top_k=None,
+#                 pad_token_id=_tokenizer.pad_token_id, eos_token_id=_tokenizer.eos_token_id,
+#             )
+#         decoded = _tokenizer.decode(out[0], skip_special_tokens=False)
+#         pred_txt = decoded.split("<|im_start|>assistant\n")[-1].split("<|im_end|>")[0].strip()
+
+#     logger.info("model_raw_output", backend=MODEL_BACKEND,
+#                 pred_txt_len=len(pred_txt), pred_txt_preview=pred_txt[:300])
+
+#     pred_txt = _extract_json(pred_txt)
+#     try:
+#         return json.loads(pred_txt)
+#     except json.JSONDecodeError as e:
+#         logger.error("model_output_json_parse_failed", error=str(e), pred_txt_full=pred_txt)
+#         raise
 
 
 def run_inference_batch(user_prompts: List[str]) -> List[Dict]:
@@ -507,7 +723,6 @@ class AnalyzeRequest(BaseModel):
     persona:              Optional[Dict[str, Any]] = None
     tree_features:        Optional[Dict[str, Any]] = None  # v5에서 미사용, 호환용
 
-
 class AnalyzeResponse(BaseModel):
     """
     노트북(analyzer_finetune_v9, NB02)과 동일한 3키 출력 schema.
@@ -529,6 +744,18 @@ class AnalyzeResponse(BaseModel):
     confidence:      Optional[int] = None  # ★ forward 3-key 출력 (evaluator는 None)
     reasoning:       Optional[str] = None  # ★ forward 3-key 출력
     model_cls:       Optional[str] = None  # ★ det 모드에서 모델이 낸 cls (참고용)
+    # ── ★ [V3] typed what_missing 분해 (WM_SCHEMA=v3일 때만 채움) ──────────
+    wm_type:      Optional[str] = None       # "cm" | "ni" | "accept"
+    wm_axes:      Optional[List[str]] = None # type이 지목한 feature 축
+    wm_rationale: Optional[str] = None       # 근거문 (감사 주석 소스)
+
+    # ── ★ [EXP] 추론 latency 분해 (gguf + ENABLE_TTFT_PROBE 경로에서만 채워짐) ──
+    #   ttft_ms         : lock 획득 후 첫 토큰까지 (= prefill 시간)
+    #   tpot_ms         : 이후 토큰당 평균 디코딩 시간
+    #   n_output_tokens : 생성 토큰 수 (= LLM 실호출 여부의 지표)
+    ttft_ms:         Optional[float] = None
+    tpot_ms:         Optional[float] = None
+    n_output_tokens: Optional[int]   = None
 
 
 # ===========================
@@ -560,7 +787,15 @@ async def startup():
         NORM_CLOSE_THRESHOLD=DIST_P25,
         NORM_MODERATE_THRESHOLD=DIST_P75,
     )
-
+    # ★ [S5] GT 임계 단일 출처 — NB01 s5_wm_type_gt / NB03과 동일 값 강제.
+    #   z_tau=1.0(모듈 기본)이면 accept 판정이 붕괴한다(실측 recall 0.000).
+    for _k, _dflt in (("Z_TAU", "1.5"), ("NI_SPREAD_TAU", "0.05"),
+                      ("W_CAT", "0.50"), ("P_MISS", "0.10")):
+        setattr(prompts, _k, float(os.getenv(_k, _dflt)))
+    logger.info("s5_thresholds_bound",
+                z_tau=prompts.Z_TAU, ni_spread_tau=prompts.NI_SPREAD_TAU,
+                w_cat=prompts.W_CAT, p_miss=prompts.P_MISS,
+                prompt_version=PROMPT_VERSION)
     # continuous batching 배처 백그라운드 루프 기동. load_model() 이후에
     # 시작해야 한다 — 모델이 준비되기 전에 첫 요청이 배치로 묶이면 안 됨.
     _batcher.start()
@@ -572,7 +807,7 @@ async def startup():
 
 def _parse_inference_result(
     result: Dict, *, mode: str, t0: float, sufficiency: str, nd: float,
-    persona_used: bool, tree_rules_used: bool,
+    persona_used: bool, tree_rules_used: bool, gen_meta: Optional[Dict] = None,
 ) -> AnalyzeResponse:
     """
     run_inference()/run_inference_batch()가 반환한 raw dict 1개를 검증하고
@@ -599,6 +834,7 @@ def _parse_inference_result(
             reasoning=str(result.get("reasoning", ""))[:300] or None,
             persona_used=persona_used, tree_rules_used=tree_rules_used,
             decision_mode="forward",
+            **(gen_meta or {}),                               # ★ 추가
         )
 
     model_cls = str(result.get("cls", "")).upper()
@@ -654,12 +890,17 @@ def _parse_inference_result(
         latency_s=f"{elapsed:.2f}", persona_used=persona_used,
     )
 
+    # ★ [V3] typed wm 분해 — v2 스키마에서는 3필드 모두 None (하위호환)
+    _wt, _wa, _wr = (_parse_wm_typed(what_missing) if WM_SCHEMA == "v3"
+                     else (None, [], None))
     return AnalyzeResponse(
         cls=cls, sufficiency=sufficiency, what_missing=what_missing,
         persona_used=persona_used, tree_rules_used=tree_rules_used,
         decision_mode=ANALYZER_DECISION_MODE,
         nd=round(nd, 4),
         model_cls=(model_cls or None) if ANALYZER_DECISION_MODE == "det" else None,
+        wm_type=_wt, wm_axes=(_wa or None), wm_rationale=_wr,
+        **(gen_meta or {}),                               # ★ [EXP] TTFT/TPOT 병합
     )
 
 
@@ -686,7 +927,8 @@ def _run_single(
 
     logger.info("run_single_inference_start", backend=MODEL_BACKEND,
                 model_loaded=(_model is not None))
-    result = run_inference(user_prompt)
+    _gen_meta: Dict = {}                                   # ★ [EXP] TTFT/TPOT 수집함
+    result = run_inference(user_prompt, meta=_gen_meta)    # ★ [EXP]
 
     logger.info("run_single_inference_done", elapsed_s=f"{time.time()-t0:.2f}",
                 result_keys=list(result.keys()) if isinstance(result, dict) else type(result).__name__)
@@ -694,6 +936,7 @@ def _run_single(
     return _parse_inference_result(
         result, mode=mode, t0=t0, sufficiency=suf, nd=nd,
         persona_used=effective_persona is not None, tree_rules_used=tree_rules_used,
+        gen_meta=_gen_meta,                                # ★ [EXP]
     )
 
 
@@ -921,6 +1164,14 @@ async def health():
         "device":              DEVICE,
         "persona_enabled":     PERSONA_ENABLED,
         "tree_rules_enabled":  TREE_RULES_ENABLED,
+        "gguf_filename":       GGUF_FILENAME if MODEL_BACKEND == "gguf" else None,
+        "gguf_quant":          GGUF_QUANT if MODEL_BACKEND == "gguf" else None,   # ★
+        "prompt_version":      PROMPT_VERSION,                                    # ★
+        "wm_schema":           WM_SCHEMA,                                         # ★
+        "z_tau":               getattr(prompts, "Z_TAU", None),                   # ★
+        "infer_calls":        _INFER_STAT["n"],
+        "avg_lock_wait_ms":   (round(_INFER_STAT["lock_wait_ms_sum"] / _INFER_STAT["n"], 1)
+                               if _INFER_STAT["n"] else 0.0),
     }
 
 
@@ -987,6 +1238,11 @@ async def config():
         "dist_stats": {
             "p25": DIST_P25, "p50": DIST_P50, "p75": DIST_P75, "iqr": DIST_IQR,
         },
+        "gguf_filename":       GGUF_FILENAME if MODEL_BACKEND == "gguf" else None,
+        "gguf_quant":          GGUF_QUANT if MODEL_BACKEND == "gguf" else None,   # ★
+        "prompt_version":      PROMPT_VERSION,                                    # ★
+        "wm_schema":           WM_SCHEMA,                                         # ★
+        "z_tau":               getattr(prompts, "Z_TAU", None),                   # ★
     }
 
 

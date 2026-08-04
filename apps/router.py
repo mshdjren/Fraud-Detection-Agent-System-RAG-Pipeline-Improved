@@ -43,6 +43,9 @@ import asyncio
 
 logger = structlog.get_logger()
 
+# ★ [V3] 후보 생성 모드 — "static"(기존 v14) | "dynamic"(test emb 기준 top5)
+ROUTER_CANDIDATE_MODE = os.getenv("ROUTER_CANDIDATE_MODE", "static").lower()
+
 # ===========================
 # Configuration
 # ===========================
@@ -53,9 +56,24 @@ ES_REQUEST_TIMEOUT   = int(os.getenv("ES_REQUEST_TIMEOUT", "120"))
 
 EXPERIMENT_CASE         = os.getenv("EXPERIMENT_CASE", "pca_64")
 PERCOLATE_QUERY_VERSION = os.getenv("PERCOLATE_QUERY_VERSION", "v2")
+
+# ★ [FIX] percolate "쿼리 버전" 과 "인덱스 버전" 을 분리한다.
+#   v14 = V1_StrictAND + centroid top4 보충 이므로 percolator 인덱스는 v1 을
+#   공유한다. 인덱스명을 만들 때는 반드시 PERCOLATE_INDEX_VERSION 을 써야 하며,
+#   그러지 않으면 존재하지 않는 ..._v14_..._percolator 를 조회해
+#   ENABLE_BUCKETIZATION=true 일 때 기동 중 raise → CrashLoop 가 된다.
+VERSION_INDEX_ALIAS = {
+    "v14":  "v1",
+    "v11a": "v11",
+    "v11b": "v11",
+    "v11c": "v11",
+}
+PERCOLATE_INDEX_VERSION = VERSION_INDEX_ALIAS.get(
+    PERCOLATE_QUERY_VERSION, PERCOLATE_QUERY_VERSION)
+
 INDEX_PERCOLATOR        = os.getenv(
     "INDEX_PERCOLATOR",
-    f"fraud_ecom_{EXPERIMENT_CASE}_{PERCOLATE_QUERY_VERSION}_tree_rules_percolator"
+    f"fraud_ecom_{EXPERIMENT_CASE}_{PERCOLATE_INDEX_VERSION}_tree_rules_percolator"
 )
 
 PCA_MODEL_PATH       = os.getenv("PCA_MODEL_PATH", "/data/pca_model.joblib")
@@ -102,6 +120,12 @@ AUG_MULTIPLIER        = os.getenv("AUG_MULTIPLIER", "").strip()          # "" | 
 AUG_PCT               = int(os.getenv("AUG_PCT", "100"))
 VEC_TYPE              = os.getenv("VEC_TYPE", "float32")                  # float32 | int8
 
+# ★ [EXP] ingest 의 build_vec_index_suffix() 와 동일 규칙
+VEC_QUANT        = os.getenv("VEC_QUANT", "f32").strip().lower()
+HNSW_M           = int(os.getenv("HNSW_M", "16"))
+HNSW_EF_C        = int(os.getenv("HNSW_EF_CONSTRUCTION", "100"))
+VEC_INDEX_SUFFIX = os.getenv("VEC_INDEX_SUFFIX", "")
+
 # ===========================
 # Experiment Case Config
 # ===========================
@@ -124,12 +148,9 @@ AVAILABLE_EXPERIMENTS = list(EXPERIMENT_CONFIG.keys())
 AVAILABLE_VERSIONS = ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8",
                       "v9", "v10", "v11", "v11a", "v11b", "v11c",
                       "v12", "v13", "v14"]
-VERSION_INDEX_ALIAS = {
-    "v14":  "v1",
-    "v11a": "v11",
-    "v11b": "v11",
-    "v11c": "v11",
-}
+# (VERSION_INDEX_ALIAS / PERCOLATE_INDEX_VERSION 은 상단 EXPERIMENT_CASE
+#  블록으로 이동했다 — INDEX_PERCOLATOR 기본값 생성 시점에 필요하기 때문)
+
 # ===========================
 # Global State
 # ===========================
@@ -146,6 +167,8 @@ _cached_all_cluster_ids: Optional[List[int]] = None
 # ★ Bucketization 전역 변수
 BUCKET_DEPTH_PCT = os.getenv("BUCKET_DEPTH_PCT", "15")
 ENABLE_BUCKETIZATION = os.getenv("ENABLE_BUCKETIZATION", "auto").lower()
+BUCKET_TOLERANCE = int(os.getenv("BUCKET_TOLERANCE", "2"))
+BUCKET_MIN_MATCH = int(os.getenv("BUCKET_MIN_MATCH", "3"))
 
 bucket_config: Optional[Dict] = None
 bucket_centers: Optional[Dict[str, np.ndarray]] = None  # 사전계산된 중심값
@@ -269,6 +292,10 @@ class McpExecuteResponse(BaseModel):
 # ===========================
 # vec_index 결정
 # ===========================
+def _vec_index_suffix() -> str:
+    if VEC_INDEX_SUFFIX:
+        return VEC_INDEX_SUFFIX
+    return f"_{VEC_QUANT}_m{HNSW_M}ef{HNSW_EF_C}"
 
 def get_vec_index() -> str:
     """
@@ -279,7 +306,7 @@ def get_vec_index() -> str:
     """
     if AUG_MULTIPLIER:
         return f"fraud_ecom_aug_{AUG_MULTIPLIER}x_{AUG_PCT}pct_{VEC_TYPE}_vec"
-    return f"fraud_ecom_{EXPERIMENT_CASE}_percentage_{VEC_INDEX_CORESET_PCT}_cluster_tree_vec"
+    return (f"fraud_ecom_{EXPERIMENT_CASE}_percentage_{VEC_INDEX_CORESET_PCT}_cluster_tree_vec{_vec_index_suffix()}")
 
 # ===========================
 # Preprocessing
@@ -516,7 +543,7 @@ def build_bucket_prefilter(bucket_indices: Dict[str, int]) -> Optional[Dict]:
     feature_groups = []
     
     for feature, bucket_idx in bucket_indices.items():
-        tolerance_buckets = list(range(max(0, bucket_idx - 2), bucket_idx + 3))
+        tolerance_buckets = list(range(max(0, bucket_idx - BUCKET_TOLERANCE), bucket_idx + BUCKET_TOLERANCE))
         
         # Direction 유지 (기존 로직)
         feature_group = {
@@ -537,8 +564,8 @@ def build_bucket_prefilter(bucket_indices: Dict[str, int]) -> Optional[Dict]:
         feature_groups.append(feature_group)
     
     n_features = len(feature_groups)
-    min_match = 3  # 9개 중 3개 (33%) - 고정값
-    
+    min_match = max(1, min(BUCKET_MIN_MATCH, n_features))
+
     return {"bool": {"should": feature_groups, "minimum_should_match": min_match}}
 
 # ===========================
@@ -783,12 +810,18 @@ def _augment_with_centroid(
         [test_doc.get(f"v{i+1}", 0.0) for i in range(centroid_matrix.shape[1])],
         dtype=np.float32,
     )
-    cent_norms  = np.linalg.norm(centroid_matrix, axis=1, keepdims=True)
-    cent_norms  = np.where(cent_norms == 0, 1.0, cent_norms)
-    test_norm   = np.linalg.norm(test_vec)
-    test_norm   = test_norm if test_norm > 0 else 1.0
-    similarities = (centroid_matrix / cent_norms) @ (test_vec / test_norm)
-    distances    = 1.0 - similarities
+    if ROUTER_CANDIDATE_MODE == "dynamic":
+        # ★ [V3] L2 거리 — retriever HNSW/nd와 동일 metric으로 통일.
+        #   (offline R2 실측: candidate recall@5 86.5% → 96.7%, Δ+10.3%p)
+        distances = np.linalg.norm(centroid_matrix - test_vec, axis=1)
+    else:
+        # 기존(v14) cosine 유지 — legacy 재현용
+        cent_norms  = np.linalg.norm(centroid_matrix, axis=1, keepdims=True)
+        cent_norms  = np.where(cent_norms == 0, 1.0, cent_norms)
+        test_norm   = np.linalg.norm(test_vec)
+        test_norm   = test_norm if test_norm > 0 else 1.0
+        similarities = (centroid_matrix / cent_norms) @ (test_vec / test_norm)
+        distances    = 1.0 - similarities
 
     # 이미 매칭된 cluster 제외하고 top4 선택
     sorted_idx = np.argsort(distances)
@@ -818,7 +851,9 @@ def _augment_with_centroid(
         hit["_score"] = 0.5  # centroid 기반임을 score로 구분
 
     combined = v1_hits + extra_hits
-    return combined[:5], "v14_centroid_augmented"
+    _mt = ("v14_centroid_augmented_dyn" if ROUTER_CANDIDATE_MODE == "dynamic"
+           else "v14_centroid_augmented")
+    return combined[:5], _mt
 
 
 
@@ -1214,7 +1249,7 @@ async def startup_event():
         )
         # bucketization 점검
         try:            
-            _perc_idx = f"fraud_ecom_{EXPERIMENT_CASE}_{PERCOLATE_QUERY_VERSION}_tree_rules_percolator"
+            _perc_idx = f"fraud_ecom_{EXPERIMENT_CASE}_{PERCOLATE_INDEX_VERSION}_tree_rules_percolator"
             mapping = client.indices.get_mapping(index=_perc_idx)
             _meta = mapping[_perc_idx]["mappings"].get("_meta", {})
             # ★ 명시적 disable 체크
@@ -1245,9 +1280,10 @@ async def startup_event():
                             )     
                     else:
                         raise RuntimeError(
-                            f"ENABLE_BUCKETIZATION=true but bucket_config not found in _meta"
+                            f"ENABLE_BUCKETIZATION=true but bucket_config not found in "
+                            f"_meta of '{_perc_idx}'. percolator 를 "
+                            f"ENABLE_BUCKETIZATION=true 로 재적재해야 한다."
                         )
-                    logger.info("bucket_config_not_found", note="Bucketization disabled")
         except Exception as e:
             if ENABLE_BUCKETIZATION == "true":
                 raise
@@ -1255,7 +1291,7 @@ async def startup_event():
         # percolator 인덱스에서 cluster_id 목록 로드 (centroid row i ↔ cluster_id 매핑)
         # npy 생성 시 cluster_id 오름차순 정렬 기준으로 row가 배치되어 있어야 함.
         try:
-            _perc_idx = f"fraud_ecom_{EXPERIMENT_CASE}_{PERCOLATE_QUERY_VERSION}_tree_rules_percolator"
+            _perc_idx = f"fraud_ecom_{EXPERIMENT_CASE}_{PERCOLATE_INDEX_VERSION}_tree_rules_percolator"
             _result   = client.search(
                 index=_perc_idx,
                 body={
@@ -1297,7 +1333,7 @@ async def startup_event():
 
     # ★ v5: SKIP_ANALYZER=true 시 startup에서 cluster_id 목록 미리 로드
     if SKIP_ANALYZER:
-        _idx = f"fraud_ecom_{EXPERIMENT_CASE}_{PERCOLATE_QUERY_VERSION}_tree_rules_percolator"
+        _idx = f"fraud_ecom_{EXPERIMENT_CASE}_{PERCOLATE_INDEX_VERSION}_tree_rules_percolator"
         ids  = get_all_cluster_ids(_idx)
         logger.info("skip_analyzer_mode", cluster_count=len(ids), vec_index=get_vec_index())
 

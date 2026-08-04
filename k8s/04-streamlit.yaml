@@ -11,6 +11,7 @@ metadata:
     app: fraud-detection-ui
 data:
   ORCHESTRATOR_URL: "http://anomaly-orchestrator:80"
+  CONTROLLER_URL: "http://anomaly-controller:80"
   EXPERIMENT_CASE:  "pca_64_k100"
   ADAPTER_TYPE:     "mined"
 

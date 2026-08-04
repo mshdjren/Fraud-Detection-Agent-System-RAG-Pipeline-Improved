@@ -1,0 +1,242 @@
+================================================
+ Agent Loop Evaluation — Batch Inference
+  orchestrator       : http://anomaly-orchestrator:80
+  experiment_case    : pca_64_k100
+  percolate_version  : v1
+  n_samples          : 100  (start=26000)
+  boundary_only      : false
+================================================
+Collecting numpy
+  Downloading numpy-2.2.6-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (16.8 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.8/16.8 MB 116.7 MB/s eta 0:00:00
+Collecting pandas
+  Downloading pandas-2.3.3-cp310-cp310-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (12.8 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12.8/12.8 MB 78.2 MB/s eta 0:00:00
+Collecting pyarrow
+  Downloading pyarrow-25.0.0-cp310-cp310-manylinux_2_28_x86_64.whl (50.1 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 50.1/50.1 MB 96.2 MB/s eta 0:00:00
+Collecting httpx
+  Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 73.5/73.5 kB 64.9 MB/s eta 0:00:00
+Collecting structlog
+  Downloading structlog-26.1.0-py3-none-any.whl (73 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 73.8/73.8 kB 42.7 MB/s eta 0:00:00
+Collecting scikit-learn
+  Downloading scikit_learn-1.7.2-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (9.7 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 9.7/9.7 MB 202.3 MB/s eta 0:00:00
+Collecting matplotlib
+  Downloading matplotlib-3.10.9-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (8.8 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 8.8/8.8 MB 116.9 MB/s eta 0:00:00
+Collecting google-cloud-storage
+  Downloading google_cloud_storage-3.13.0-py3-none-any.whl (341 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 341.4/341.4 kB 116.8 MB/s eta 0:00:00
+Collecting python-dateutil>=2.8.2
+  Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 229.9/229.9 kB 84.4 MB/s eta 0:00:00
+Collecting pytz>=2020.1
+  Downloading pytz-2026.3.post1-py2.py3-none-any.whl (508 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 508.3/508.3 kB 129.4 MB/s eta 0:00:00
+Collecting tzdata>=2022.7
+  Downloading tzdata-2026.3-py2.py3-none-any.whl (348 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 348.2/348.2 kB 94.3 MB/s eta 0:00:00
+Collecting certifi
+  Downloading certifi-2026.7.22-py3-none-any.whl (136 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 137.0/137.0 kB 84.1 MB/s eta 0:00:00
+Collecting httpcore==1.*
+  Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 78.8/78.8 kB 42.2 MB/s eta 0:00:00
+Collecting idna
+  Downloading idna-3.18-py3-none-any.whl (65 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 65.5/65.5 kB 36.0 MB/s eta 0:00:00
+Collecting anyio
+  Downloading anyio-4.14.2-py3-none-any.whl (125 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 125.8/125.8 kB 86.5 MB/s eta 0:00:00
+Collecting h11>=0.16
+  Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+Collecting typing-extensions
+  Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 45.6/45.6 kB 55.6 MB/s eta 0:00:00
+Collecting joblib>=1.2.0
+  Downloading joblib-1.5.3-py3-none-any.whl (309 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 309.1/309.1 kB 142.3 MB/s eta 0:00:00
+Collecting threadpoolctl>=3.1.0
+  Downloading threadpoolctl-3.6.0-py3-none-any.whl (18 kB)
+Collecting scipy>=1.8.0
+  Downloading scipy-1.15.3-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (37.7 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 37.7/37.7 MB 123.5 MB/s eta 0:00:00
+Collecting contourpy>=1.0.1
+  Downloading contourpy-1.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (325 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 325.0/325.0 kB 91.2 MB/s eta 0:00:00
+Collecting kiwisolver>=1.3.1
+  Downloading kiwisolver-1.5.0-cp310-cp310-manylinux_2_12_x86_64.manylinux2010_x86_64.whl (1.6 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.6/1.6 MB 111.0 MB/s eta 0:00:00
+Collecting fonttools>=4.22.0
+  Downloading fonttools-4.63.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (4.9 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.9/4.9 MB 110.0 MB/s eta 0:00:00
+Collecting pillow>=8
+  Downloading pillow-12.3.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (6.9 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.9/6.9 MB 81.3 MB/s eta 0:00:00
+Collecting pyparsing>=3
+  Downloading pyparsing-3.3.2-py3-none-any.whl (122 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 122.8/122.8 kB 125.0 MB/s eta 0:00:00
+Collecting cycler>=0.10
+  Downloading cycler-0.12.1-py3-none-any.whl (8.3 kB)
+Requirement already satisfied: packaging>=20.0 in /usr/local/lib/python3.10/site-packages (from matplotlib) (26.2)
+Collecting google-auth<3.0.0,>=2.26.1
+  Downloading google_auth-2.56.2-py3-none-any.whl (258 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 258.6/258.6 kB 87.8 MB/s eta 0:00:00
+Collecting google-crc32c<2.0.0,>=1.6.0
+  Downloading google_crc32c-1.8.0-cp310-cp310-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl (33 kB)
+Collecting google-cloud-core<3.0.0,>=2.4.2
+  Downloading google_cloud_core-2.6.0-py3-none-any.whl (29 kB)
+Collecting google-api-core<3.0.0,>=2.27.0
+  Downloading google_api_core-2.33.0-py3-none-any.whl (176 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 176.5/176.5 kB 49.9 MB/s eta 0:00:00
+Collecting google-resumable-media<3.0.0,>=2.7.2
+  Downloading google_resumable_media-2.10.0-py3-none-any.whl (81 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 81.5/81.5 kB 85.8 MB/s eta 0:00:00
+Collecting requests<3.0.0,>=2.22.0
+  Downloading requests-2.34.2-py3-none-any.whl (73 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 73.1/73.1 kB 79.6 MB/s eta 0:00:00
+Collecting protobuf<8.0.0,>=5.29.6
+  Downloading protobuf-7.35.1-cp310-abi3-manylinux2014_x86_64.whl (327 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 327.1/327.1 kB 229.5 MB/s eta 0:00:00
+Collecting googleapis-common-protos<2.0.0,>=1.63.2
+  Downloading googleapis_common_protos-1.75.0-py3-none-any.whl (300 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 300.6/300.6 kB 155.4 MB/s eta 0:00:00
+Collecting proto-plus<2.0.0,>=1.24.0
+  Downloading proto_plus-1.28.2-py3-none-any.whl (50 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 50.7/50.7 kB 57.5 MB/s eta 0:00:00
+Collecting cryptography>=38.0.3
+  Downloading cryptography-50.0.0-cp39-abi3-manylinux_2_34_x86_64.whl (4.8 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.8/4.8 MB 113.6 MB/s eta 0:00:00
+Collecting pyasn1-modules>=0.2.1
+  Downloading pyasn1_modules-0.4.2-py3-none-any.whl (181 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 181.3/181.3 kB 136.0 MB/s eta 0:00:00
+Collecting six>=1.5
+  Downloading six-1.17.0-py2.py3-none-any.whl (11 kB)
+Collecting charset_normalizer<4,>=2
+  Downloading charset_normalizer-3.4.9-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (223 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 223.8/223.8 kB 109.4 MB/s eta 0:00:00
+Collecting urllib3<3,>=1.26
+  Downloading urllib3-2.7.0-py3-none-any.whl (131 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 131.1/131.1 kB 186.4 MB/s eta 0:00:00
+Collecting exceptiongroup>=1.0.2
+  Downloading exceptiongroup-1.3.1-py3-none-any.whl (16 kB)
+Collecting cffi>=2.0.0
+  Downloading cffi-2.1.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (218 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 218.8/218.8 kB 126.6 MB/s eta 0:00:00
+Collecting pyasn1<0.7.0,>=0.6.1
+  Downloading pyasn1-0.6.4-py3-none-any.whl (84 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 84.4/84.4 kB 96.0 MB/s eta 0:00:00
+Collecting pycparser
+  Downloading pycparser-3.0-py3-none-any.whl (48 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 48.2/48.2 kB 37.5 MB/s eta 0:00:00
+Installing collected packages: pytz, urllib3, tzdata, typing-extensions, threadpoolctl, six, pyparsing, pycparser, pyasn1, pyarrow, protobuf, pillow, numpy, kiwisolver, joblib, idna, h11, google-crc32c, fonttools, cycler, charset_normalizer, certifi, structlog, scipy, requests, python-dateutil, pyasn1-modules, proto-plus, httpcore, googleapis-common-protos, google-resumable-media, exceptiongroup, contourpy, cffi, scikit-learn, pandas, matplotlib, cryptography, anyio, httpx, google-auth, google-api-core, google-cloud-core, google-cloud-storage
+Successfully installed anyio-4.14.2 certifi-2026.7.22 cffi-2.1.0 charset_normalizer-3.4.9 contourpy-1.3.2 cryptography-50.0.0 cycler-0.12.1 exceptiongroup-1.3.1 fonttools-4.63.0 google-api-core-2.33.0 google-auth-2.56.2 google-cloud-core-2.6.0 google-cloud-storage-3.13.0 google-crc32c-1.8.0 google-resumable-media-2.10.0 googleapis-common-protos-1.75.0 h11-0.16.0 httpcore-1.0.9 httpx-0.28.1 idna-3.18 joblib-1.5.3 kiwisolver-1.5.0 matplotlib-3.10.9 numpy-2.2.6 pandas-2.3.3 pillow-12.3.0 proto-plus-1.28.2 protobuf-7.35.1 pyarrow-25.0.0 pyasn1-0.6.4 pyasn1-modules-0.4.2 pycparser-3.0 pyparsing-3.3.2 python-dateutil-2.9.0.post0 pytz-2026.3.post1 requests-2.34.2 scikit-learn-1.7.2 scipy-1.15.3 six-1.17.0 structlog-26.1.0 threadpoolctl-3.6.0 typing-extensions-4.16.0 tzdata-2026.3 urllib3-2.7.0
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+
+[notice] A new release of pip is available: 23.0.1 -> 26.2
+[notice] To update, run: pip install --upgrade pip
+/usr/local/lib/python3.10/site-packages/google/api_core/_python_version_support.py:254: FutureWarning: You are using a Python version (3.10.20) which Google will stop supporting in new releases of google.api_core once it reaches its end of life (2026-10-04). Please upgrade to the latest Python version, or at least Python 3.11, to continue receiving updates for google.api_core past that date.
+  warnings.warn(message, FutureWarning)
+2026-08-03 15:35:32 [info     ] gt_loader_init_v5_1            centroid_path=tree-search/tree_fraudecom/pca_64_k100/cluster_centroids.npy coreset_parquet_path=tree-search/tree_fraudecom/pca_64_k100/raw_plus_cluster_tree_percentage_100.parquet coreset_percentage=100 experiment_case=pca_64_k100 original_pct=100 test_emb_path=tree-search/embeddings_fraudecom/anollm_lr5e-05_standard_smolLM_test_embeddings_merged.npy test_parquet_path=tree-search/tree_fraudecom/pca_64_k100/test_with_gt.parquet
+2026-08-03 15:35:32 [info     ] downloading_from_gcs           path=gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/test_with_gt.parquet
+2026-08-03 15:35:32 [info     ] download_success               local_path=/tmp/gt_cache/test_with_gt_pca_64_k100.parquet
+2026-08-03 15:35:32 [info     ] test_data_loaded               columns=['purchase value', 'source', 'browser', 'sex', 'age', 'IP country', 'month purchase', 'weekday purchase', 'label', 'class_label', 'gt_cluster_id', 'gt_knn_indices_576d', 'gt_knn_dists_576d', 'gt_top5_cluster_ids', 'gt_top5_cluster_dists_eval_space'] experiment_case=pca_64_k100 n_fraud=14151 n_normal=14151 shape=(28302, 15)
+2026-08-03 15:35:32 [info     ] downloading_from_gcs           path=gs://fraud_ecomm/tree-search/embeddings_fraudecom/anollm_lr5e-05_standard_smolLM_test_embeddings_merged.npy
+2026-08-03 15:35:33 [info     ] download_success               local_path=/tmp/gt_cache/test_embeddings_fixed.npy
+2026-08-03 15:35:33 [info     ] test_embeddings_loaded         dtype=float32 shape=(28302, 576)
+2026-08-03 15:35:33 [info     ] downloading_from_gcs           path=gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/raw_plus_cluster_tree_percentage_100.parquet
+2026-08-03 15:35:33 [info     ] download_success               local_path=/tmp/gt_cache/coreset_pca_64_k100_pct_100.parquet
+2026-08-03 15:35:33 [info     ] coreset_parquet_loaded         columns=['purchase value', 'source', 'browser', 'sex', 'age', 'IP country', 'month purchase', 'weekday purchase', 'label', 'original_index', 'cluster_id'] coreset_percentage=100 original_index_range=[0, 122809] original_pct=100 shape=(122810, 11)
+2026-08-03 15:35:33 [info     ] top5_indices_loaded_from_parquet dtype=int64 note='Pre-computed GT from test_with_gt.parquet' sample=[[114065, 84963, 30201, 98187, 30138], [96567, 18962, 3934, 5285, 86369]] shape=(28302, 5)
+2026-08-03 15:35:33 [info     ] coreset_valid_index_set_built  coreset_pct=100 n_valid_indices=122810 original_pct=100 sample_indices=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+2026-08-03 15:35:33 [info     ] coreset_adjusted_top5_built    coreset_pct=100 coverage_rate=1.0 n_samples_with_all_invalid_gt=0 n_total_samples=28302 original_pct=100 total_gt_indices=141510 valid_gt_indices=141510
+2026-08-03 15:35:33 [info     ] gt_data_ready_v5_1             coreset_coverage_rate=1.0 gt_top5_indices_dtype=int64 gt_top5_indices_sample=[[114065, 84963, 30201, 98187, 30138], [96567, 18962, 3934, 5285, 86369]] n_coreset_normal=122810 n_fraud=14151 n_test=28302 note='top5_indices loaded from test parquet (pre-computed)'
+======================================================================
+AGENT LOOP EVALUATION INFERENCE
+======================================================================
+  orchestrator    : http://anomaly-orchestrator:80
+  experiment_case : pca_64_k100
+  eval_source     : smoke
+  pipeline_mode   : agent  (서버 PIPELINE_MODE와 일치해야 함)
+  n_samples       : 100 / 28302
+  boundary_only   : False
+2026-08-03 15:35:34 [info     ] batch_progress                 concurrency=4 done=1 total=100
+2026-08-03 15:35:59 [info     ] batch_progress                 concurrency=4 done=10 total=100
+2026-08-03 15:36:22 [info     ] batch_progress                 concurrency=4 done=20 total=100
+2026-08-03 15:36:53 [info     ] batch_progress                 concurrency=4 done=30 total=100
+2026-08-03 15:37:40 [info     ] batch_progress                 concurrency=4 done=40 total=100
+2026-08-03 15:38:10 [info     ] batch_progress                 concurrency=4 done=50 total=100
+2026-08-03 15:38:34 [info     ] batch_progress                 concurrency=4 done=60 total=100
+2026-08-03 15:39:20 [info     ] batch_progress                 concurrency=4 done=70 total=100
+2026-08-03 15:39:45 [info     ] batch_progress                 concurrency=4 done=80 total=100
+2026-08-03 15:40:10 [info     ] batch_progress                 concurrency=4 done=90 total=100
+2026-08-03 15:41:04 [info     ] batch_progress                 concurrency=4 done=100 total=100
+
+[batch] DONE  n=100  errors=0  concurrency=4
+2026-08-03 15:41:04 [info     ] recall_computed_v5             index_space=original_index n_adj=100 n_empty_gt=0 n_raw=100 recall_adj=0.75 recall_raw=0.75
+2026-08-03 15:41:04 [info     ] research_effect_computed       dir_acc=None n=100 n_researched=35 net_gain=0
+2026-08-03 15:41:04 [info     ] evaluation_saved               out_dir=/results/agent_eval/d-hnsw-s1
+
+============================================================
+[EVALUATION SUMMARY — AgentRAG(S4)]
+  distance AUROC       : 0.8699
+  AgentRAG(S4)         AUROC : 0.79
+  best_threshold       : 1.5163
+  distance FNR@thr     : 0.1277
+  model FNR@thr        : 0.0213
+  boundary FNR         : 0.1429
+
+  [시간] total=332.3s  n=100  per-sample=3.32s
+    router+retriever(base)    : mean 187.68ms  p95 293.55ms
+    agent loop(controller)    : mean 12561.65ms  p95 31816.09ms
+    analyzer+planner+tool Δ   : mean 12563.07ms  p95 31816.75ms
+    end-to-end                : mean 12750.75ms  p95 32003.98ms
+
+  [router-retriever]
+    routing acc          : 0.8
+    router MRR           : 1.0
+    candidate recall@5   : 0.91
+    routing ε-recall(10%): 0.72
+    coreset ε-recall(10%): 0.91
+
+  verdict change rate  : 0.0
+  expand / reroute rate: 0.28 / 0.07  (deep n=100)
+  wm direction         : cm 7 (0.1707)  ni 28 (0.6829)  none 6  [ambiguous rounds=41]
+
+  [agent nd 이중 리포트] n=100  (재검색 35 / raw 65)
+    (1) agent nd AUROC (연속, threshold 무관) : 0.8699
+    (2) cls@CLS_ND_THRESHOLD=0.42 → acc 0.75 / FNR 0.0213 / FPR 0.4528
+    (3) 척도분리 AUROC — 재검색군(patchcore) 0.8061 (mean nd 0.4307) | raw군 0.81 (mean nd 0.6432)
+       ↑ 두 AUROC/mean 차가 크면 한 임계 공유가 미스캘리브레이션 신호
+    round0 retrieve      : mean 187.7ms  n=100
+    round1 재검색(tool)   : mean 126.2ms  n=35
+
+  [재검색 효과] n=100 / 재검색 35건  (주 임계 view=pre_best_frozen thr=0.544)
+    AUROC  pre 0.8699 → post 0.8699  (Δ 0.0)
+    [ambiguous] n=41  pre  TPR 0.2857 FPR 0.0294 FNR 0.7143 TNR 0.9706 acc 0.8537
+                  post TPR 0.2857 FPR 0.0294 FNR 0.7143 TNR 0.9706 acc 0.8537
+    [confident] n=59  pre  TPR 1.0 FPR 0.6316 FNR 0.0 TNR 0.3684 acc 0.7966
+                  post TPR 1.0 FPR 0.6316 FNR 0.0 TNR 0.3684 acc 0.7966
+    전이  flip 0  rescued 0 {'ambiguous': 0, 'confident': 0}  degraded 0 {'ambiguous': 0, 'confident': 0}  → net_gain 0
+    Δnd   mean 0.0  |Δ| 0.0  moved 0  방향정확도 None
+          by_wm  ni={'n': 0}  cm={'n': 0}
+    선택  ambiguous_precision 0.1463 / recall 0.3333 / missed 12
+    비용  mean 126.23ms  ms/rescue None
+  routing accuracy     : 0.8000  (n=100)
+  expand rate          : 0.28
+  latency P95 (total)  : 32003.98 ms
+  saved → /results/agent_eval/d-hnsw-s1
+============================================================
+--- agent_eval_report.json (summary) ---
+distance_auroc : 0.8699
+agent_auroc    : 0.79
+boundary_fnr   : 0.1429
+expand_rate    : 0.28
+latency_p95_ms : 32003.98
+/usr/local/lib/python3.10/site-packages/google/api_core/_python_version_support.py:254: FutureWarning: You are using a Python version (3.10.20) which Google will stop supporting in new releases of google.api_core once it reaches its end of life (2026-10-04). Please upgrade to the latest Python version, or at least Python 3.11, to continue receiving updates for google.api_core past that date.
+  warnings.warn(message, FutureWarning)
+[GCS] uploaded: gs://fraud_ecomm/evaluation/agent-eval/d-hnsw-s1/agent_predictions.json
+[GCS] uploaded: gs://fraud_ecomm/evaluation/agent-eval/d-hnsw-s1/agent_eval_report.json

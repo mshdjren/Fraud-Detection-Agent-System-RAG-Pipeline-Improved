@@ -51,6 +51,11 @@ def decide_track(
 # Arm 3 토글: True면 compare_features를 planner 선택지에 포함.
 ENABLE_COMPARE_FEATURES = os.getenv("ENABLE_COMPARE_FEATURES", "false").lower() == "true"
 
+# ★ [V3] 재검색 의미론 스위치 — "legacy"(reroute/expand) | "v3"(verify_global/
+#   expand_reweight + fetch_contrast). tool 이름(enum)은 유지하고 description만
+#   교체해 controller 그래프/FOLLOWUP_ACTIONS 무수정으로 A/B 가능하게 한다.
+RESEARCH_MODE = os.getenv("RESEARCH_MODE", "legacy").lower()
+
 _ACCEPT_TOOL: Dict[str, str] = {
     "name":     "accept_verdict",
     "returns":  "—",
@@ -76,9 +81,38 @@ _COMPARE_TOOL: Dict[str, str] = {
                 "짚지 못함. 검색을 늘리는 대신 가진 이웃과의 대조가 필요할 때.",
 }
 
-FOLLOWUP_TOOLS: List[Dict[str, str]] = [_ACCEPT_TOOL, _EXPAND_TOOL, _REROUTE_TOOL]
+# ── [V3] 의미 교체판 description (이름 동일 — enum/그래프 하위호환) ──────
+_EXPAND_TOOL_V3: Dict[str, str] = {
+    "name":     "expand_within_cluster",
+    "returns":  "같은 클러스터 top-k 확대 → PatchCore reweighting으로 nd 재산출 "
+                "(판정 변경이 아니라 추정 분산 축소)",
+    "use_when": "what_missing=neighbor_insufficient: dominant persona 축은 일치하나 이웃 거리 spread가 커서 "
+                "nd 추정이 불안정할 때. (aka expand_reweight)",
+}
+_REROUTE_TOOL_V3: Dict[str, str] = {
+    "name":     "reroute_cross_cluster",
+    "returns":  "전역(무필터) HNSW top-k — cluster 제한이 만든 거리 인플레이션(ε) 교정, "
+                "nd의 진짜 하한 + 실제 귀속 cluster",
+    "use_when": "what_missing=cluster_mismatch: dominant persona 축에서 이탈 → cluster 제한이 증거를 가릴 때 "
+                "전역 1회로 검증. target 추측 불필요. (aka verify_global)",
+}
+_CONTRAST_TOOL: Dict[str, str] = {
+    "name":     "fetch_contrast",
+    "returns":  "불일치 축에서 test와 같은 값을 가진 클러스터 내 정상 top1 "
+                "(감사 주석 인용용 대조 증거 — 판정 불개입)",
+    "use_when": "wwhat_missingm=neighbor_insufficient 보조: '같은 프로필의 정상은 이랬다'를 근거로 인용해야 할 때.",
+}
+
+if RESEARCH_MODE == "v3":
+    FOLLOWUP_TOOLS: List[Dict[str, str]] = [_ACCEPT_TOOL, _EXPAND_TOOL_V3, _REROUTE_TOOL_V3]
+else:
+    FOLLOWUP_TOOLS = [_ACCEPT_TOOL, _EXPAND_TOOL, _REROUTE_TOOL]
 if ENABLE_COMPARE_FEATURES:
     FOLLOWUP_TOOLS.append(_COMPARE_TOOL)
+
+# fetch_contrast는 planner 선택지가 아니라 ni 보조 호출 — MCP 노출용 메타만 유지
+EXTRA_TOOLS: List[Dict[str, str]] = [_CONTRAST_TOOL] if RESEARCH_MODE == "v3" else []
+EXTRA_TOOL_NAMES = tuple(t["name"] for t in EXTRA_TOOLS)
 
 # controller(planner)와 orchestrator(system)가 공유하는 단일 출처
 FOLLOWUP_ACTIONS = tuple(t["name"] for t in FOLLOWUP_TOOLS)

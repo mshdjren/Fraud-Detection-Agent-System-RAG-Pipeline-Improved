@@ -37,7 +37,7 @@ spec:
 
       containers:
       - name: manager
-        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/es-tree-ingest:2.0
+        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/es-tree-ingest:3.0
         imagePullPolicy: Always
 
         command: ["bash", "-lc"]

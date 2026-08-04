@@ -391,7 +391,36 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: INGEST_SEARCH_MODE
-
+        - name: VEC_QUANT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VEC_QUANT
+        - name: HNSW_M
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: HNSW_M
+        - name: HNSW_EF_CONSTRUCTION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: HNSW_EF_CONSTRUCTION
+        # - name: N_SHARDS_VEC
+        #   valueFrom:
+        #     configMapKeyRef:
+        #       name: anomaly-config
+        #       key: N_SHARDS_VEC
+        - name: VEC_INDEX_SUFFIX
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VEC_INDEX_SUFFIX
+        - name: RUN_ID
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: RUN_ID
         # ── Node Pinning ──────────────────────────────────────────
         - name: NODE_PINNING
           valueFrom:
@@ -502,6 +531,8 @@ spec:
         configMap:
           name: es-scripts
           defaultMode: 0755
+      - name: results
+        emptyDir: {}
       - name: data
         emptyDir:
           sizeLimit: 12Gi   # 임베딩 3개(~280MB×3) + parquet 3개 + persona JSON + 여유

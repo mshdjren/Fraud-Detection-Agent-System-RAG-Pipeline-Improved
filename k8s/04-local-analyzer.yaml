@@ -14,7 +14,8 @@ data:
   # ── 실험 설정 ──────────────────────────────────────────────────
   EXPERIMENT_CASE:  "pca_64_k100"
   TEACHER_PROVIDER: "hf_0713"
-  ADAPTER_TYPE:     "grpo"        # sft | grpo
+  ADAPTER_TYPE:     "sft"        # sft | grpo
+  DATA_VERSION:     "s5"          
 
   # ── GCS 설정 ───────────────────────────────────────────────────
   GCS_BUCKET:  "fraud_ecomm"
@@ -39,8 +40,9 @@ data:
  # hf   : 기존 방식 (AutoModelForCausalLM + PeftModel merge, float32)
  # gguf : llama-cpp-python + Q4_K_M (NB02 Section 14 산출물)
   MODEL_BACKEND:  "gguf"    #hf
-  GGUF_FILENAME:  "model_q4.gguf"
-  N_CTX:          "768"    #default :768, 1024, 2048
+  GGUF_FILENAME:  "model.gguf"
+  GGUF_QUANT:     "q8_0"    #default :f16, q4_k_m, q5_k_m, q8_0
+  N_CTX:          "2048"    #default :768, 1024, 2048
 
   # ── Distance 분포 (colab Section 5 실측값: pca_64_k100) ────────
   DIST_P25: "1.264"
@@ -53,10 +55,24 @@ data:
   TREE_RULES_ENABLED: "false"
 
   ENABLE_KV_CACHE: "false"
+  ENABLE_CONTINUOUS_BATCHING: "false"
   KV_CACHE_MB: "256"
 
-  PROMPT_VERSION: "v2"
+  LLAMA_N_BATCH: "512"
+  LLAMA_N_UBATCH: "512"
+  LLAMA_MLOCK: "true"
+  # ── [S5/v3] 프롬프트 & 스키마 ────────────────────────────────
   AGENT_OUTPUT_KEYS: "1key"
+
+  PROMPT_VERSION:  "v3"
+  WM_SCHEMA:       "v3"
+  ANALYZER_DECISION_MODE: "det"
+
+  # ── [S5] GT 임계 — NB01 s5_wm_type_gt 단일 출처 ──────────────
+  Z_TAU:          "1.5"
+  NI_SPREAD_TAU:  "0.05"
+  W_CAT:          "0.50"
+  P_MISS:         "0.10"
 ---
 # ===========================
 # ServiceAccount (Workload Identity)
@@ -133,13 +149,14 @@ spec:
             echo "[init] GCS_BUCKET      : ${GCS_BUCKET}"
             echo "[init] MODEL_BACKEND   : ${MODEL_BACKEND}"
             echo "[init] PIPELINE_MODE   : ${PIPELINE_MODE}"
+            echo "[init] DATA_VERSION   : ${DATA_VERSION}"
 
-            # gs://{GCS_BUCKET}/{GCS_FT_BASE}/{EXPERIMENT_CASE}/{TEACHER_PROVIDER}/{PIPELINE_MODE}_adapter_{ADAPTER_TYPE}/
+            # gs://{GCS_BUCKET}/{GCS_FT_BASE}/{EXPERIMENT_CASE}/{TEACHER_PROVIDER}/{PIPELINE_MODE}_{DATA_VERSION}_adapter_{ADAPTER_TYPE}/
             #   ├── README.md, adapter_config.json, adapter_model.safetensors, ... (hf 서빙용)
             #   └── gguf/
             #        ├── model_q4.gguf
             #        └── gguf_meta.json
-            METHOD_PATH="gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/${TEACHER_PROVIDER}/${PIPELINE_MODE}_adapter_${ADAPTER_TYPE}"
+            METHOD_PATH="gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/${TEACHER_PROVIDER}/${PIPELINE_MODE}_${DATA_VERSION}_adapter_${ADAPTER_TYPE}"
             DEST="${ADAPTER_LOCAL_DIR}"
 
             echo "[init] GCS path  : ${METHOD_PATH}"
@@ -147,16 +164,18 @@ spec:
             mkdir -p "${DEST}"
 
             if [ "${MODEL_BACKEND}" = "gguf" ]; then
-              # gguf/ 서브폴더 2개 파일만 받는다 (model_q4.gguf 1.9GB + gguf_meta.json)
-              GCS_GGUF_DIR="${METHOD_PATH}/gguf"
-              echo "[init] Downloading GGUF: ${GCS_GGUF_DIR}/${GGUF_FILENAME}"
-              gsutil cp "${GCS_GGUF_DIR}/${GGUF_FILENAME}" "${DEST}/"
+              GGUF_QUANT="${GGUF_QUANT:-q8_0}"
+              GCS_GGUF_DIR="${METHOD_PATH}/gguf_${GGUF_QUANT}"
+              echo "[init] Downloading GGUF(${GGUF_QUANT}): ${GCS_GGUF_DIR}/${GGUF_FILENAME}"
+              if ! gsutil cp "${GCS_GGUF_DIR}/${GGUF_FILENAME}" "${DEST}/"; then
+                echo "[init] fallback → legacy ${METHOD_PATH}/gguf/model_q4.gguf"
+                gsutil cp "${METHOD_PATH}/gguf/model_q4.gguf" "${DEST}/${GGUF_FILENAME}"
+              fi
               gsutil cp "${GCS_GGUF_DIR}/gguf_meta.json" "${DEST}/" || true
+              # tokenizer는 GGUF에 내장 — 별도 다운로드 불필요
             else
-              # hf 백엔드는 adapter 파일만 필요 — gguf/ 서브폴더(model_q4.gguf,
-              # 1.9GB)는 hf 서빙에 안 쓰이므로 제외하고 받는다.
-              echo "[init] Downloading HF adapter (excluding gguf/)"
-              gsutil -m rsync -r -x '^gguf/' "${METHOD_PATH}" "${DEST}"
+              echo "[init] Downloading HF adapter (excluding gguf*/)"
+              gsutil -m rsync -r -x '^gguf' "${METHOD_PATH}" "${DEST}"
             fi
 
             echo "[init] Download complete."
@@ -209,6 +228,22 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: PIPELINE_MODE
+        - name: PROMPT_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PROMPT_VERSION
+        - name: WM_SCHEMA
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: WM_SCHEMA
+        - name: ANALYZER_DECISION_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ANALYZER_DECISION_MODE
+
         - name: CLS_ND_THRESHOLD
           valueFrom:
             configMapKeyRef:
@@ -247,19 +282,17 @@ spec:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 120
-          periodSeconds: 300
+          initialDelaySeconds: 240
+          periodSeconds: 60
           timeoutSeconds: 5
           failureThreshold: 3 
 
         readinessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 120
-          periodSeconds: 300
+          httpGet: { path: /health, port: 8080 }
+          initialDelaySeconds: 20      # 120 → 20
+          periodSeconds: 10            # 300 → 10   ★ 핵심
           timeoutSeconds: 3
-          failureThreshold: 3 
+          failureThreshold: 18         # 3 → 18  (총 허용 20+180=200s, 감지 해상도 30배)
 
         # resources:
         #   requests:
@@ -273,7 +306,7 @@ spec:
         resources:
           requests:
             cpu: "100m"      # 500m에서 하향 (Elasticsearch에 양보)
-            memory: "512Mi"    # 모델 로딩 안정성을 위해 상향 (OOM 방지)
+            memory: "1Gi"    # 모델 로딩 안정성을 위해 상향 (OOM 방지)
           limits:
             cpu: "2000m"     # 2000m에서 하향
             memory: "6Gi"    # 6Gi에서 하향 (클러스터 여유분 확보)

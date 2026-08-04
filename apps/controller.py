@@ -39,6 +39,7 @@ Controller Service — Planner + Agent Loop (LangGraph StateGraph)
 """
 
 import os
+import re
 import time
 import functools
 import json
@@ -186,6 +187,63 @@ EXPAND_TOP_K = int(os.getenv("EXPAND_TOP_K", "5"))
 #                 MCP 프로토콜(tools/list 협상 + JSON-RPC envelope)을 타므로
 #                 그 자체의 오버헤드를 별도로 측정할 수 있다.
 TOOL_EXECUTION_MODE = os.getenv("TOOL_EXECUTION_MODE", "direct")  # "direct" | "mcp" | "mcp_native"
+
+# ★ [V3] 재검색 의미론 — "legacy"(reroute=rank2/expand=k↑) | "v3"(reroute 노드가
+#   verify_global(전역 HNSW)로, expand 노드는 PatchCore reweight(기존) + contrast).
+#   그래프/enum/노드는 무수정 — 노드 내부 동작만 모드 분기.
+RESEARCH_MODE = os.getenv("RESEARCH_MODE", "legacy").lower()
+# ★ [V3] typed what_missing 스키마 — analyzer의 wm_type을 planner 매핑에 사용
+WM_SCHEMA = os.getenv("WM_SCHEMA", "v3").lower()
+PROMPT_VERSION = os.getenv("PROMPT_VERSION", "v3").lower()
+
+_WM_TYPED_RE = re.compile(
+    r"\s*(cluster_mismatch|neighbor_insufficient|accept)\s*[::]?\s*([^—]*?)\s*(?:—\s*(.*))?$",
+    re.IGNORECASE | re.DOTALL)
+
+# axes 토큰에서 필드명만 추출 — "purchase_value z=+0.31" → "purchase_value",
+# "IP_country=China" → "IP_country". ★ 원래 대소문자 보존 (transaction 키가
+# IP_country / weekday_purchase 처럼 mixed case라 lower()하면 조회가 깨진다).
+_AX_HEAD_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)")
+
+def _parse_wm_typed(wm):
+    """typed wm → (type, axes, rationale). analyzer가 wm_type을 안 주는 경로 대비.
+    axes는 값/z-score 접미를 제거한 순수 필드명 리스트 (NB03 _axis_field와 동일 의도)."""
+    if not wm:
+        return None, [], None
+    m = _WM_TYPED_RE.match(str(wm))
+    if not m:
+        return None, [], str(wm)
+    axes = []
+    for tok in (m.group(2) or "").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        h = _AX_HEAD_RE.match(tok)
+        if h:
+            axes.append(h.group(1))          # 원본 케이스 유지
+    return (m.group(1).lower(),
+            axes,
+            (m.group(3) or "").strip() or None)
+
+
+def _resolve_axis(axis, transaction):
+    """axes 필드명 → transaction의 실제 키 (대소문자/구분자 무시 매칭).
+    모델이 'ip_country'로 써도 transaction의 'IP_country'를 찾아준다."""
+    if not axis or not transaction:
+        return None
+    if axis in transaction:
+        return axis
+    _n = lambda s: re.sub(r"[^a-z0-9]", "", str(s).lower())
+    tgt = _n(axis)
+    for k in transaction:
+        if _n(k) == tgt:
+            return k
+    return None
+
+# wm_type → tool (이름은 legacy와 동일 — v3에서는 노드 내부 동작이 다름)
+_V3_TOOL_MAP = {"cluster_mismatch": "reroute_cross_cluster",   # v3: 전역 검증(verify_global)
+                "neighbor_insufficient": "expand_within_cluster",   # v3: expand→PatchCore reweight
+                "accept": "accept_verdict"}
 
 app    = FastAPI(title="Anomaly Planner / Agent Controller", version="4.0.0-langgraph")
 logger = structlog.get_logger()
@@ -439,23 +497,19 @@ if _LANGCHAIN_OK:
 
 SYSTEM_MSG = (
     "You are the Planner for a fraud-detection RAG agent. "
-    "An analyzer already examined a transaction and produced a CLOSED 3-key "
-    "verdict: cls (NORMAL/ABNORMAL), sufficiency (confident/ambiguous), and "
-    "what_missing (a short free-text hint, only set when sufficiency=ambiguous). "
+    "An analyzer already examined a transaction and produced a closed verdict: "
+    "cls (NORMAL/ABNORMAL), sufficiency (confident/ambiguous), and what_missing "
+    "(set only when sufficiency=ambiguous; it may be a typed defect label or a "
+    "short free-text hint depending on the analyzer version). "
     "The analyzer's sufficiency already encodes the distance-band judgement — "
-    "you must NOT re-derive sufficiency from the numbers yourself; just read it. "
-    "DECISION RULE (read in this exact order): "
-    "1) If sufficiency=confident, action=accept_verdict — do not second-guess. "
-    "2) If sufficiency=ambiguous, read what_missing and SELECT EXACTLY ONE "
-    "follow-up tool that matches the kind of gap it describes: sparse-evidence "
-    "wording -> expand_within_cluster; cluster/persona-mismatch wording -> "
-    "reroute_cross_cluster. "
-    "3) what_missing is often just a restatement of the distance band rather "
-    "than a new signal — treat it as a WEAK hint, not ground truth. If it is "
-    "generic or ambiguous about which gap applies, default to "
-    "expand_within_cluster (cheapest follow-up). "
-    "4) If expansion_used is already true, action=accept_verdict regardless "
-    "(avoid infinite loops). "
+    "you must NOT re-derive it from the numbers yourself; just read it. "
+    "Your job is a single choice: given that verdict, pick exactly ONE action "
+    "from the catalog you are shown. "
+    "Read what_missing for WHICH evidence is weak, and match that to the tool "
+    "whose described purpose addresses it. Prefer what the analyzer actually "
+    "states over your own reading of the raw numbers. "
+    "When what_missing is absent or names nothing concrete, do not invent a "
+    "reason — take the cheapest follow-up. "
     "Do not invent evidence. Keep rationale/hint short. Output closed JSON only."
 )
 
@@ -464,7 +518,7 @@ def build_prompt(req: PlanRequest) -> str:
     a = req.analyzer
     tool_catalog = build_followup_tool_catalog()
     persona_summary = req.cluster_persona_summary or "(no profile)"
-    return f"""## ANALYZER OUTPUT (3-key schema)
+    return f"""## ANALYZER OUTPUT
 - cls:          {a.effective_classification}
 - sufficiency:  {a.sufficiency}
 - what_missing: {a.what_missing or "null"}
@@ -480,22 +534,34 @@ def build_prompt(req: PlanRequest) -> str:
 
 {tool_catalog}
 
-## HOW TO DECIDE (sufficiency-first, then what_missing -> tool)
-1. sufficiency == "confident"
-     -> action=accept_verdict, verdict=cls. STOP here.
-2. sufficiency == "ambiguous": read what_missing literally.
-   - what_missing mentions sparse evidence / "only top-1 seen" / not enough
-     neighbors -> action=expand_within_cluster
-   - what_missing mentions cluster/persona mismatch / wrong cluster ->
-     action=reroute_cross_cluster
-   - what_missing is generic, a distance-band restatement, or unclear ->
-     action=expand_within_cluster (cheapest default; do NOT invent a
-     mismatch reason that isn't stated)
-3. expansion_used == true -> action=accept_verdict regardless of the above
-   (loop guard; verdict=cls)
+## HOW TO DECIDE
+Two invariants first — they override everything below:
+1. sufficiency == "confident"  -> accept_verdict, verdict=cls. Stop here.
+2. expansion_used == true      -> accept_verdict, verdict=cls (loop guard).
+
+Otherwise the retrieval is ambiguous. Read what_missing and choose the one
+tool whose stated purpose addresses the defect it reports.
+
+what_missing arrives in one of two shapes; both carry the same information:
+- typed  — it opens with an explicit defect label followed by ":" (the label
+  comes from a deterministic check upstream, so let it lead your choice)
+- free text — a sentence naming the features or the retrieval state that is
+  uncertain; infer the defect from what it actually names
+
+Either way, what matters is WHICH evidence is weak:
+- too few neighbors, scattered/spread neighbors, or neighbors disagreeing with
+  the transaction  -> a tool that widens or refines retrieval in this cluster
+- the transaction does not fit this cluster's persona / likely belongs to a
+  different cluster  -> a tool that re-routes across clusters
+- it claims no actionable defect  -> accept_verdict, verdict=cls
+
+If what_missing is null, empty, or too generic to point at either case, take
+the cheapest retrieval-widening tool. Do not manufacture a mismatch that the
+analyzer did not state.
 
 ## HINT GENERATION
-- agent_hint: imperative single sentence referencing what_missing if present.
+- agent_hint: one imperative sentence telling the chosen tool what to target,
+  reusing the concrete feature names what_missing mentioned (if any).
 - If action=accept_verdict, set agent_hint=null.
 
 ## OUTPUT (closed JSON, no prose outside)
@@ -542,6 +608,22 @@ def deterministic_plan(req: PlanRequest) -> PlanResponse:
             rationale="deterministic: sufficiency=confident or expansion already used",
             backend="deterministic",
         )
+    # ★ [V3] typed wm이 있으면 그 type이 매핑의 단일 출처 (키워드 규칙보다 우선)
+    if WM_SCHEMA == "v3":
+        _wt, _wax, _wr = _parse_wm_typed(getattr(a, "what_missing", None))
+        if _wt in _V3_TOOL_MAP:
+            _act = _V3_TOOL_MAP[_wt]
+            logger.info("plan_v3_typed", wm_type=_wt, axes=_wax, action=_act)
+            return PlanResponse(
+                request_id=req.request_id or str(uuid.uuid4())[:8],
+                action=_act,
+                verdict=(a.effective_classification if _act == "accept_verdict" else None),
+                agent_hint=(f"axes: {', '.join(_wax)}" if _wax else None),
+                rationale=f"deterministic-v3: wm_type={_wt} -> {_act}",
+                backend="deterministic",
+            )
+        logger.warning("plan_v3_untyped_fallback",          # ★ 파싱 실패 감시
+                       wm_preview=str(getattr(a, "what_missing", ""))[:80])
     action = map_gap_to_tool(a)
     return PlanResponse(
         request_id=req.request_id or str(uuid.uuid4())[:8],
@@ -714,6 +796,15 @@ class AgentState(TypedDict, total=False):
     round:                 int
     budget:                 int
     expansion_used:          bool
+
+    # ★ [V3] verify_global / contrast / wm_typed 관련 trace 컬럼 복구 필드
+    _nd_global:         Optional[float]
+    _flip:              Optional[bool]
+    _global_cluster:    Optional[int]
+    _contrast_axis:     Optional[str]
+    _contrast_distance: Optional[float]
+    _contrast_neighbor: Optional[Dict]
+    
     # ★ history도 Annotated reducer로 전환. 기존에는 각 노드가
     # state.setdefault("history", []).append(...) 식으로 직접 list를
     # 변경했는데, 이는 "노드가 state를 변경했다"는 부수효과(mutation)에
@@ -737,6 +828,10 @@ class AgentState(TypedDict, total=False):
     _last_reweight_w:         Optional[float]   # reweighting 계수 w
     _last_plateau:            Optional[float]   # (d_k−d_1)/d_1 spread
     _nd_source:               Optional[str]     # "raw_top1" | "patchcore_top5"
+    # ★ [OBS] 아래 3개는 반드시 선언되어야 한다. TypedDict 에 없는 키를
+    #   노드가 반환하면 LangGraph 가 조용히 버려 진단 필드가 사라진다.
+    _patchcore_status:        Optional[str]
+    _research_error:          Optional[str]
     _research_ms:             Optional[float]   # round1 재검색 소요(ms)
     # 종료 사유: "accept_verdict" | "budget_exceeded" | "fast_track" |
     # "unknown_action" — loop 안전성(budget 초과 0건) 측정용.
@@ -978,10 +1073,15 @@ async def node_analyze(state: AgentState) -> AgentState:
     # ── [진단] analyzer 호출 직전 payload 확인 ──────────────────────
     # top_k_count=0 이면 neighbors가 state에 없는 것 → node_retrieve 문제
     # top_k_count>0 이어도 analyze가 confident를 반환하면 → 모델/프롬프트 문제
+    _nb0 = (payload["top_k_normal_results"] or [{}])[0]
+    _has_feat = bool(_nb0.get("features")) or any(
+        k not in ("es_doc_id", "original_index", "cluster_id", "distance", "score")
+        for k in _nb0)
     logger.info(
         "node_analyze_calling",
         cluster_id=payload["cluster_id"],
         top_k_count=len(payload["top_k_normal_results"]),
+        neighbor_has_features=_has_feat,        # ★ False면 ni 판정 불가 상태
         top1_distance=payload["top1_distance"],
         round=state.get("round", 0),
     )
@@ -1050,9 +1150,17 @@ async def node_analyze(state: AgentState) -> AgentState:
     _raw_d  = float(state.get("top1_distance", DIST_P50))
     _nd_now = raw.get("nd") if isinstance(raw, dict) and isinstance(raw.get("nd"), (int, float)) \
               else _normalize_dist_fallback(_raw_d)
+    # ★ [EXP] TTFT/TPOT pass-through — normalize_analyzer_output() 이
+    #   NormalizedAnalysis 필드만 남기고 버리므로 raw 에서 직접 꺼낸다.
+    #   analyzer_history 의 ttft_ms 개수 = 실제 LLM 호출 횟수가 되어
+    #   selective invocation 절감률이 자동으로 계산된다.
+    _gen = {k: raw[k] for k in ("ttft_ms", "tpot_ms", "n_output_tokens")
+            if isinstance(raw, dict) and raw.get(k) is not None}
+
     return {
         "analyzer": raw,
-        "analyzer_history": [{"round": state.get("round", 0), **normalized.model_dump()}],
+        "analyzer_history": [{"round": state.get("round", 0),
+                              **normalized.model_dump(), **_gen}],
         "history": ["analyze"],
         "nd_history": [round(float(_nd_now), 4)],
         "raw_dist_history": [_raw_d],
@@ -1123,6 +1231,22 @@ async def node_plan(state: AgentState) -> AgentState:
         "reweight_mode":  PATCHCORE_REWEIGHT_MODE if state.get("expansion_used") else None,
         "research_ms":    state.get("_research_ms"),   # ★ round1 재검색 소요(ms)
         "nd_source":      state.get("_nd_source", "raw_top1"),
+        # ★ [V3] typed wm + verify_global/contrast 트레이스 (v2 경로에선 전부 None)
+        "wm_type":        (state.get("analyzer") or {}).get("wm_type"),
+        "wm_axes":        (state.get("analyzer") or {}).get("wm_axes"),
+        "wm_rationale":   (state.get("analyzer") or {}).get("wm_rationale"),
+        "nd_global":      state.get("_nd_global"),
+        "flip":           state.get("_flip"),
+        "global_cluster": state.get("_global_cluster"),
+        "contrast_axis":  state.get("_contrast_axis"),
+        "contrast_distance": state.get("_contrast_distance"),
+        "research_mode":  RESEARCH_MODE,
+        # ★ [EXP] Recall@5 산출용 — 이번 라운드 이웃의 original_index 목록.
+        #   orchestrator PipelineResponse 는 이웃을 싣지 않으므로, agent_rounds 를
+        #   경유해 harness(agent_batch_inference)까지 전달하는 유일한 통로다.
+        #   이게 빠지면 retrieval_recall 이 조용히 0.0 으로 나온다.
+        "neighbor_oidx":  [int(_n.get("original_index")) for _n in (state.get("neighbors") or [])
+                           if isinstance(_n, dict) and _n.get("original_index") is not None],
     }
     return {
         "action": plan_resp.action,
@@ -1139,7 +1263,11 @@ def _tool_payload(tool_name: str, state: "AgentState") -> Dict:
     (expand: 현 cluster·top_k=5 / reroute: top2 cluster·top_k=3).
     기존 키(cluster_id/transaction/agent_hint)는 하위호환으로 유지."""
     if tool_name == "reroute_cross_cluster":
-        target, top_k = _pick_reroute_cluster(state), BASE_TOP_K
+        if RESEARCH_MODE == "v3":
+            # ★ [V3] MCP 경로에서는 verify_global tool로 스위칭 (아래 호출부 참고)
+            target, top_k = None, EXPAND_TOP_K
+        else:
+            target, top_k = _pick_reroute_cluster(state), BASE_TOP_K
     else:
         target, top_k = state.get("cluster_id", -1), EXPAND_TOP_K
     return {
@@ -1249,9 +1377,15 @@ async def _call_tool_direct(tool_name: str, state: AgentState) -> Dict:
                                 top_k=BASE_TOP_K(3) 검색
     """
     if tool_name == "reroute_cross_cluster":
-        target_cluster = _pick_reroute_cluster(state)
-        cluster_ids = [target_cluster] if target_cluster is not None else []
-        top_k = BASE_TOP_K
+        if RESEARCH_MODE == "v3":
+            # ★ [V3] verify_global — target 추측 없이 전역(무필터) HNSW 1회.
+            #   cluster 제한이 만든 거리 인플레이션(ε)을 교정 (offline: ε p90=0.206,
+            #   recall@3=59.5%). nd는 단조 감소만 가능 → 안전.
+            target_cluster, cluster_ids, top_k = None, [], EXPAND_TOP_K
+        else:
+            target_cluster = _pick_reroute_cluster(state)
+            cluster_ids = [target_cluster] if target_cluster is not None else []
+            top_k = BASE_TOP_K
     else:  # expand_within_cluster
         target_cluster = state.get("cluster_id", -1)
         cluster_ids = [target_cluster] if target_cluster >= 0 else []
@@ -1267,11 +1401,16 @@ async def _call_tool_direct(tool_name: str, state: AgentState) -> Dict:
         resp = await client.post(f"{RETRIEVER_URL}/retrieve", json=payload)
         resp.raise_for_status()
         data = resp.json()
+    _res = data.get("results", [])
+    if tool_name == "reroute_cross_cluster" and RESEARCH_MODE == "v3":
+        # 전역 top1의 소속 cluster = "실제 귀속지" (trace/주석용)
+        target_cluster = (_res[0].get("cluster_id") if _res else None)
     return {
         "top_k": top_k,
         "cluster_id": target_cluster,
         "top1_distance": data.get("top1_distance"),
-        "neighbors": data.get("results", []),
+        "neighbors": _res,
+        "global": (tool_name == "reroute_cross_cluster" and RESEARCH_MODE == "v3"),
     }
 
 
@@ -1283,8 +1422,11 @@ async def _call_tool_mcp(tool_name: str, state: AgentState) -> Dict:
     표준 인터페이스 뒤에 둔" 비교군이 된다 (transport overhead 측정 대상).
     """
     payload = _tool_payload(tool_name, state)
+    # ★ [V3] reroute action은 MCP의 verify_global tool로 라우팅 (의미 정합)
+    _mcp_tool = ("verify_global" if (tool_name == "reroute_cross_cluster"
+                                     and RESEARCH_MODE == "v3") else tool_name)
     async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(f"{TOOLS_MCP_URL}/tools/{tool_name}/call", json=payload)
+        resp = await client.post(f"{TOOLS_MCP_URL}/tools/{_mcp_tool}/call", json=payload)
         resp.raise_for_status()
         return resp.json()
 
@@ -1306,13 +1448,18 @@ async def _call_tool_mcp_native(tool_name: str, state: AgentState) -> Dict:
         raise RuntimeError("langchain_mcp_adapters not installed — mcp_native mode unavailable")
 
     payload = _tool_payload(tool_name, state)
+    # ★ [V3] reroute action은 MCP의 verify_global tool로 스위칭 (REST shim과 정합).
+    #   이 스위치가 없어 mcp_native 경로에서 v3인데도 reroute_cross_cluster가
+    #   호출되던 것이 verify_global no-op의 근본 원인이었다.
+    _mcp_tool = ("verify_global" if (tool_name == "reroute_cross_cluster"
+                                     and RESEARCH_MODE == "v3") else tool_name)
     client = MultiServerMCPClient({
         "agent_tools": {"url": f"{TOOLS_MCP_URL}/mcp", "transport": "streamable_http"},
     })
     tools = await client.get_tools()
-    tool = next((t for t in tools if t.name == tool_name), None)
+    tool = next((t for t in tools if t.name == _mcp_tool), None)
     if tool is None:
-        raise RuntimeError(f"tool '{tool_name}' not found via MCP tools/list discovery")
+        raise RuntimeError(f"tool '{_mcp_tool}' not found via MCP tools/list discovery")
 
     raw = await tool.ainvoke(payload)
     # langchain 도구 호출 결과는 [{"type": "text", "text": "<json string>"}]
@@ -1347,21 +1494,40 @@ async def _call_tool(tool_name: str, state: AgentState) -> Dict:
         raise
 
 
-@instrument_node("expand", required_keys=("cluster_id", "transaction"))
 def _apply_patchcore_after_research(updates: Dict, neighbors: List[Dict],
                                     raw_top1: Optional[float]) -> None:
     """재검색(expand/reroute) 결과에 PatchCore reweighting nd를 계산해 updates에 기록.
     round1의 판정 nd는 이 값을 쓴다(min-fusion 폐기 — 재검색했으면 patchcore nd만)."""
-    if not PATCHCORE_ON_RESEARCH or raw_top1 is None or not neighbors:
+    # ★ [OBS] nd 가 안 움직이는 원인을 세 갈래로 구분해 기록한다.
+    #   (Δnd=0 이 나올 때 "patchcore off / 이웃부족 / 실제 무변화" 중
+    #    어느 쪽인지 로그만 봐서는 알 수 없어 진단이 막혔던 지점)
+    if not PATCHCORE_ON_RESEARCH:
+        updates["_patchcore_status"] = "off"
+        logger.warning("patchcore_skipped", reason="PATCHCORE_ON_RESEARCH=false")
+        return
+    if raw_top1 is None:
+        updates["_patchcore_status"] = "no_raw_top1"
+        logger.warning("patchcore_skipped", reason="raw_top1 is None")
+        return
+    if not neighbors:
+        updates["_patchcore_status"] = "no_neighbors"
+        logger.warning("patchcore_skipped", reason="neighbors empty")
         return
     nd, w, plateau = _patchcore_nd(neighbors, float(raw_top1))
+    if w is None:                                          # len(ds)<2 또는 ds[0]<=0
+        updates["_patchcore_status"] = "insufficient_neighbors"
+        logger.warning("patchcore_degraded", n_neighbors=len(neighbors),
+                       n_with_distance=sum(1 for n in neighbors
+                                           if n.get("distance") is not None))
+    else:
+        updates["_patchcore_status"] = "ok"
     updates["nd_history"] = [round(nd, 4)]                 # ★ 판정 nd (patchcore)
     updates["raw_dist_history"] = [float(raw_top1)]
     updates["_last_reweight_w"] = w
     updates["_last_plateau"] = plateau
     updates["_nd_source"] = "patchcore_top5"
 
-
+@instrument_node("expand", required_keys=("cluster_id", "transaction"))
 async def node_expand(state: AgentState) -> AgentState:
     _t0 = time.time()
     updates: Dict = {
@@ -1384,9 +1550,43 @@ async def node_expand(state: AgentState) -> AgentState:
         # ★ 재검색 결과 → PatchCore nd (판정 nd)
         _apply_patchcore_after_research(updates, _nb or state.get("neighbors") or [],
                                         _raw if _raw is not None else state.get("top1_distance"))
+        # ★ [V3] fetch_contrast 보조 — wm_axes 첫 축의 대조 증거 1건 (판정 불개입,
+        #   trace/감사 주석 전용). retriever field_filters 신규 경로 사용.
+        if RESEARCH_MODE == "v3":
+            _txn  = state.get("transaction") or {}
+            _axes = (state.get("analyzer") or {}).get("wm_axes") or []
+            _ax = _tv = None
+            for _cand in _axes:                       # ★ 첫 축이 안 풀리면 다음 축으로
+                _k = _resolve_axis(_cand, _txn)
+                if _k is not None and _txn.get(_k) is not None:
+                    _ax, _tv = _k, _txn[_k]
+                    break
+            if _ax is None and _axes:
+                logger.warning("contrast_axis_unresolved", axes=_axes[:3],
+                               txn_keys=list(_txn)[:12])
+            if _ax and _tv is not None:
+                try:
+                    async with httpx.AsyncClient(timeout=5.0) as _c2:
+                        _r2 = await _c2.post(f"{RETRIEVER_URL}/retrieve", json={
+                            "embedding": state.get("embedding"),
+                            "cluster_ids": [state.get("cluster_id", -1)],
+                            "vec_index": state.get("vec_index"),
+                            "top_k": 1, "field_filters": {_ax: str(_tv)}})
+                        _r2.raise_for_status()
+                        _d2 = _r2.json()
+                    updates["_contrast_axis"] = _ax
+                    updates["_contrast_distance"] = _d2.get("top1_distance")
+                    _cn = (_d2.get("results") or [None])[0]
+                    updates["_contrast_neighbor"] = _cn
+                    updates["history"].append(f"fetch_contrast:{_ax}={_tv}")
+                except Exception as _e2:
+                    logger.warning("fetch_contrast_failed", error=str(_e2))
     except Exception as e:
         logger.warning("expand_tool_failed", error=str(e), mode=TOOL_EXECUTION_MODE)
         updates["evidence_top_n"] = EXPAND_TOP_K
+        # ★ [OBS] 예외를 삼키면 nd 불변이 "재검색이 효과 없음"으로 오독된다.
+        updates["_research_error"] = f"expand:{type(e).__name__}:{str(e)[:120]}"
+        updates["_patchcore_status"] = "tool_failed"
     updates["_research_ms"] = round((time.time() - _t0) * 1000, 1)   # ★ round1 재검색 시간
     return updates
 
@@ -1401,7 +1601,23 @@ async def node_reroute(state: AgentState) -> AgentState:
     _t0 = time.time()
     try:
         result = await _call_tool("reroute_cross_cluster", state)
-        if result.get("cluster_id") is not None:
+        if RESEARCH_MODE == "v3" and result.get("global"):
+            # ★ [V3] verify_global 트레이스 — nd_global/flip은 별도 컬럼으로만
+            #   기록해 legacy 지표와 혼합되지 않게 한다 (score_column 원칙).
+            _rawg = result.get("top1_distance")
+            if _rawg is not None:
+                _ndg = _normalize_dist_fallback(float(_rawg))
+                _nd_prev = (state.get("nd_history") or [None])[-1]
+                updates["_nd_global"] = round(_ndg, 4)
+                updates["_flip"] = bool(_nd_prev is not None
+                                        and BOUNDARY_LOW <= float(_nd_prev) < BOUNDARY_HIGH
+                                        and _ndg < BOUNDARY_LOW)
+            updates["_global_cluster"] = result.get("cluster_id")
+            updates["history"].append(
+                f"verify_global:cluster_{state.get('cluster_id', -1)}"
+                f"->global_top1_{result.get('cluster_id')}")
+            # persona는 배정 cluster 것을 유지 — cluster는 설명용, 점수는 global
+        elif result.get("cluster_id") is not None:
             updates["cluster_id"] = result["cluster_id"]
             # ★ [persona 교체] top2 후보 persona로 전환 — analyzer가 새 cluster
             # 기준 z-score 블록을 받는다(evaluator-once면 미사용이나 정합 유지).
@@ -1423,6 +1639,8 @@ async def node_reroute(state: AgentState) -> AgentState:
                                         _raw if _raw is not None else state.get("top1_distance"))
     except Exception as e:
         logger.warning("reroute_tool_failed", error=str(e), mode=TOOL_EXECUTION_MODE)
+        updates["_research_error"] = f"reroute:{type(e).__name__}:{str(e)[:120]}"
+        updates["_patchcore_status"] = "tool_failed"
     updates["_research_ms"] = round((time.time() - _t0) * 1000, 1)   # ★ round1 재검색 시간
     return updates
 
@@ -1462,6 +1680,12 @@ async def node_finalize(state: AgentState) -> AgentState:
             "nd_source": state.get("_nd_source", "raw_top1"),
             "reweight_w": state.get("_last_reweight_w"),
             "reweight_mode": PATCHCORE_REWEIGHT_MODE if researched else None,
+            # ★ [OBS] Δnd=0 원인 규명용 — harness/report 가 그대로 집계한다
+            "nd_delta":         round(nd_final - nd_round0, 4),
+            "patchcore_status": state.get("_patchcore_status",
+                                          "not_researched" if not researched else "unknown"),
+            "plateau":          state.get("_last_plateau"),
+            "research_error":   state.get("_research_error"),
         }]
         upd["verdict"] = "ABNORMAL" if nd_final >= CLS_ND_THRESHOLD else "NORMAL"
         _raws = state.get("raw_dist_history") or []
@@ -1639,7 +1863,12 @@ async def detect(req: DetectRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "service": "planner", "version": "4.0.0-langgraph"}
+    return {"status": "healthy", "service": "planner", "version": "4.0.0-langgraph",
+            "wm_schema":      WM_SCHEMA,
+            "research_mode":  RESEARCH_MODE,
+            # "planner_backend": PLANNER_BACKEND,
+            "tool_execution_mode": TOOL_EXECUTION_MODE,
+            }
 
 
 @app.get("/ready")
@@ -1664,31 +1893,25 @@ async def startup_event():
 # 이 프로젝트의 핵심(🟠 LLM은 evaluator 1회만 / 🔵 판정·라우팅은 코드)이
 # 안 보이므로 포트폴리오용으로 별도 관리한다. system architecture와 1:1 대응.
 ANNOTATED_MERMAID = """flowchart TD
-    START([Test Transaction]) --> PR{{"pre_router · fast/deep track"}}
-    PR -->|"fast: global dist &lt; τ"| FIN
-    PR -->|"deep"| RET["retrieve · Filtered HNSW<br/>거리 top-5 / evidence top-3"]
-    RET --> ANA
-
-    subgraph LLMBOX [evaluator · LLM 1회만]
-      direction TB
-      ANA["analyze · Evaluator LLM<br/><b>what_missing</b> 1-key 생성<br/>cls/suf = 코드(nd) 결정론"]
-    end
-
-    ANA --> PLAN{{"plan · Planner<br/>what_missing → tool 매핑"}}
+    START([Test Transaction]) --> PR{{"pre_router: fast/deep track"}}
+    PR -->|"fast track"| FIN
+    PR -->|"deep track"| RET["retrieve<br/>Filtered HNSW / evidence top-3"]
+    RET --> ANA["analyze : Evaluator LLM<br/>what_missing 1-key 생성<br/>cls/suf = 코드(nd) 결정론"]
+    ANA --> PLAN{{"plan : Planner<br/>what_missing to tool"}}
     PLAN -->|"confident"| FIN
-    PLAN -->|"wm: sparse-evidence"| EX["expand_within_cluster<br/>같은 cluster top-5 재검색"]
-    PLAN -->|"wm: cluster/persona mismatch"| RR["reroute_cross_cluster<br/>rank2 cluster 전환 + persona 교체"]
-    EX --> PC["PatchCore reweighting nd<br/>(재검색 top-5 거리 보정)"]
+    PLAN -->|"sparse-evidence"| EX["expand_within_cluster<br/>같은 cluster 재검색"]
+    PLAN -->|"cluster mismatch"| RR["reroute_cross_cluster<br/>rank2 cluster + persona 교체"]
+    EX --> PC["재검색 nd 재계산<br/>PatchCore top-5 / raw"]
     RR --> PC
-    PC -.->|"evaluator 재호출 없음<br/>(EVALUATOR_ONCE)"| FIN
-    FIN["finalize<br/>재검색O → patchcore nd / 재검색X → raw nd<br/>nd ≥ CLS_ND_THRESHOLD → ABNORMAL"] --> END([API Response])
+    PC -.->|"evaluator 재호출 없음"| FIN
+    FIN["finalize<br/>재검색O: patchcore nd / X: raw nd<br/>nd >= threshold : ABNORMAL"] --> DONE([API Response])
 
     classDef llm fill:#F58518,stroke:#b5610f,color:#fff;
     classDef code fill:#4C78A8,stroke:#2f4b6e,color:#fff;
     classDef term fill:#54A24B,stroke:#356,color:#fff;
     class ANA llm;
     class PR,PLAN,RET,EX,RR,PC,FIN code;
-    class START,END term;
+    class START,DONE term;
 """
 
 

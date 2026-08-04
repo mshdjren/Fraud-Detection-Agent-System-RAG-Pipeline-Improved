@@ -39,11 +39,9 @@ HF_TEACHER_MODEL   = "Qwen/Qwen2.5-14B-Instruct"   # 7B→14B: z-score 산술비
 # HF_TEACHER_MODEL = "Qwen/QwQ-32B"
 # HF_TEACHER_MODEL = "Qwen/Qwen3-4B-Thinking-2507"
 HF_FALLBACK_MODELS = ["Qwen/Qwen2.5-7B-Instruct"]
-HF_TOKEN           = "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"
+HF_TOKEN           = "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"
 HF_USE_4BIT        = True
 HF_BATCH_SIZE      = 50
-
-# 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
 
 max_new_tokens     = 64
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
@@ -72,7 +70,7 @@ EVAL_RATIO  = 0.1
 
 EVAL_MAX_NUM               = 50
 MEASURE_TEACHER_COMPLIANCE = True
-EVAL_SAMPLE_N              = 300
+EVAL_SAMPLE_N              = 500
 
 # 1000개를 세 갈래로 명시 배분 (합=1.0)
 MINING_FRAC   = 0.5     # hard negative (mining type1/2)  → 500
@@ -165,7 +163,6 @@ def set_data(mode: str = "agent"):
         "TRAINING_JSONL_PATH": TRAINING_JSONL_PATH,
         "OUT_JSONL_MINED": OUT_JSONL_MINED
     }
-
 LOCAL_ADAPTER = f"/content/adapter-{EXPERIMENT_CASE}"
 
 if TEACHER_PROVIDER == "groq":
@@ -194,3 +191,10 @@ def print_config():
     print(f"TRAINING_JSONL   : {TRAINING_JSONL_PATH}")
     print(f"OUT_ADAPTER_PATH : {OUT_ADAPTER_PATH}")
     print(sep)
+
+# ============================================================
+# [V3] Agent 재검색 실험 스위치 — 기본값은 전부 legacy(기존 동작 100% 보존)
+# ============================================================
+RESEARCH_MODE         = "legacy"   # "legacy" | "v3"(verify_global/expand_reweight/fetch_contrast)
+ROUTER_CANDIDATE_MODE = "static"   # "static"(v14 그대로) | "dynamic"(test emb 기준 top5)
+WM_SCHEMA             = "v2"       # "v2"(자유텍스트 wm) | "v3"(typed: cm|ni|accept — rationale)

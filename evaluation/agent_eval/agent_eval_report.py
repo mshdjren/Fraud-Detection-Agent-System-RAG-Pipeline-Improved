@@ -113,6 +113,67 @@ def print_summary(report: Dict) -> None:
     print(f"  correct flip (FN→TP)   : {vcr.get('correct_flip_n')} ({vcr.get('correct_flip_rate')})")
     print(f"  wrong flip  (TP→FN)   : {vcr.get('wrong_flip_n')}")
 
+    # ── ★ [EXP] [5b] Research Effect — 재검색 인과 분해 ──────
+    re_ = report.get("research_effect") or {}
+    if re_.get("n"):
+        tr  = re_.get("transitions", {})
+        dn  = re_.get("delta_nd", {})
+        sel = re_.get("selection", {})
+        cst = re_.get("cost", {})
+        views = re_.get("by_view", {})
+        main  = tr.get("main_view", "pre_best_frozen")
+        print("\n[5b] Research Effect (재검색 전/후 인과 분해)")
+        au = re_.get("auroc", {})
+        print(f"  AUROC  pre {au.get('pre')} → post {au.get('post')}  (Δ {au.get('delta')})")
+        print(f"  주 임계 view            : {main}  "
+              f"(thr={views.get(main, {}).get('threshold_pre')})")
+        print(f"  {'band/view':<22} {'TPR':>6} {'FPR':>6} {'FNR':>6} {'TNR':>6} {'acc':>6} {'n':>4}")
+        print(f"  {'-'*62}")
+        for vname in ("fixed", "pre_best_frozen", "each_best"):
+            v = views.get(vname, {})
+            if not v:
+                continue
+            for band in ("ambiguous", "confident", "overall"):
+                for phase in ("pre", "post"):
+                    row = (v.get(band, {}) or {}).get(phase, {})
+                    if not row.get("n"):
+                        continue
+                    tag = f"{vname[:9]}/{band[:4]}.{phase}"
+                    print(f"  {tag:<22} {str(row.get('TPR')):>6} {str(row.get('FPR')):>6} "
+                          f"{str(row.get('FNR')):>6} {str(row.get('TNR')):>6} "
+                          f"{str(row.get('accuracy')):>6} {row.get('n'):>4}")
+            if not (v.get("confident", {}) or {}).get("_invariant_ok", True):
+                print(f"  ⚠ [{vname}] confident 대조군이 pre≠post — 파이프라인 오염 의심")
+        resc, degr = tr.get("rescued", {}), tr.get("degraded", {})
+        print(f"\n  판정 전이  flip={tr.get('n_flip')} ({tr.get('flip_rate')})")
+        print(f"    rescued  (오답→정답) : {resc.get('n')}  by_band={resc.get('by_band')}")
+        print(f"    degraded (정답→오답) : {degr.get('n')}  by_band={degr.get('by_band')}")
+        print(f"    stable   correct={tr.get('stable_correct')} wrong={tr.get('stable_wrong')}")
+        print(f"    ★ net_gain           : {tr.get('net_gain')}  "
+              f"(rescued − degraded)  CI95={re_.get('ci95', {}).get('rescued_rate')}")
+        for _lbl, _blk in (("rescued", resc), ("degraded", degr)):
+            for smp in (_blk.get("samples") or [])[:10]:
+                print(f"      [{_lbl:<8}] idx={smp.get('idx')} y={smp.get('label')} "
+                      f"nd {smp.get('nd_pre')}→{smp.get('nd_post')} "
+                      f"(Δ{smp.get('delta_nd')}) band={smp.get('band')} wm={smp.get('wm_type')}")
+        print(f"\n  Δnd  mean={dn.get('mean')} median={dn.get('median')} "
+              f"|Δ|={dn.get('mean_abs')} p10={dn.get('p10')} p90={dn.get('p90')}")
+        print(f"    ★ directional_accuracy : {dn.get('directional_accuracy')}  "
+              f"(moved={dn.get('n_moved')})  ← verdict 불변이어도 살아있는 신호")
+        print(f"    by_wm_type             : ni={dn.get('by_wm_type', {}).get('ni')} "
+              f"cm={dn.get('by_wm_type', {}).get('cm')}")
+        print(f"\n  Abstention 선택 품질")
+        print(f"    ambiguous n / precision / recall : {sel.get('n_ambiguous')} / "
+              f"{sel.get('ambiguous_precision')} / {sel.get('ambiguous_recall')}")
+        print(f"    missed (confident인데 오답)      : {sel.get('missed')}")
+        print(f"\n  비용  n={cst.get('n_researched')} mean={cst.get('research_ms_mean')}ms "
+              f"total={cst.get('research_ms_total')}ms "
+              f"ms/flip={cst.get('ms_per_flip')} ms/rescue={cst.get('ms_per_rescue')}")
+        if re_.get("_warning"):
+            print(f"  ⚠ {re_['_warning']}")
+    elif "research_effect" in report:
+        print("\n[5b] Research Effect — 계산 불가 (_nd_round0/_nd_final 쌍 없음)")
+
     lat_bd = lat or report.get("latency_breakdown", {})
     total_s = lat_bd.get("total_ms", {})
     base_s  = lat_bd.get("base_retrieve_ms", {})
@@ -428,15 +489,63 @@ def plot_action_distribution(report: Dict, out_dir: Path) -> None:
 # Entry Point
 # ============================================================
 
+def plot_research_effect(report: Dict, out_dir: Path) -> None:
+    """★ [EXP] 재검색 Δnd 분포 — rescued/degraded/stable 색 분리 + 임계선."""
+    re_ = report.get("research_effect") or {}
+    if not re_.get("n") or not MPL_OK:
+        return
+    tr = re_.get("transitions", {})
+    resc = {s["idx"]: s for s in (tr.get("rescued", {}) or {}).get("samples", [])}
+    degr = {s["idx"]: s for s in (tr.get("degraded", {}) or {}).get("samples", [])}
+    pts = list(resc.values()) + list(degr.values())
+    if not pts:
+        # 전이가 없어도 Δnd 방향성은 보여준다 (막대 1개)
+        dn = re_.get("delta_nd", {})
+        if dn.get("n_researched"):
+            fig, ax = plt.subplots(figsize=(6, 4))
+            ax.bar(["mean Δnd", "mean |Δnd|"],
+                   [dn.get("mean") or 0, dn.get("mean_abs") or 0],
+                   color=["#4C78A8", "#B0B0B0"])
+            ax.axhline(0, color="k", lw=0.8)
+            ax.set_title(f"Research Δnd (no verdict flip)  "
+                         f"dir_acc={dn.get('directional_accuracy')}")
+            ax.set_ylabel("Δnd (post − pre)")
+            fig.tight_layout()
+            path = out_dir / "research_effect.png"
+            fig.savefig(path, dpi=150, bbox_inches="tight"); plt.close(fig)
+            print(f"  [plot] {path}")
+        return
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for label, blk, color in (("rescued", resc, "#2E7D32"), ("degraded", degr, "#C62828")):
+        xs = [s["nd_pre"] for s in blk.values()]
+        ys = [s["nd_post"] for s in blk.values()]
+        ax.scatter(xs, ys, s=70, c=color, label=f"{label} (n={len(xs)})",
+                   edgecolors="k", linewidths=0.5, zorder=3)
+    thr = re_.get("cls_threshold", 0.42)
+    ax.axvline(thr, ls="--", c="gray", lw=1); ax.axhline(thr, ls="--", c="gray", lw=1)
+    lo, hi = re_.get("boundary", [0.3, 0.55])
+    ax.axvspan(lo, hi, color="#FFF3CD", alpha=0.5, zorder=0, label=f"ambiguous [{lo},{hi})")
+    ax.plot([0, 1], [0, 1], ls=":", c="k", lw=0.8, zorder=1)
+    ax.set_xlabel("nd_pre (round0)"); ax.set_ylabel("nd_post (final)")
+    ax.set_title(f"Research verdict transitions — net_gain={tr.get('net_gain')}")
+    ax.legend(fontsize=8); ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    fig.tight_layout()
+    path = out_dir / "research_effect.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight"); plt.close(fig)
+    print(f"  [plot] {path}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Agent Evaluation Report — 수치/표/그래프 생성",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    _run = os.getenv("RUN_NAME", "local")
     parser.add_argument("--report-path", type=str,
-                        default="./results/agent_eval/agent_eval_report.json")
+                        default=f"./results/agent_eval/{_run}/agent_eval_report.json")
     parser.add_argument("--output-dir",  type=str,
-                        default="./results/agent_eval/plots")
+                        default=f"./results/agent_eval/{_run}/plots")
     parser.add_argument("--no-plots",    action="store_true",
                         help="그래프 생성 건너뜀 (수치/표만 출력)")
     args = parser.parse_args()
@@ -459,6 +568,7 @@ def main():
             plot_boundary_fnr(report, out_dir)
             plot_latency_breakdown(report, out_dir)
             plot_action_distribution(report, out_dir)
+            plot_research_effect(report, out_dir)          # ★ [EXP]
         else:
             print("[skip] matplotlib 없음 — 그래프 생성 건너뜀")
 

@@ -1,0 +1,39 @@
+{
+  "run_id": "f-mcp-mcpnative",
+  "group": "F_mcp",
+  "variant": "mcpnative",
+  "stage": 3,
+  "index_id": "f32",
+  "eval": "agent",
+  "n_samples": 20,
+  "concurrency": 1,
+  "note": "CV C4 — MCP 3-axis transport overhead P95",
+  "experiment_case": "pca_64_k100",
+  "config": {
+    "EXPERIMENT_CASE": "pca_64_k100",
+    "INGEST_SEARCH_MODE": "hnsw",
+    "SEARCH_MODE": "hnsw_filtered",
+    "VERSIONS": "v1",
+    "PERCOLATE_QUERY_VERSION": "v1",
+    "ENABLE_BUCKETIZATION": "false",
+    "VEC_INDEX_CORESET_PCT": "100",
+    "VEC_QUANT": "f32",
+    "HNSW_M": "16",
+    "HNSW_EF_CONSTRUCTION": "100",
+    "KNN_NUM_CANDIDATES": "200",
+    "RETRIEVER_OVERSAMPLE": "0",
+    "TOOL_EXECUTION_MODE": "mcp_native",
+    "RESEARCH_MODE": "v3",
+    "PIPELINE_MODE": "agent",
+    "EVAL_SOURCE": "smoke",
+    "SKIP_ANALYZER": "false",
+    "RUN_ID": "f-mcp-mcpnative"
+  },
+  "src_hash": {
+    "ingest": "0c9d9fdf",
+    "agent_eval": "b854c548"
+  },
+  "suspect_restart": false,
+  "exit_code": 0,
+  "status": "ok"
+}

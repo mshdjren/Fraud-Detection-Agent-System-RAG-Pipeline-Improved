@@ -101,7 +101,9 @@ EMB_FILENAME_PREFIX = os.getenv(
 )
 
 EXPERIMENT_CASES_TO_PROCESS = os.getenv("EXPERIMENT_CASE", "pca_64").split(",")
-VERSIONS_TO_PROCESS = os.getenv("VERSIONS", "v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13").split(",")
+VERSIONS_TO_PROCESS = [v.strip() for v in
+                       os.getenv("VERSIONS", "v1,v2,v3,v4,v5,v6,v7,v8,v9,v10,v11,v12,v13").split(",")
+                       if v.strip()]
 
 CORESET_PERCENTAGES = [
     int(p.strip())
@@ -112,6 +114,30 @@ CORESET_PERCENTAGES = [
 SKIP_RAW_VEC_MODE = os.getenv("SKIP_RAW_VEC", "false").strip().lower()
 
 INGEST_SEARCH_MODE = os.getenv("INGEST_SEARCH_MODE", "knn").strip().lower()
+
+# ★ [EXP] 역전 네이밍 정리: "knn"/"exact" → index=False, "hnsw" → index=True
+INGEST_VEC_INDEXED = INGEST_SEARCH_MODE not in ("knn", "exact", "script_score")
+
+VEC_QUANT        = os.getenv("VEC_QUANT", "f32").strip().lower()
+HNSW_M           = int(os.getenv("HNSW_M", "16"))
+HNSW_EF_C        = int(os.getenv("HNSW_EF_CONSTRUCTION", "100"))
+N_SHARDS_VEC     = int(os.getenv("N_SHARDS_VEC", "1"))
+VEC_INDEX_SUFFIX = os.getenv("VEC_INDEX_SUFFIX", "")
+
+# ★ ES 8.18: hnsw(f32) | int8_hnsw(4x) | int4_hnsw(8x) | bbq_hnsw(32x)
+_QUANT_INDEX_TYPE = {
+    "f32": "hnsw", "int8_hnsw": "int8_hnsw",
+    "int4_hnsw": "int4_hnsw", "bbq_hnsw": "bbq_hnsw",
+}
+_QUANT_BYTES_PER_ELEM = {"f32": 4.0, "int8_hnsw": 1.0, "int4_hnsw": 0.5, "bbq_hnsw": 0.125}
+
+
+def build_vec_index_suffix() -> str:
+    if VEC_INDEX_SUFFIX:
+        return VEC_INDEX_SUFFIX
+    if not INGEST_VEC_INDEXED:
+        return "_noidx"
+    return f"_{VEC_QUANT}_m{HNSW_M}ef{HNSW_EF_C}"
 
 # ── 노드 pinning (실험용) ──────────────────────────────────────────────
 NODE_PINNING_ENABLED = os.getenv("NODE_PINNING", "false").strip().lower() == "true"
@@ -447,21 +473,29 @@ def gen_mapping_raw_vec(df: pd.DataFrame, node_name: str = None, box_type: str =
     #     "index": True, "similarity": "cosine"
     # }
 
-    if INGEST_SEARCH_MODE=='knn':
-        props["vec"] = {
-        "type": "dense_vector", "dims": 576,
-        "index": False, 
-        # "similarity": "l2_norm"  # ★ 핵심: L2 거리 기반 인덱싱으로 변경
-        }
+    if not INGEST_VEC_INDEXED:
+        props["vec"] = {"type": "dense_vector", "dims": 576, "index": False}
     else:
         props["vec"] = {
-        "type": "dense_vector", "dims": 576,
-        "index": True, 
-        "similarity": "l2_norm"  # ★ 핵심: L2 거리 기반 인덱싱으로 변경
+            "type": "dense_vector", "dims": 576,
+            "index": True,
+            "similarity": "l2_norm",
+            # ★ 8.14+ 기본값이 int8_hnsw이므로 f32도 "hnsw"를 반드시 명시
+            "index_options": {
+                "type": _QUANT_INDEX_TYPE.get(VEC_QUANT, "hnsw"),
+                "m": HNSW_M,
+                "ef_construction": HNSW_EF_C,
+            },
         }
-    
-    mapping = {"mappings": {"_source": {"excludes": ["vec"]}, "properties": props}}
-    settings = {"number_of_shards": 1, "number_of_replicas": 0}
+
+    mapping = {"mappings": {
+        "_source": {"excludes": ["vec"]},
+        "_meta": {"vec_quant": VEC_QUANT, "hnsw_m": HNSW_M,
+                  "hnsw_ef_construction": HNSW_EF_C,
+                  "vec_indexed": INGEST_VEC_INDEXED},
+        "properties": props,
+    }}
+    settings = {"number_of_shards": N_SHARDS_VEC, "number_of_replicas": N_REPLICAS}
     # [통합 배치 설정]
     if box_type:
         settings["index.routing.allocation.include.box_type"] = box_type
@@ -676,6 +710,32 @@ def load_coreset_parquet(percentage: int, experiment_case) -> pd.DataFrame:
     print(f"  n_docs         : {len(df):,}")
     return df
 
+def _dump_index_stats(index_name: str, out_dir: str = "/results") -> None:
+    """[EXP] store/segments + 이론 working set 을 JSONL로 누적."""
+    import json
+    try:
+        client.indices.refresh(index=index_name)
+        st  = client.indices.stats(index=index_name, metric="store,segments,docs")
+        tot = st["indices"][index_name]["total"]
+        n   = tot["docs"]["count"]
+        bpe = _QUANT_BYTES_PER_ELEM.get(VEC_QUANT, 4.0)
+        # 검색 시 상주해야 하는 벡터 + HNSW 그래프 (양방향 링크 ≈ m*2*4B)
+        ws  = int(n * 576 * bpe + n * HNSW_M * 2 * 4)
+        rec = {
+            "index": index_name, "run_id": os.getenv("RUN_ID", ""),
+            "vec_quant": VEC_QUANT, "hnsw_m": HNSW_M, "hnsw_ef_construction": HNSW_EF_C,
+            "docs": n,
+            "store_bytes": tot["store"]["size_in_bytes"],   # 디스크(양자화 시 오히려 증가)
+            "vector_working_set_bytes": ws,                  # ★ 메모리 축 주 지표
+            "segments": tot["segments"]["count"],
+        }
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "index_stats.jsonl"), "a") as f:
+            f.write(json.dumps(rec) + "\n")
+        print(f"[stats] {index_name}: disk={rec['store_bytes']/2**20:.1f}MB "
+              f"ws={ws/2**20:.1f}MB docs={n:,} segs={rec['segments']}")
+    except Exception as e:
+        print(f"[stats] failed for {index_name}: {e}")
 
 def process_raw_vec_for_percentage(percentage: int, experiment_case: str):
     df_coreset = load_coreset_parquet(percentage, experiment_case)
@@ -695,7 +755,8 @@ def process_raw_vec_for_percentage(percentage: int, experiment_case: str):
         )
 
     # index_raw_vec = f"fraud_ecom_percentage_{percentage}_cluster_tree_vec"
-    index_raw_vec = f"fraud_ecom_{experiment_case}_percentage_{percentage}_cluster_tree_vec"
+    index_raw_vec = (f"fraud_ecom_{experiment_case}_percentage_{percentage}"
+                    f"_cluster_tree_vec{build_vec_index_suffix()}")
     print(f"\n[es] Creating RAW+VEC index: {index_raw_vec}")
 
     # [통합 로직] 배치 전략 결정
@@ -718,6 +779,7 @@ def process_raw_vec_for_percentage(percentage: int, experiment_case: str):
     bulk_ingest(gen_raw_vec_actions(df_coreset, emb, index_raw_vec),
                 f"RAW+VEC ({percentage}%)")
     log_index_stats(index_raw_vec)
+    _dump_index_stats(index_raw_vec)
     del emb
 
 # ===========================
@@ -728,7 +790,8 @@ def check_raw_vec_indices_exist(percentages: list, experiment_case: str) -> dict
     result = {}
     for pct in percentages:
         # index_name = f"fraud_ecom_percentage_{pct}_cluster_tree_vec"
-        index_name = f"fraud_ecom_{experiment_case}_percentage_{pct}_cluster_tree_vec"
+        index_name = (f"fraud_ecom_{experiment_case}_percentage_{pct}"
+                    f"_cluster_tree_vec{build_vec_index_suffix()}")
         try:
             exists = client.indices.exists(index=index_name)
             if exists:
@@ -856,7 +919,11 @@ def process_experiment_case(experiment_case: str):
         bucket_config,  # ★ NEW
         **perc_routing
     )
-    
+
+    if not VERSIONS_TO_PROCESS:
+        print("\n[percolator] VERSIONS 비어 있음 — percolator 적재 생략 (vec 인덱스만 생성)")
+        return
+
     print(f"\n[percolator] Creating {len(VERSIONS_TO_PROCESS)} indices...")
     
     for version in VERSIONS_TO_PROCESS:

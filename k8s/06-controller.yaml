@@ -40,7 +40,6 @@ data:
   TOOLS_MCP_URL:    "http://agent-tools-mcp:80"
   # Direct / mcp — orchestrator의 TOOL_EXECUTION_MODE와 동일 값으로 맞춰야
   # agent_trace의 "expand_within_cluster:{mode}" 표기가 둘 다 일치한다.
-  TOOL_EXECUTION_MODE: "mcp_native"
   # expand/reroute 등 follow-up tool 반복 허용 횟수 (루프 가드)
   AGENT_MAX_ROUNDS: "2"
   # pre_router가 base_* 없이 단독 호출될 때(스모크 테스트 등)만 쓰는
@@ -54,14 +53,18 @@ data:
   REROUTE_ON_CENTROID : "true"
   REROUTE_SCORE_RATIO : "0.93"
 
-  EXPAND_ND_LO : "0.48"
-  EXPAND_ND_HI : "0.60"
+  # EXPAND_ND_LO : "0.48"
+  # EXPAND_ND_HI : "0.60"
   SUFFICIENCY_BOUNDARY_LOW : "0.3"
   SUFFICIENCY_BOUNDARY_HIGH : "0.55"
 
   SKIP_ANALYZER_ON_CONFIDENT : "true"
   CLS_ND_THRESHOLD : "0.42"
 
+  PATCHCORE_ON_RESEARCH : "true"     #true
+  PATCHCORE_REWEIGHT_MODE : "isolation"   #isolation
+  PATCHCORE_TAU : "0.142"
+  EVALUATOR_ONCE : "true"
 ---
 # ===========================
 # ServiceAccount (Workload Identity)
@@ -156,7 +159,27 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: GOOGLE_CLOUD_REGION
+        - name: RESEARCH_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key:  RESEARCH_MODE
+        - name: WM_SCHEMA
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: WM_SCHEMA
+        - name: PROMPT_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PROMPT_VERSION
 
+        - name: TOOL_EXECUTION_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: TOOL_EXECUTION_MODE
         livenessProbe:
           httpGet:
             path: /health

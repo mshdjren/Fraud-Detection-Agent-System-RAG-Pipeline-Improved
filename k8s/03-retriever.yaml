@@ -4,7 +4,7 @@ metadata:
   name: anomaly-retriever-config
   namespace: elastic
 data:
-  TOP_K: "5"
+  # TOP_K: "5"
   # ★ v5: EXPERIMENT_LABEL — Prometheus 레이블 / locust 연동용
   #   실험 케이스 구분을 위해 배포 시 override 권장
   EXPERIMENT_LABEL: "baseline"
@@ -88,11 +88,11 @@ spec:
               key: EXPERIMENT_LABEL
 
         # ── Search ───────────────────────────────────────────
-        - name: TOP_K
-          valueFrom:
-            configMapKeyRef:
-              name: anomaly-retriever-config
-              key: TOP_K
+        # - name: TOP_K
+        #   valueFrom:
+        #     configMapKeyRef:
+        #       name: anomaly-retriever-config
+        #       key: TOP_K
 
         # SEARCH_MODE: exact(Exact NN) | hnsw(HNSW)
         #   exact: vec index=False 환경 (원본 coreset 인덱스)
@@ -109,7 +109,16 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: KNN_NUM_CANDIDATES
-
+        - name: RETRIEVER_OVERSAMPLE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: RETRIEVER_OVERSAMPLE
+        - name: RUN_ID
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: RUN_ID
         # ★ v5: SKIP_ANALYZER — cluster_id filter 제거 → 전체 인덱스 순수 vec 검색
         - name: SKIP_ANALYZER
           valueFrom:

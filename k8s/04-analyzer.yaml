@@ -41,6 +41,9 @@ data:
   #   → 실험/디버깅 목적으로 활성화 가능
   TREE_RULES_ENABLED: "false"
 
+  LLAMA_MLOCK: "true"
+  ENABLE_TTFT_PROBE: "true"          # ★ 추가
+  OMP_NUM_THREADS_BATCH: "2"         # ★ 추가 (L185가 참조, 미설정 시 OMP_NUM_THREADS로 fallback)
 ---
 # ===========================
 # ServiceAccount (Workload Identity)
@@ -129,6 +132,13 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: EXPERIMENT_CASE
+
+        # ── Experiment (Router/Retriever와 동기화) ───────────────
+        - name: WM_SCHEMA
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: WM_SCHEMA
 
         # ── LLM ─────────────────────────────────────────────────
         - name: LLM_MODEL

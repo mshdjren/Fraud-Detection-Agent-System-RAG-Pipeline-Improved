@@ -1,0 +1,16 @@
+run_id,page_fault_p50,page_fault_p95,page_fault_rate,es_jvm_heap_pct,es_query_cache_mb,mcp_p50_ms,mcp_p95_ms,mcp_calls,mcp_errors,ttft_p50_s,ttft_p95_s,tpot_p50_ms,out_tokens_p50,analyzer_calls,analyzer_parse_err,retriever_p50_ms,retriever_p95_ms,percolate_p50_ms,percolate_p95_ms,top1_dist_p50,agent_rounds_p95,planner_fail_rate,_n_metrics_ok,_n_metrics_total
+a-percolate-v1,,,,,,,,,,,,,,,,,,,,,,,0,22
+a-percolate-v14,,,,,,,,,,,,,,,,,,,,,,,0,22
+a-percolate-v14bucket,,,,,,,,,,,,,,,,,,,,,,,0,22
+b-coreset-cs10,,,,,,,,,,,,,,,,,,,,,,,0,22
+c-quant-bbqos3,,,,,,,,,,,,,,,,,,,,,,,0,22
+c-quant-f32,,,,,,,,,,,,,,,,,,,,,,,0,22
+c-quant-int8os0,,,,,,,,,,,,,,,,,,,,,,,0,22
+c-quant-int8os3,,,,,,,,,,,,,,,,,,,,,,,0,22
+d-hnsw-s0,,,,,,,,,,,,,,,,,,,,,,,0,22
+d-hnsw-s1,,,,,,,,,,,,,,,,,,,,,,,0,22
+d-hnsw-s2,,,,,,,,,,,,,,,,,,,,,,,0,22
+e-numcand-nc50,,,,,,,,,,,,,,,,,,,,,,,0,22
+f-mcp-direct,,,,,,,,,,,,,,,,,,,,,,,0,22
+f-mcp-mcp,,,,,,,,,,,,,,,,,,,,,,,0,22
+f-mcp-mcpnative,,,,,,,,,,,,,,,,,,,,,,,0,22

@@ -46,12 +46,14 @@ from __future__ import annotations
 import os
 import argparse
 from typing import Any, Dict, List, Optional
+from pydantic import ValidationError
 
 import json as _json
 
 import httpx
 import structlog
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings   # ★ 추가
 from mcp.types import TextContent
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -64,6 +66,11 @@ from agent_tools import (
     ENABLE_COMPARE_FEATURES,
     compute_feature_comparison,
 )
+# ★ [V3] 신규 tool 메타 (구버전 agent_tools와의 하위호환 import)
+try:
+    from agent_tools import EXTRA_TOOLS, EXTRA_TOOL_NAMES, RESEARCH_MODE
+except ImportError:                       # legacy agent_tools.py 배포 시
+    EXTRA_TOOLS, EXTRA_TOOL_NAMES, RESEARCH_MODE = [], (), "legacy" 
 
 logger = structlog.get_logger()
 
@@ -80,8 +87,28 @@ _TOOL_META = {t["name"]: t for t in FOLLOWUP_TOOLS}
 # ============================================================
 # FastMCP server — 표준 MCP tool 정의
 # ============================================================
+# ★ [FIX] MCP SDK 의 DNS rebinding 보호 대응.
+#   transport_security=None + host 기본값(127.0.0.1) 이면 SDK 가 보호를
+#   자동 활성화하고 localhost 계열만 허용한다. 클러스터 내부에서
+#   http://agent-tools-mcp:80/mcp 로 붙으면 Host: agent-tools-mcp 가 되어
+#   "Invalid Host header" → 421 Misdirected Request 로 거부된다.
+#   (REST shim /tools/* 는 이 미들웨어를 타지 않아 mcp 모드만 살아 있었다)
+_MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
+_ALLOWED_HOSTS = [h.strip() for h in os.getenv(
+    "MCP_ALLOWED_HOSTS",
+    "agent-tools-mcp:*,agent-tools-mcp.elastic.svc.cluster.local:*,"
+    "localhost:*,127.0.0.1:*,[::1]:*"
+).split(",") if h.strip()]
+
 mcp = FastMCP(
     name="fraudecom-agent-tools",
+    host=_MCP_HOST,                       # ★ 0.0.0.0 명시
+    port=int(os.getenv("MCP_PORT", "8080")),
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_ALLOWED_HOSTS,
+        allowed_origins=["*"],            # 클러스터 내부 호출 — Origin 없음
+    ),
     instructions=(
         "Follow-up retrieval tools for a fraud-detection RAG agent. "
         "Each tool standardizes ONE retrieval pattern (same-cluster expansion, "
@@ -204,6 +231,85 @@ async def reroute_cross_cluster(
                 "_degraded": True, "_error": str(e)}
 
 
+# ── Tool V3-1: verify_global — 전역(무필터) HNSW 검증 ────────────
+@mcp.tool(
+    name="verify_global",
+    description="전역(무필터) HNSW top-k 검색 — cluster 제한이 만든 거리 "
+                "인플레이션(ε)을 교정해 nd의 진짜 하한과 실제 귀속 cluster를 "
+                "확인한다. wm=cm(dominant persona 축 이탈) 시 사용.",
+)
+async def verify_global(
+    top_k: int = 5,
+    embedding: Optional[List[float]] = None,
+    vec_index: Optional[str] = None,
+    transaction: Optional[Dict[str, Any]] = None,
+    agent_hint: Optional[str] = None,
+    # **_ignored: Any,
+    # **kwargs: Any,
+) -> Dict[str, Any]:
+    """cluster_ids=[] → retriever의 기존 전역 검색 경로 재사용 (retriever 무수정)."""
+    _k = max(1, min(20, int(top_k)))
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            resp = await client.post(
+                f"{RETRIEVER_URL}/retrieve",
+                json={"embedding": embedding, "cluster_ids": [],
+                      "vec_index": vec_index, "top_k": _k},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        res = data.get("results", data.get("neighbors", []))
+        return {"top_k": _k, "global": True,
+                "cluster_id": (res[0].get("cluster_id") if res else None),  # 실제 귀속지
+                "top1_distance": data.get("top1_distance"),
+                "neighbors": res,
+                "cluster_persona_summary": data.get("cluster_persona_summary")}
+    except Exception as e:
+        logger.warning("verify_global_retriever_failed", error=str(e))
+        return {"top_k": _k, "global": True, "cluster_id": None,
+                "top1_distance": None, "neighbors": [],
+                "_degraded": True, "_error": str(e)}
+
+
+# ── Tool V3-2: fetch_contrast — 축 고정 대조 증거 1건 ─────────────────
+@mcp.tool(
+    name="fetch_contrast",
+    description="불일치 categorical 축에서 test와 같은 값을 가진 클러스터 내 "
+                "정상 top1을 가져온다 — '같은 프로필의 정상' 인용용 대조 증거 "
+                "(판정 불개입, 감사 주석 강화). wm=ni 보조.",
+)
+async def fetch_contrast(
+    cluster_id: int = -1,
+    axis: str = "",
+    value: str = "",
+    embedding: Optional[List[float]] = None,
+    vec_index: Optional[str] = None,
+    # **_ignored: Any,
+    # **kwargs: Any,
+) -> Dict[str, Any]:
+    """retriever field_filters(V3 신규 파라미터)로 축 고정 top-1 검색."""
+    if not axis:
+        return {"neighbors": [], "_degraded": True, "_error": "no axis"}
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            resp = await client.post(
+                f"{RETRIEVER_URL}/retrieve",
+                json={"embedding": embedding,
+                      "cluster_ids": [int(cluster_id)] if int(cluster_id) >= 0 else [],
+                      "vec_index": vec_index, "top_k": 1,
+                      "field_filters": {axis: value}},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        res = data.get("results", [])
+        return {"axis": axis, "value": value,
+                "contrast_distance": data.get("top1_distance"),
+                "neighbors": res}
+    except Exception as e:
+        logger.warning("fetch_contrast_retriever_failed", error=str(e))
+        return {"axis": axis, "neighbors": [], "_degraded": True, "_error": str(e)}
+
+
 # ── Tool 3: compare_features (Arm 3, ENABLE_COMPARE_FEATURES일 때만 등록) ──
 if ENABLE_COMPARE_FEATURES:
     @mcp.tool(
@@ -244,19 +350,34 @@ if ENABLE_COMPARE_FEATURES:
 @mcp.custom_route("/tools/{tool_name}/call", methods=["POST"])
 async def call_tool_rest(request: Request) -> JSONResponse:
     tool_name = request.path_params["tool_name"]
-    if tool_name not in FOLLOWUP_ACTIONS or tool_name == "accept_verdict":
+    _callable = set(FOLLOWUP_ACTIONS) | set(EXTRA_TOOL_NAMES) | {"verify_global", "fetch_contrast"}
+    if tool_name not in _callable or tool_name == "accept_verdict":
         return JSONResponse({"error": f"unknown or non-callable tool: {tool_name}"},
                              status_code=404)
     payload = await request.json()
     try:
-        # FastMCP의 내부 tool 레지스트리를 통해 호출 — stdio/http 어느
-        # transport로 등록됐는지와 무관하게 동일 경로로 실행된다.
-        # 반환은 SDK 버전에 따라 ContentBlock list(TextContent의 JSON
-        # 직렬화된 .text) 또는 dict(structured content) 둘 다 가능하므로
-        # 양쪽을 모두 plain dict로 풀어 REST 소비자(controller.py)에게 준다.
         result = await mcp.call_tool(tool_name, payload)
         return JSONResponse(_unwrap_tool_result(result))
     except Exception as e:
+        # ★ schema 불일치(payload가 tool signature와 안 맞음)와 tool 본문 실패를
+        #   구분한다. FastMCP는 둘 다 ToolError로 감싸지만 __cause__가 다르다:
+        #     ValidationError -> 호출자(controller) payload 잘못 = 400
+        #     그 외           -> 서버/의존 서비스 문제        = 500
+        #   (verify_global의 **kwargs가 required 필드로 잡혀 매 호출 500이 뜨던
+        #    사고를 로그만 보고 즉시 판별하기 위한 분기)
+        _cause = e.__cause__
+        if isinstance(_cause, ValidationError):
+            logger.error("rest_shim_schema_mismatch", tool=tool_name,
+                         sent_keys=sorted(payload.keys()) if isinstance(payload, dict) else None,
+                         errors=[{"field": ".".join(str(x) for x in d.get("loc", ())),
+                                  "type": d.get("type")} for d in _cause.errors()])
+            return JSONResponse(
+                {"error": "argument schema mismatch", "tool": tool_name,
+                 "detail": [{"field": ".".join(str(x) for x in d.get("loc", ())),
+                             "type": d.get("type"), "msg": d.get("msg")}
+                            for d in _cause.errors()]},
+                status_code=400,
+            )
         logger.error("rest_shim_tool_call_failed", tool=tool_name, error=str(e))
         return JSONResponse({"error": str(e)}, status_code=500)
 

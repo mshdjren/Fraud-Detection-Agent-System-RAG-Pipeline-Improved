@@ -26,6 +26,11 @@ NUMERIC_COLS     = ["purchase_value", "age"]
 CATEGORICAL_COLS = ["sex", "source", "browser", "IP_country",
                     "month_purchase", "weekday_purchase"]
 FEATURE_COLS     = NUMERIC_COLS + CATEGORICAL_COLS
+
+Z_TAU = 1.5
+NI_SPREAD_TAU = 0.05 
+W_CAT = 0.50 
+P_MISS = 0.10
 # ============================================================
 # 런타임 주입 전역 (data_io.load_all → bind_runtime 가 채움)
 # ============================================================
@@ -419,7 +424,7 @@ def set_mode(mode: str):
 
 def build_analyzer_user_prompt(*a, **kw):
     # v2: PROMPT_VERSION 스위치 (set_prompt_version / env PROMPT_VERSION)
-    if globals().get("PROMPT_VERSION", "v1") == "v2":
+    if globals().get("PROMPT_VERSION", "v1") == ("v2", "v3"):
         fn = (build_analyzer_user_prompt_forward_v2 if _MODE == "forward"
               else build_evaluator_user_prompt_v2)
         return fn(*a, **kw)
@@ -482,18 +487,6 @@ def set_agent_keys(k: str):
     assert k in ("1key", "3key")
     AGENT_OUTPUT_KEYS = k
 
-# 3key 출력
-# EVALUATOR_INSTRUCTION_V2 = """Output cls, sufficiency, and (only if insufficient) what_missing.
-# - cls: if confident, follow nd (nd≲0.3→NORMAL, nd≳0.55→ABNORMAL; band may shift);
-#   if ambiguous, nd is unreliable — weigh the CLUSTER FIT table + retrieval.
-# - sufficiency: copy the [SYSTEM-COMPUTED] value.
-# - what_missing: null unless ambiguous; judges RETRIEVAL quality, not the class. "<direction>: <evidence>":
-#     cluster_mismatch      — a numeric [DEVIANT] FIT feature (name+z) → reroute
-#     neighbor_insufficient — name 1-2 features under 'differs' + the neighbor_spread state → expand
-#   Cite from the tables above; never restate the distance.
-# Output ONLY compact JSON:
-# {"cls":"NORMAL|ABNORMAL","sufficiency":"confident|ambiguous","what_missing":"<direction>: <evidence>" or null}"""
-
 # ── [S3] 3-key evaluator instruction — model이 cls/sufficiency/what_missing 전부 출력 ──
 #   (Stage 3 재현용. sufficiency는 [SYSTEM-COMPUTED] 복사, ambiguous cls는 evidence 판단)
 EVALUATOR_INSTRUCTION_V2_3KEY = """Output cls, sufficiency, and (only if insufficient) what_missing.
@@ -516,21 +509,43 @@ Cite 1-2 features with values from the tables above; never restate the distance.
 Output ONLY compact JSON:
 {"what_missing":"<direction>: <evidence>"}"""
 
-# FORWARD_INSTRUCTION_V2 = """Task: classify the transaction as NORMAL or ABNORMAL using the
-# system-computed evidence below.
+# ── [S5/V3] typed 1-key — v2의 "<direction>: <evidence>" 형식에 accept를 더한
+#   3-way. cls/sufficiency는 v2와 동일하게 코드(nd)가 결정 — 모델 자유 출력은
+#   여전히 what_missing 1-key뿐이고, direction 어휘만 {cm, ni, accept}로 교체.
+#   (cm=cluster_mismatch, ni=neighbor_insufficient의 축약 — S5 학습 토큰 절감)
 
-# Guide (nd = normalized distance to nearest retrieved normal):
-#   nd < 0.3            very similar to normal patterns (likely NORMAL)
-#   0.3 <= nd < 0.55    hardest zone — weigh the cluster-fit table carefully
-#   nd >= 0.55          weak similarity (potentially ABNORMAL)
+# EVALUATOR_INSTRUCTION_V3 = """Judge the RETRIEVAL quality below and state what is missing.
+# Format "<direction>: <evidence> — <rationale>", direction is exactly one of:
+#   cluster_mismatch     — a FIT feature tagged [DEVIANT], or a PERSONA DOMINANCE feature
+#            tagged [RARE] (name+value) → this transaction may be routed to the wrong
+#            persona cluster (NOT itself a fraud signal; triggers re-routing)
+#   neighbor_insufficient — RETRIEVAL shows [spread] AND at least 2 features under
+#            'differs'. Cite the differing features with the HIGHEST dom(...) value
+#            in PERSONA DOMINANCE, at most 2.
+#   accept — no [DEVIANT] and no [RARE], and neighbors are [dense] or fewer than 2
+#            features differ → no actionable retrieval defect. Cite an in-range
+#            feature (name+z, e.g. 'purchase_value z=+0.3') or a [match] feature.
+# evidence: cite 1-3 feature names with values from the tables above; never restate 
+# the distance. Cite ALL features that qualify, up to 3.
+# Output ONLY compact JSON:
+# {"what_missing":"<direction>: <evidence> — <rationale>"}"""
 
-# - reasoning: THE SINGLE MOST DECISIVE feature from the tables below with its
-#   value/z (nd may be cited as secondary evidence). <=25 words. Never vague
-#   phrases like "close to cluster range" without a named value.
-# - confidence: 0-100 integer reflecting how decisive the evidence is.
+EVALUATOR_INSTRUCTION_V3 = """Judge the RETRIEVAL quality below and state what is missing.
+Format "<direction>: <evidence> — <rationale>", direction is exactly one of:
+  cluster_mismatch     — a FIT feature tagged [DEVIANT], or a PERSONA DOMINANCE feature
+           tagged [RARE] (name+value) → this transaction may be routed to the wrong
+           persona cluster (NOT itself a fraud signal; triggers re-routing)
+  neighbor_insufficient — RETRIEVAL shows [spread] AND at least 2 features under
+           'differs'. Cite the differing features with the HIGHEST dom(...) value
+           in PERSONA DOMINANCE, at most 2.
+  accept — no [DEVIANT] and no [RARE], and neighbors are [dense] or fewer than 2
+           features differ. Cite ONE in-range numeric (name+z) AND, when a
+           PERSONA DOMINANCE feature is tagged [match], cite that too.
+evidence: cite 1-3 feature names with values from the tables above; never restate 
+the distance. Cite ALL features that qualify, up to 3.
+Output ONLY compact JSON:
+{"what_missing":"<direction>: <evidence> — <rationale>"}"""
 
-# Output ONLY compact JSON (no markdown):
-# {"cls":"NORMAL|ABNORMAL","confidence":<0-100 integer>,"reasoning":"..."}"""
 FORWARD_INSTRUCTION_V2 = """Classify the transaction as NORMAL or ABNORMAL using the system-computed evidence below.
 - cls: follow nd (nd≲0.3→NORMAL, nd≳0.55→ABNORMAL; band may shift).
 - reasoning: cite THE SINGLE MOST DECISIVE feature from the tables below with its value/z
@@ -542,9 +557,10 @@ Output ONLY compact JSON (no markdown):
 {"cls":"NORMAL|ABNORMAL","confidence":<0-100 integer>,"reasoning":"..."}"""
 
 def format_cluster_fit(test_features: Dict, persona: Optional[Dict],
-                       z_tau: float = 1.0) -> str:
+                       z_tau: float = None) -> str:
     """수치형 z 사전계산표 — persona가 numeric 한정인 결정과 정합.
     (categorical 적합 증거는 format_retrieval_digest의 합의 라인이 담당)"""
+    z_tau = Z_TAU if z_tau is None else z_tau
     nst = (persona or {}).get("numeric_stats") or {}
     lines = []
     for col in NUMERIC_COLS:
@@ -559,99 +575,72 @@ def format_cluster_fit(test_features: Dict, persona: Optional[Dict],
     return "\n".join(lines) if lines else "  (no cluster profile)"
 
 
-# def format_retrieval_digest(distances: List[float],
-#                             test_features: Dict,
-#                             top1_feats: Optional[Dict] = None,
-#                             plateau_tau: float = 0.142) -> str:
-#     """이웃 원시 덤프 대체 — nd/plateau 수치 + top-1 categorical 합의 1줄.
-#     top1_feats 부재(서빙 retriever가 feature 미반환) 시 거리 라인만 출력."""
-#     if not distances:
-#         return "No retrieved results."
-#     d = sorted(float(x) for x in distances if x != float("inf"))
-#     nd = normalize_dist(d[0])
-#     line1 = f"nd(top1)={nd:.2f} [{dist_tag(d[0])}]"
-#     if len(d) >= 3 and d[0] > 0:
-#         plateau = (d[min(4, len(d) - 1)] - d[0]) / d[0]
-#         line1 += f" | plateau={plateau:.2f} [{'dense' if plateau <= plateau_tau else 'spread'}]"
-#     lines = [line1]
-#     if top1_feats:
-#         agrees, differs = [], []
-#         for c in CATEGORICAL_COLS:
-#             tv, nv = test_features.get(c), top1_feats.get(c)
-#             if tv is None or nv is None:
-#                 continue
-#             (agrees if str(tv) == str(nv) else differs).append(c)
-#         lines.append(f"top-1 agrees: {', '.join(agrees) or '(none)'}"
-#                      f" | differs: {', '.join(differs) or '(none)'}")
-#     return "\n".join(lines)
-
-def format_retrieval_digest(distances, test_features, topk_feats=None, plateau_tau=0.142):
+def format_retrieval_digest(distances, test_features, topk_feats=None, spread_tau=None):
     if not distances: return "No retrieved results."
     d = sorted(float(x) for x in distances if x != float("inf"))
-    line1 = f"nd(top1)={normalize_dist(d[0]):.2f} [{dist_tag(d[0])}]"
-    # if len(d) >= 3 and d[0] > 0:
-    #     pl = (d[min(4,len(d)-1)] - d[0]) / d[0]
-    #     line1 += f" | plateau={pl:.2f} [{'dense' if pl<=plateau_tau else 'spread'}]"
+    line1 = f"nd(top1)={normalize_dist(d[0]):.2f}"
+    spread_tau = NI_SPREAD_TAU if spread_tau is None else spread_tau
     if len(d) >= 3 and d[0] > 0:
-        pl = (d[min(4,len(d)-1)] - d[0]) / d[0]
-        line1 += f" | neighbor_spread={pl:.2f} [{'dense' if pl<=plateau_tau else 'spread'}]"    
+        # pl = (d[min(4,len(d)-1)] - d[0]) / d[0]
+        # line1 += f" | neighbor_spread={pl:.2f} [{'dense' if pl<=spread_tau else 'spread'}]"
+        sp = float(np.std(d[:3])) if len(d)>=2 else 0.0
+        line1 += f" | neighbor_spread={sp:.3f} [{'spread' if sp>=spread_tau else 'dense'}]"    
     lines = [line1]
     feats = [f for f in (topk_feats or []) if f]
     if feats:
-        k = len(feats); agr, dif = [], []
+        # k = len(feats)
+        agr, dif = [], []
         for c in CATEGORICAL_COLS:
             tv = test_features.get(c)
             if tv is None: continue
             votes = [f.get(c) for f in feats if f.get(c) is not None]
             if not votes: continue
             nm = sum(str(tv) == str(v) for v in votes)
-            (agr if nm*2 >= len(votes) else dif).append(f"{c}({nm}/{len(votes)})")
-        lines.append(f"top-{k} agrees: {', '.join(agr) or '(none)'} | differs: {', '.join(dif) or '(none)'}")
+            (agr if nm*2 >= len(votes) else dif).append(c)
+        lines.append(f"agrees: {', '.join(agr) or '(none)'} | differs: {', '.join(dif) or '(none)'}")
+        # lines.append(f"top-{k} agrees: {', '.join(agr) or '(none)'} | differs: {', '.join(dif) or '(none)'}")
+    else:
+        lines.append("agrees: (unavailable) | differs: (unavailable)")
     return "\n".join(lines)
 
+def format_persona_dominance(test_features: Dict, persona: Optional[Dict]) -> str:
+    """GT의 categorical 게이트/순위 키를 프롬프트에 노출.
+       cm(cat) : frequency >= W_CAT AND p(value) < P_MISS
+       ni      : frequency 내림차순이 axes 우선순위
+       accept  : value == dominant"""
+    node = (persona or {}).get("categorical_distribution") or {}
+    rows = []
+    for c in CATEGORICAL_COLS:
+        nd_ = node.get(c)
+        if not nd_:
+            continue
+        fr = float(nd_.get("frequency", 0.0))
+        dist = nd_.get("distribution") or {}
+        tot = sum(float(v) for v in dist.values()) or 1.0
+        p = float(dist.get(str(test_features.get(c)), 0)) / tot
+        tag = ("RARE" if (fr >= W_CAT and p < P_MISS)
+               else "match" if str(test_features.get(c)) == str(nd_.get("dominant"))
+               else "ok")
+        # rows.append(f"  - {c}: dom={nd_.get('dominant')}({fr:.2f}), test_p={p:.2f} [{tag}]")
+        rows.append(f"  - {c}: dom={nd_.get('dominant')}({fr:.2f}) [{tag}]")
+    return "\n".join(rows) if rows else "  (no categorical profile)"
 
-def _build_v2(instruction: str, test_features: Dict, cluster_id,
-              distances: List[float], persona: Optional[Dict],
-              topk_feats: Optional[Dict]) -> str:
-    """[정적 instruction 선두][가변 블록 후미] — KV prefix cache 정합 레이아웃."""
+# ── ⑥ : _build_v2 ────────────────────────────────────────────────────
+def _build_v2(instruction, test_features, cluster_id, distances, persona, topk_feats):
+    _v3 = (PROMPT_VERSION == "v3")
+    # ★ 삼항 연산자를 f-string 나열 안에 두면 리터럴 결합이 먼저 묶여 블록이 소실됨
+    fit_hdr = ("## CLUSTER FIT (z vs persona)" if _v3
+               else f"## CLUSTER #{cluster_id} FIT (z vs profile)")
     return (
         f"{instruction}\n\n"
         f"## TEST\n{format_transaction(test_features)}\n\n"
-        f"## CLUSTER #{cluster_id} FIT (z vs profile)\n"
+        f"{fit_hdr}\n"
         f"{format_cluster_fit(test_features, persona)}\n\n"
+        f"## PERSONA DOMINANCE (categorical)\n"
+        f"{format_persona_dominance(test_features, persona)}\n\n"
         f"## RETRIEVAL\n"
         f"{format_retrieval_digest(distances, test_features, topk_feats)}"
     )
-
-
-# def build_evaluator_user_prompt_v2(test_features: Dict, cluster_id,
-#                                    top5_orig_indices: List[int],
-#                                    distances: List[float],
-#                                    persona: Optional[Dict] = None,
-#                                    top1_feats: Optional[Dict] = None) -> str:
-#     """오프라인(NB): coreset_feature_map으로 top-1 feature 자동 해석.
-#     서빙: top1_feats를 직접 전달(local_analyzer가 retriever 결과에서 추출)."""
-#     if top1_feats is None and top5_orig_indices:
-#         try:
-#             top1_feats = coreset_feature_map.get(int(top5_orig_indices[0]))
-#         except (NameError, TypeError):
-#             top1_feats = None
-#     return _build_v2(EVALUATOR_INSTRUCTION_V2, test_features, cluster_id,
-#                      distances, persona, top1_feats)
-
-
-# def build_analyzer_user_prompt_forward_v2(test_features: Dict, cluster_id,
-#                                           top5_orig_indices: List[int],
-#                                           distances: List[float],
-#                                           persona: Optional[Dict] = None,
-#                                           top1_feats: Optional[Dict] = None) -> str:
-#     if top1_feats is None and top5_orig_indices:
-#         try:
-#             top1_feats = coreset_feature_map.get(int(top5_orig_indices[0]))
-#         except (NameError, TypeError):
-#             top1_feats = None
-#     return _build_v2(FORWARD_INSTRUCTION_V2, test_features, cluster_id,
-#                      distances, persona, top1_feats)
 
 def build_evaluator_user_prompt_v2(test_features: Dict, cluster_id,
                                    top5_orig_indices: List[int],
@@ -665,7 +654,8 @@ def build_evaluator_user_prompt_v2(test_features: Dict, cluster_id,
             topk_feats = [coreset_feature_map.get(int(i)) for i in top5_orig_indices[:3]]
         except (NameError, TypeError):
             topk_feats = None
-    _instr = (EVALUATOR_INSTRUCTION_V2_3KEY if AGENT_OUTPUT_KEYS == "3key"
+    _instr = (EVALUATOR_INSTRUCTION_V3 if PROMPT_VERSION == "v3"   # ★ S5 typed 1-key
+              else EVALUATOR_INSTRUCTION_V2_3KEY if AGENT_OUTPUT_KEYS == "3key"
               else EVALUATOR_INSTRUCTION_V2)          # ★ S3/S4 스위치
     return _build_v2(_instr, test_features, cluster_id,
                      distances, persona, topk_feats)
@@ -682,4 +672,3 @@ def build_analyzer_user_prompt_forward_v2(test_features: Dict, cluster_id,
             topk_feats = None
     return _build_v2(FORWARD_INSTRUCTION_V2, test_features, cluster_id,
                      distances, persona, topk_feats)
-

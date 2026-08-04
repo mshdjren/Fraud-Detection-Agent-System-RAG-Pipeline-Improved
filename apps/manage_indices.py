@@ -855,6 +855,117 @@ def check_shard_distribution(pattern: str):
 # CLI
 # ===========================
 
+def dump_stats(pattern: str = "fraud_ecom_*", out_path: str = None):
+    """[EXP] 인덱스별 store/segments/docs 를 JSONL 로 출력.
+
+    ingest Job 로그 캡처가 실패했을 때의 복구 경로다. experiments 하네스의
+    results/index/<id>/index_stats.jsonl 과 동일 스키마를 낸다.
+    """
+    _QBYTES = {"f32": 4.0, "hnsw": 4.0, "int8_hnsw": 1.0,
+               "int4_hnsw": 0.5, "bbq_hnsw": 0.125}
+    es.indices.refresh(index=pattern, ignore_unavailable=True)
+    st = es.indices.stats(index=pattern, metric="store,segments,docs")
+    rows = []
+    for name, blk in sorted(st["indices"].items()):
+        tot = blk["total"]
+        n = tot["docs"]["count"]
+        # 인덱스명 suffix 에서 quant/m/ef 복원: ..._cluster_tree_vec_{quant}_m{M}ef{E}
+        quant, m, ef = None, 16, 100
+        if "_cluster_tree_vec_" in name:
+            suf = name.split("_cluster_tree_vec_", 1)[1]
+            if "_m" in suf:
+                quant, mef = suf.rsplit("_m", 1)
+                try:
+                    m, ef = int(mef.split("ef")[0]), int(mef.split("ef")[1])
+                except (ValueError, IndexError):
+                    pass
+        bpe = _QBYTES.get(quant or "f32", 4.0)
+        dims = 576
+        ws = int(n * dims * bpe + n * m * 2 * 4) if quant else None
+        rec = {
+            "index": name, "docs": n,
+            "store_mb": round(tot["store"]["size_in_bytes"] / 2**20, 1),
+            "segments": tot["segments"]["count"],
+            "vec_quant": quant, "hnsw_m": m, "hnsw_ef_construction": ef,
+        }
+        if ws is not None:
+            rec["vector_working_set_mb"] = round(ws / 2**20, 1)
+        rows.append(rec)
+    text = "\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+        print(f"✅ {len(rows)} rows → {out_path}")
+    else:
+        print(text)
+    return rows
+
+
+def show_meta(index_name: str):
+    """[EXP] 인덱스 _meta 확인. bucket_config / vec_quant / hnsw 파라미터 검증용.
+
+    router.py 는 ENABLE_BUCKETIZATION=true 일 때 percolator _meta.bucket_config
+    가 없으면 기동 중 raise 한다. 그 전에 여기서 확인한다.
+    """
+    m = es.indices.get_mapping(index=index_name)
+    meta = m[index_name]["mappings"].get("_meta", {})
+    print(f"\n{'='*70}\n_meta of {index_name}\n{'='*70}")
+    if not meta:
+        print("  (없음)")
+    else:
+        for k, v in meta.items():
+            sv = json.dumps(v, ensure_ascii=False)
+            print(f"  {k:24}: {sv[:160]}{'...' if len(sv) > 160 else ''}")
+    print(f"\n  bucket_config : {'✅ 있음' if 'bucket_config' in meta else '❌ 없음'}")
+    if "bucket_config" in meta:
+        bc = meta["bucket_config"]
+        feats = list(bc.keys()) if isinstance(bc, dict) else []
+        print(f"  bucket features ({len(feats)}): {feats[:12]}")
+    # 샤드 설정도 함께
+    try:
+        stg = es.indices.get_settings(index=index_name)[index_name]["settings"]["index"]
+        print(f"  shards/replicas: {stg.get('number_of_shards')}/{stg.get('number_of_replicas')}"
+              f"  preload={stg.get('store', {}).get('preload')}")
+    except Exception:
+        pass
+    return meta
+
+
+def delete_orphan_percolators(dry_run: bool = False):
+    """[EXP] 버전이 비어 있는 고아 percolator 삭제.
+
+    fraud_ecom_{case}__tree_rules_percolator (밑줄 2개, docs=0) 형태.
+    ingest 시 VERSIONS="" 로 percolator 적재를 건너뛰려 했으나 빈 문자열이
+    인덱스명에 그대로 들어가 만들어진 빈 인덱스다.
+    """
+    targets = []
+    for name in sorted(es.indices.get_alias(index="fraud_ecom_*").keys()):
+        if not is_percolator_index(name):
+            continue
+        if "__tree_rules_percolator" in name or detect_version(name) is None:
+            try:
+                cnt = es.count(index=name)["count"]
+            except Exception:
+                cnt = -1
+            targets.append((name, cnt))
+    if not targets:
+        print("✅ 고아 percolator 없음")
+        return []
+    print(f"\n고아 percolator {len(targets)}개:")
+    for n, c in targets:
+        print(f"  - {n}  (docs={c})")
+    if dry_run:
+        print("\n[dry-run] 삭제하지 않음")
+        return [n for n, _ in targets]
+    for n, c in targets:
+        if c > 0:
+            print(f"  ⚠ skip {n} — docs={c} (비어있지 않음, 수동 확인 필요)")
+            continue
+        es.indices.delete(index=n)
+        print(f"  🗑 deleted {n}")
+    return [n for n, _ in targets]
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="ES Index Manager V5.0",
@@ -917,7 +1028,9 @@ Examples:
         choices=[
             "list", "inspect", "test",
             "compare-versions", "compare",
-            "delete-all", "delete-vec", "delete-aug", "delete-percolator"
+            "delete-all", "delete-vec", "delete-aug", "delete-percolator",
+            # ★ [EXP] 실험 하네스 연계 명령
+            "stats", "meta", "delete-orphan", "check-shards",
         ],
         help="Command to execute"
     )
@@ -936,6 +1049,7 @@ Examples:
                         help="삭제 명령: 실제 삭제 없이 대상 목록만 출력")
 
     parser.add_argument("--check-shards", action="store_true", help="인덱스 샤드 분산 현황 확인 (Distributed 모드 검증)")
+    parser.add_argument("--out", "-o", help="stats: JSONL 출력 파일 경로")
 
 
     args = parser.parse_args()
@@ -963,6 +1077,20 @@ Examples:
 
         elif args.command == "compare":
             compare_cases(args.pattern)
+
+        elif args.command == "stats":
+            dump_stats(args.pattern, args.out)
+
+        elif args.command == "meta":
+            if not args.index:
+                print("❌ --index required"); return
+            show_meta(args.index)
+
+        elif args.command == "delete-orphan":
+            delete_orphan_percolators(dry_run=args.dry_run)
+
+        elif args.command == "check-shards":
+            check_shard_distribution(args.pattern)
 
         elif args.command == "delete-all":
             delete_all(dry_run=args.dry_run)

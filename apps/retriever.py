@@ -29,7 +29,7 @@ import time
 import numpy as np
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from elasticsearch import Elasticsearch
 import structlog
 import asyncio
@@ -45,12 +45,27 @@ ES_URL           = os.getenv("ES_URL")
 PASSWORD         = os.getenv("PASSWORD")
 SEARCH_MODE = os.getenv("SEARCH_MODE", "exact")   # "exact" | "hnsw"
 KNN_CANDIDATES   = int(os.getenv("KNN_NUM_CANDIDATES", "100"))
-TOP_K            = int(os.getenv("TOP_K", "5"))
+# TOP_K            = int(os.getenv("TOP_K", "5"))
 REQUEST_TIMEOUT  = int(os.getenv("ES_REQUEST_TIMEOUT", "30"))
 EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "baseline")  # Prometheus label / locust 연동용
 
 # ★ SKIP_ANALYZER=true: cluster_id filter 제거 → 전체 인덱스 순수 vec 검색
 SKIP_ANALYZER = os.getenv("SKIP_ANALYZER", "false").lower() == "true"
+
+RUN_ID = os.getenv("RUN_ID", EXPERIMENT_LABEL)
+# ★ ES 8.18 rescore_vector — 양자화 후보를 원본 float32로 재채점
+#   >1.0 일 때만 블록을 붙인다 (f32 인덱스에는 불필요)
+RETRIEVER_OVERSAMPLE = float(os.getenv("RETRIEVER_OVERSAMPLE", "0"))
+
+# ── 이웃 feature 반환 (analyzer의 agrees/differs 라인에 필수) ──
+#   미포함 시 prompts.format_retrieval_digest가 agrees/differs 줄을 통째로
+#   생략하여 neighbor_insufficient 판정이 구조적으로 불가능해진다.
+_FEATURE_COLS = [c.strip() for c in os.getenv(
+    "RETRIEVER_FEATURE_COLS",
+    "purchase_value,age,sex,source,browser,IP_country,month_purchase,weekday_purchase"
+).split(",") if c.strip()]
+_SOURCE_FIELDS = ["original_index", "cluster_id"] + _FEATURE_COLS
+FAISS_CANDIDATE_SIZE = int(os.getenv("FAISS_CANDIDATE_SIZE", "10000"))
 
 client = Elasticsearch(
     [ES_URL], verify_certs=False, ssl_show_warn=False,
@@ -79,11 +94,17 @@ es_query_cache_bytes = Gauge("retriever_es_query_cache_bytes", "ES query cache m
 
 es_jvm_heap_percent  = Gauge("retriever_es_jvm_heap_percent",  "ES JVM heap used percent (max across nodes)")
 
+es_index_store_bytes = Gauge(
+    "retriever_es_index_store_bytes", "ES index store size bytes", ["index_name"])
+es_index_segments = Gauge(
+    "retriever_es_index_segments", "ES index segment count", ["index_name"])
+
 top1_distance = Histogram(
-    "retriever_top1_distance", "Top-1 cosine distance distribution",
+    "retriever_top1_distance", "Top-1 raw L2 distance distribution",
     ["index_name", "experiment_label"],
-    buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
+    buckets=[0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.5, 3.0, 4.0]
 )
+
 skip_analyzer_search_counter = Counter(
     "retriever_skip_analyzer_total", "retriever_skip_analyzer_total_count",  ['index_name', 'experiment_label'] 
 )
@@ -129,6 +150,12 @@ def update_es_node_stats():
         es_fielddata_bytes.set(total_fd)
         es_query_cache_bytes.set(total_qc)
         es_jvm_heap_percent.set(max_heap_pct)  # ★
+        istats = client.indices.stats(index="fraud_ecom_*", metric="store,segments")
+        for _idx, _s in istats.get("indices", {}).items():
+            es_index_store_bytes.labels(index_name=_idx).set(
+                _s["total"]["store"]["size_in_bytes"])
+            es_index_segments.labels(index_name=_idx).set(
+                _s["total"]["segments"]["count"])
     except Exception:
         pass
 
@@ -141,7 +168,8 @@ class RetrieveRequest(BaseModel):
                                   # SKIP_ANALYZER=true 시 빈 리스트([]) 허용 → 전체 검색
     vec_index:   str              # router가 결정한 인덱스명
     top_k:       int = 3   # ★ 기본 inference top-k=3 (expand 시 controller가 5로 요청)
-
+    field_filters: Optional[Dict[str, str]] = None   # ★ [V3] contrast용 축 고정 필터
+                                                      #   {categorical_field: value} → term 필터
 
 class SearchResult(BaseModel):
     es_doc_id:      str
@@ -149,7 +177,7 @@ class SearchResult(BaseModel):
     cluster_id:     int
     distance:       float
     score:          float
-
+    features:       Optional[Dict[str, Any]] = None   # ★ 이웃 원본 feature
 
 class RetrieveResponse(BaseModel):
     results:         List[SearchResult]
@@ -206,7 +234,7 @@ def _exact_knn_query(embedding: List[float], cluster_ids: List[int], k: int) -> 
                 }
             }
         },
-        "_source": ["original_index", "cluster_id"],
+        "_source": _SOURCE_FIELDS,
     }
 
 
@@ -224,14 +252,17 @@ def _hnsw_query(embedding: List[float], cluster_ids: List[int], k: int) -> dict:
             "k":               k,
             "num_candidates":  KNN_CANDIDATES,
         },
-        "_source": ["original_index", "cluster_id"],
+        "_source": _SOURCE_FIELDS,
     }
 
     # cluster_ids 비면 filter key 자체 생략 → 전체 인덱스 HNSW 탐색
-
+    # ★ [EXP] ES 8.18 rescore — 양자화 인덱스에서 nd 캘리브레이션(P50/IQR) 보존
+    if RETRIEVER_OVERSAMPLE > 1.0:
+        body["knn"]["rescore_vector"] = {"oversample": RETRIEVER_OVERSAMPLE}
     return body
 
-def _hnsw_with_filter_query(embedding: List[float], cluster_ids: List[int], k: int) -> dict:
+def _hnsw_with_filter_query(embedding: List[float], cluster_ids: List[int], k: int
+                            ,field_filters: Optional[Dict[str, str]] = None) -> dict:
     """
     ES 8.x 이상에서 권장하는 'Filter 내장형 HNSW' (Pre-filtering)
     탐색 효율(logN)과 라우팅 정확도를 동시에 확보하는 가장 적합한 방식
@@ -248,57 +279,87 @@ def _hnsw_with_filter_query(embedding: List[float], cluster_ids: List[int], k: i
                 "terms": {"cluster_id": cluster_ids}
             } if cluster_ids else None
         },
-        "_source": ["original_index", "cluster_id"],
+        "_source": _SOURCE_FIELDS,
     }
-    # None인 필드는 삭제하여 전달
-    if not body["knn"]["filter"]:
-        del body["knn"]["filter"]
-        
+    # ★ cluster_ids term + [V3] field_filters term을 bool.filter로 병합
+    _filters = []
+    if cluster_ids:
+        _filters.append({"terms": {"cluster_id": cluster_ids}})
+    if field_filters:
+        for _f, _v in field_filters.items():
+            _filters.append({"term": {_f: _v}})   # categorical 축 고정 (같은 프로필)
+    if _filters:
+        body["knn"]["filter"] = {"bool": {"filter": _filters}}
+    else:
+        body["knn"].pop("filter", None)
+
+    # ★ [EXP] ES 8.18 rescore — 양자화 인덱스에서 nd 캘리브레이션(P50/IQR) 보존
+    if RETRIEVER_OVERSAMPLE > 1.0:
+        body["knn"]["rescore_vector"] = {"oversample": RETRIEVER_OVERSAMPLE}
     return body
 
-
-def _faiss_knn_query(embedding: List[float], cluster_ids: List[int], vec_index: str, k: int, routing_param: str) -> dict:
+def _faiss_knn_query(embedding: List[float], cluster_ids: List[int],
+                     vec_index: str, k: int, routing_param: str) -> List[SearchResult]:
     """
     Step 1: ES에서 cluster_id 필터링된 후보 벡터(vec)와 ID를 Fetch
+
+    ★ 전제: 인덱스 매핑에 `_source.excludes: ["vec"]`가 없어야 한다.
+      ingest_tree_pipeline.gen_mapping_raw_vec()이 기본으로 vec를 _source에서
+      제외하므로, 그 상태로 적재된 인덱스에서는 이 모드를 쓸 수 없다
+      (쿼리의 _source 필터는 저장되지 않은 필드를 복원하지 못한다).
+      → SEARCH_MODE=hnsw_filtered 를 쓰거나, exclude 없이 재적재할 것.
     """
-    # 576차원 벡터 전수를 가져오기 위해 size를 넉넉히 설정 (필터링된 클러스터 내 데이터 수)
     candidate_query = {
-        "size": 10000, 
+        "size": FAISS_CANDIDATE_SIZE,
         "query": {"terms": {"cluster_id": cluster_ids}} if cluster_ids else {"match_all": {}},
-        "_source": ["vec", "original_index", "cluster_id"]
+        "_source": _SOURCE_FIELDS + ["vec"],      # vec는 저장되어 있을 때만 반환됨
     }
-    
-    res = client.search(index=vec_index, body=candidate_query, routing=routing_param)
+
+    res  = client.search(index=vec_index, body=candidate_query, routing=routing_param)
     hits = res["hits"]["hits"]
-    
     if not hits:
         return []
 
-    # Step 2: FAISS 전용 행렬(Numpy)로 변환
-    node_vectors = np.array([hit["_source"]["vec"] for hit in hits]).astype('float32')
-    query_vector = np.array([embedding]).astype('float32')
+    # ★ [가드] Step 2 진입 전에 vec 존재를 확인 — 여기서 걸러야 KeyError가 안 난다
+    if "vec" not in (hits[0].get("_source") or {}):
+        logger.error("faiss_vec_unavailable", index=vec_index,
+                     source_keys=sorted((hits[0].get("_source") or {}).keys()))
+        raise HTTPException(
+            status_code=501,
+            detail=("SEARCH_MODE=faiss requires 'vec' in _source, but this index "
+                    "excludes it (mapping _source.excludes). "
+                    "Use SEARCH_MODE=hnsw_filtered, or re-ingest without the exclude."))
 
-    # Step 3: FAISS Exact KNN (IndexFlatL2) 수행
-    # SIMD 최적화가 적용된 물리적 연산 구간
+    # Step 2: FAISS 전용 행렬(Numpy)로 변환
+    node_vectors = np.asarray([h["_source"]["vec"] for h in hits], dtype="float32")
+    query_vector = np.asarray([embedding], dtype="float32")
+
+    # Step 3: FAISS Exact KNN (IndexFlatL2) — 반환 distance는 squared L2
     dim = len(embedding)
+    if node_vectors.shape[1] != dim:
+        raise HTTPException(status_code=500,
+            detail=f"vector dim mismatch: index={node_vectors.shape[1]} query={dim}")
     index = faiss.IndexFlatL2(dim)
     index.add(node_vectors)
-    distances, indices = index.search(query_vector, k)
+    distances, indices = index.search(query_vector, min(k, len(hits)))
 
-    # Step 4: 결과를 ES 결과 형식과 호환되도록 역산 및 재구성
-    results = []
+    # Step 4: SearchResult로 재구성
+    #   score = 1/(1+d_sq) → _parse_es_hits의 역산 sqrt(1/score - 1) = L2 와 정합
+    results: List[SearchResult] = []
     for i, idx in enumerate(indices[0]):
-        if idx == -1: continue
-        hit = hits[idx]
-        d = float(distances[0][i])
-        # ES score와 유사하게 1/(1+d) 형태로 변환 (선택 사항)
-        score = 1.0 / (1.0 + d) 
+        if idx == -1:
+            continue
+        hit = hits[int(idx)]
+        src = hit["_source"]                       # ★ 누락되어 있던 정의
+        d_sq = float(distances[0][i])
         results.append(SearchResult(
-            es_doc_id=hit["_id"],
-            original_index=int(hit["_source"]["original_index"]),
-            cluster_id=int(hit["_source"]["cluster_id"]),
-            distance=np.sqrt(d), # L2 distance
-            score=score
+            es_doc_id=      hit["_id"],
+            original_index= int(src.get("original_index", -1)),
+            cluster_id=     int(src.get("cluster_id", -1)),
+            distance=       float(np.sqrt(d_sq)),
+            score=          1.0 / (1.0 + d_sq),
+            features={_c: src.get(_c) for _c in _FEATURE_COLS   # ★ k 섀도잉 회피
+                      if src.get(_c) is not None},
         ))
     return results
 
@@ -317,6 +378,7 @@ def _parse_es_hits(hits: List[dict]) -> List[SearchResult]:
             cluster_id=     int(src.get("cluster_id", -1)),
             distance=       dist,
             score=          score,
+            features=       {k: src.get(k) for k in _FEATURE_COLS if src.get(k) is not None},
         ))
     return parsed_results
 
@@ -328,6 +390,7 @@ def search(
     cluster_ids: List[int],
     vec_index:   str,
     k:           int,
+    field_filters: Optional[Dict[str, str]] = None,   # ★ [V3] contrast 축 고정
 ) -> RetrieveResponse:
     global _req_count
 
@@ -358,7 +421,7 @@ def search(
             
             elif SEARCH_MODE == "hnsw_filtered":
                 # Case 1-1: Filter 내장형 HNSW (Pre-filtering)
-                body = _hnsw_with_filter_query(embedding, cluster_ids, k)
+                body = _hnsw_with_filter_query(embedding, cluster_ids, k, field_filters)
                 res = client.search(index=vec_index, body=body, routing=routing_param)
                 results = _parse_es_hits(res["hits"]["hits"])
             
@@ -445,6 +508,7 @@ async def retrieve(req: RetrieveRequest):
         req.cluster_ids,
         req.vec_index,
         req.top_k,
+        req.field_filters,      # ★ [V3] contrast 축 고정 필터
     )
 
 @app.post("/retrieve-batch")

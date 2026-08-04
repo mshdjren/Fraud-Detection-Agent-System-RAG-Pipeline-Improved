@@ -1,0 +1,408 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingest-bbq
+  namespace: elastic
+  labels:
+    app: ingest-tree-pipeline-pca64-k100
+    version: v4.5
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: ingest-tree-pipeline-pca64-k100
+        version: v4.5
+    spec:
+      serviceAccountName: ingest-sa
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values:
+                - batch-node
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: anomaly-orchestrator
+              topologyKey: kubernetes.io/hostname
+      restartPolicy: Never
+      initContainers:
+      - name: download-artifacts
+        image: google/cloud-sdk:slim
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: CORESET_PERCENTAGES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_PERCENTAGES
+        - name: GCS_EMB_BASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GCS_EMB_BASE
+        - name: GCS_EMB_FILENAME_PREFIX
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GCS_EMB_FILENAME_PREFIX
+        - name: EMB_DATA_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EMB_DATA_DIR
+        - name: GCS_TREE_BASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GCS_TREE_BASE
+        - name: CORESET_PARQUET_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_PARQUET_DIR
+        - name: SKIP_RAW_VEC
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_RAW_VEC
+        - name: ENABLE_BUCKETIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ENABLE_BUCKETIZATION
+        - name: BUCKET_DEPTH_PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: BUCKET_DEPTH_PCT
+        command:
+        - bash
+        - -lc
+        args:
+        - "set -euo pipefail\n\necho \"[init] ==================================================\"\
+          \necho \"[init] ingest-tree-pipeline V4.5 — GCS Download\"\necho \"[init]\
+          \ EXPERIMENT_CASE     : ${EXPERIMENT_CASE}\"\necho \"[init] CORESET_PERCENTAGES\
+          \ : ${CORESET_PERCENTAGES}\"\necho \"[init] GCS_EMB_BASE        : ${GCS_EMB_BASE}\"\
+          \necho \"[init] GCS_TREE_BASE       : ${GCS_TREE_BASE}\"\necho \"[init]\
+          \ EMB_DATA_DIR        : ${EMB_DATA_DIR}\"\necho \"[init] CORESET_PARQUET_DIR\
+          \ : ${CORESET_PARQUET_DIR}\"\necho \"[init] SKIP_RAW_VEC        : ${SKIP_RAW_VEC}\"\
+          \necho \"[init] ==================================================\"\n\n\
+          # mkdir -p \"${EMB_DATA_DIR}\" \"${CORESET_PARQUET_DIR}\" \\\n#        \
+          \  \"/data/tree_artifacts/${EXPERIMENT_CASE}\"\n\nmkdir -p \"${EMB_DATA_DIR}\"\
+          \ \"${CORESET_PARQUET_DIR}\" \\\n        \"${CORESET_PARQUET_DIR}/${EXPERIMENT_CASE}\"\
+          \ \\\n        \"/data/tree_artifacts/${EXPERIMENT_CASE}\"\n\nIFS=',' read\
+          \ -ra PCTS <<< \"${CORESET_PERCENTAGES}\"\ntotal_pcts=${#PCTS[@]}\npct_idx=0\n\
+          \n# ── 1. Coreset 임베딩 (percentage별) ─────────────────────\nif [ \"${SKIP_RAW_VEC}\"\
+          \ = \"true\" ] || [ \"${SKIP_RAW_VEC}\" = \"auto\" ]; then\n  echo \"\"\n\
+          \  echo \"[init] (1/4) SKIP — SKIP_RAW_VEC=${SKIP_RAW_VEC}, embedding download\
+          \ skipped\"\nelse\n  echo \"\"\n  echo \"[init] (1/4) Downloading embedding\
+          \ files...\"\n  for pct in \"${PCTS[@]}\"; do\n    pct=$(echo \"$pct\" |\
+          \ tr -d ' ')\n    pct_idx=$((pct_idx + 1))\n    FNAME=\"${GCS_EMB_FILENAME_PREFIX}_${pct}_merged.npy\"\
+          \n    GCS_SRC=\"${GCS_EMB_BASE}/${FNAME}\"\n    LOCAL_DST=\"${EMB_DATA_DIR}/${FNAME}\"\
+          \n    echo \"[init]   (${pct_idx}/${total_pcts}) pct=${pct}%  ${GCS_SRC}\"\
+          \n    gsutil -m cp \"${GCS_SRC}\" \"${LOCAL_DST}\"\n    echo \"[init]  \
+          \ ✅  $(du -sh ${LOCAL_DST} | cut -f1)\"\n  done\nfi\n\n# ── 2. Coreset Parquet\
+          \ (percentage별) ────────────────────\nif [ \"${SKIP_RAW_VEC}\" = \"true\"\
+          \ ] || [ \"${SKIP_RAW_VEC}\" = \"auto\" ]; then\n  echo \"[init] (2/4) SKIP_RAW_VEC=${SKIP_RAW_VEC}\
+          \ — Download Persona JSON ONLY\"\n  # Parquet 다운로드 대신 기존에 업로드된 JSON만 가져옴\n\
+          \  LOCAL_JSON=\"${CORESET_PARQUET_DIR}/${EXPERIMENT_CASE}/cluster_personas.json\"\
+          \n  gsutil -m cp \"${GCS_TREE_BASE}/${EXPERIMENT_CASE}/cluster_personas.json\"\
+          \ \"${LOCAL_JSON}\" || echo \"[warn] No existing persona JSON found on GCS\"\
+          \n  echo \"[init]   ✅ Done (Parquet download skipped)\"\nelse\n  echo \"\
+          [init] (2/4) Downloading coreset parquets + persona parquet...\"\n  # ...\
+          \ (기존 100% parquet 다운로드 로직 유지)else\n  echo \"[init] (2/4) Downloading coreset\
+          \ parquets (all percentages) + persona parquet...\"\n  pct_idx=0\n  for\
+          \ pct in \"${PCTS[@]}\"; do\n    pct=$(echo \"$pct\" | tr -d ' ')\n    pct_idx=$((pct_idx\
+          \ + 1))\n    FNAME=\"raw_plus_cluster_tree_percentage_${pct}.parquet\"\n\
+          \    # GCS_SRC=\"${GCS_TREE_BASE}/${FNAME}\"\n    # LOCAL_DST=\"${CORESET_PARQUET_DIR}/${FNAME}\"\
+          \n    GCS_SRC=\"${GCS_TREE_BASE}/${EXPERIMENT_CASE}/${FNAME}\"         \
+          \ # ← case별 경로\n    LOCAL_DST=\"${CORESET_PARQUET_DIR}/${EXPERIMENT_CASE}/${FNAME}\"\
+          \  # ← case별 로컬\n\n    echo \"[init]   (${pct_idx}/${total_pcts}) pct=${pct}%\
+          \  ${GCS_SRC}\"\n    gsutil -m cp \"${GCS_SRC}\" \"${LOCAL_DST}\"\n    echo\
+          \ \"[init]   ✅  $(du -sh ${LOCAL_DST} | cut -f1)\"\n    python3 -c \"\n\
+          import pandas as pd\ndf = pd.read_parquet('${LOCAL_DST}', columns=['original_index'])\n\
+          print(f'         rows={len(df):,}  orig_idx=[{df.original_index.min()},\
+          \ {df.original_index.max()}]')\n\" 2>/dev/null || echo \"         (parquet\
+          \ preview skipped)\"\n  done\n  # ★ V4.5: persona 계산용 experiment_case parquet\
+          \ (항상 다운로드)\n  LOCAL_PERSONA=\"${CORESET_PARQUET_DIR}/${EXPERIMENT_CASE}/raw_plus_cluster_tree_percentage_100.parquet\"\
+          \n  echo \"[init]   persona: ${GCS_TREE_BASE}/${EXPERIMENT_CASE}/raw_plus_cluster_tree_percentage_100.parquet\"\
+          \n  gsutil -m cp \"${GCS_TREE_BASE}/${EXPERIMENT_CASE}/raw_plus_cluster_tree_percentage_100.parquet\"\
+          \ \"${LOCAL_PERSONA}\"\n  echo \"[init]   ✅  $(du -sh ${LOCAL_PERSONA} |\
+          \ cut -f1)\"\nfi\n\n# ── 3. Percolate 룰 JSONL ─────────────────────────────────\n\
+          echo \"\"\necho \"[init] (3/4) Downloading tree_rules_docs.jsonl ...\"\n\
+          DEST=\"/data/tree_artifacts/${EXPERIMENT_CASE}\"\nGCS_CASE=\"${GCS_TREE_BASE}/${EXPERIMENT_CASE}\"\
+          \ngsutil -m cp \"${GCS_CASE}/tree_rules_docs.jsonl\" \"${DEST}/\"\necho\
+          \ \"[init] ✅  $(du -sh ${DEST}/tree_rules_docs.jsonl | cut -f1)\"\n\n# ──\
+          \ 4. 케이스 파라미터 JSON ───────────────────────────────\necho \"\"\necho \"[init]\
+          \ (4/4) Downloading cluster_tree_params.json ...\"\ngsutil -m cp \"${GCS_CASE}/cluster_tree_params.json\"\
+          \ \"${DEST}/\"\nUSE_PCA=$(python3 -c \"\nimport json\np = json.load(open('${DEST}/cluster_tree_params.json'))\n\
+          print(str(p.get('use_pca', False)).lower())\n\" 2>/dev/null || echo \"unknown\"\
+          )\nPCA_DIM=$(python3 -c \"\nimport json\np = json.load(open('${DEST}/cluster_tree_params.json'))\n\
+          print(p.get('pca_dim', 'None'))\n\" 2>/dev/null || echo \"unknown\")\necho\
+          \ \"[init] ✅  cluster_tree_params.json  use_pca=${USE_PCA}, pca_dim=${PCA_DIM}\"\
+          \n\n# ── 5. Bucketization 에셋 ────────────────────────────\necho \"[init]\
+          \ Downloading bucketization assets...\"\n# for CASE in ${EXPERIMENT_CASES//,/\
+          \ }; do\nfor CASE in ${EXPERIMENT_CASE//,/ }; do\n  CASE=$(echo $CASE |\
+          \ xargs)  # trim\n  \n  # depth_pct_15 디렉토리 다운로드\n  GCS_BUCKET_DIR=\"${GCS_TREE_BASE}/${CASE}/bucketization/depth_pct_${BUCKET_DEPTH_PCT}\"\
+          \n  DEST_BUCKET_DIR=\"/data/tree_artifacts/${CASE}/bucketization/depth_pct_${BUCKET_DEPTH_PCT}\"\
+          \n  \n  echo \"[init] Checking ${GCS_BUCKET_DIR} ...\"\n  if gsutil -q stat\
+          \ \"${GCS_BUCKET_DIR}/tree_split_points.json\" 2>/dev/null; then\n    echo\
+          \ \"[init] Downloading bucketization assets for ${CASE} ...\"\n    mkdir\
+          \ -p \"${DEST_BUCKET_DIR}\"\n    gsutil -m cp -r \"${GCS_BUCKET_DIR}/*\"\
+          \ \"${DEST_BUCKET_DIR}/\"\n    echo \"[init] OK bucketization for ${CASE}\"\
+          \n  else\n    echo \"[init] WARNING: bucketization assets not found for\
+          \ ${CASE} (disabled)\"\n  fi\ndone\n\n# ── 다운로드 요약 ─────────────────────────────────────────\n\
+          echo \"\"\necho \"[init] ==================================================\"\
+          \necho \"[init] Download Summary\"\necho \"[init]   Embeddings       : $(ls\
+          \ ${EMB_DATA_DIR}/ 2>/dev/null | wc -l) files\"\necho \"[init]   Coreset\
+          \ parquets : $(ls ${CORESET_PARQUET_DIR}/ 2>/dev/null | wc -l) files\"\n\
+          echo \"[init]   Tree artifacts   : $(ls ${DEST}/ 2>/dev/null | wc -l) files\"\
+          \n# ★ Bucketization 요약 추가\nBUCKET_COUNT=$(find /data/tree_artifacts/ -name\
+          \ \"tree_split_points.json\" 2>/dev/null | wc -l)\nif [ \"$BUCKET_COUNT\"\
+          \ -gt 0 ]; then\n  BUCKET_SIZE=$(du -sh /data/tree_artifacts/*/bucketization/depth_pct_${BUCKET_DEPTH_PCT}\
+          \ 2>/dev/null | tail -n 1 | cut -f1)\n  echo \"[init]   Bucketization  \
+          \  : ${BUCKET_COUNT} cases enabled (Total size: ${BUCKET_SIZE})\"\nelse\n\
+          \  echo \"[init]   Bucketization    : DISABLED (No assets found)\"\nfi\n\
+          echo \"[init] ==================================================\"\n"
+        volumeMounts:
+        - name: data
+          mountPath: /data
+      containers:
+      - name: ingest
+        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/es-tree-ingest:3.0
+        imagePullPolicy: Always
+        command:
+        - bash
+        - -lc
+        args:
+        - 'echo "========================================="
+
+          echo " ingest_tree_pipeline.py V4.5"
+
+          echo "  EXPERIMENT_CASE     : ${EXPERIMENT_CASE}"
+
+          echo "  VERSIONS            : ${VERSIONS}"
+
+          echo "  CORESET_PERCENTAGES : ${CORESET_PERCENTAGES}"
+
+          echo "  SKIP_RAW_VEC        : ${SKIP_RAW_VEC}"
+
+          echo "========================================="
+
+
+          echo "[verify] Coreset parquets:"
+
+          ls -lh "${CORESET_PARQUET_DIR}/" || echo "  (empty)"
+
+          echo "[verify] Embeddings:"
+
+          ls -lh "${EMB_DATA_DIR}/" || echo "  (empty)"
+
+          echo "[verify] Tree artifacts:"
+
+          ls -lh "/data/tree_artifacts/${EXPERIMENT_CASE}/" || true
+
+
+          echo ""
+
+          echo "[run] Starting ingest_tree_pipeline.py ..."
+
+          python /app/ingest_tree_pipeline.py
+
+
+          echo ""
+
+          echo "========================================="
+
+          echo " ingest_tree_pipeline.py Complete!"
+
+          echo "========================================="
+
+          '
+        env:
+        - name: ES_URL
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_URL
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-ha-es-elastic-user
+              key: elastic
+        - name: ES_REQUEST_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ES_REQUEST_TIMEOUT
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: VERSIONS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VERSIONS
+        - name: PERCOLATE_MIN_SHOULD_MATCH
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_MIN_SHOULD_MATCH
+        - name: CORESET_PERCENTAGES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_PERCENTAGES
+        - name: SKIP_RAW_VEC
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: SKIP_RAW_VEC
+        - name: CORESET_PARQUET_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: CORESET_PARQUET_DIR
+        - name: CORESET_PARQUET_FILENAME_TEMPLATE
+          value: raw_plus_cluster_tree_percentage_{pct}.parquet
+        - name: INGEST_SEARCH_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: INGEST_SEARCH_MODE
+        - name: VEC_QUANT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VEC_QUANT
+        - name: HNSW_M
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: HNSW_M
+        - name: HNSW_EF_CONSTRUCTION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: HNSW_EF_CONSTRUCTION
+        - name: VEC_INDEX_SUFFIX
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VEC_INDEX_SUFFIX
+        - name: RUN_ID
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: RUN_ID
+        - name: NODE_PINNING
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: NODE_PINNING
+        - name: NODE_100PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: NODE_100PCT
+        - name: NODE_10PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: NODE_10PCT
+        - name: NODE_1PCT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: NODE_1PCT
+        - name: NODE_PERCOLATOR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: NODE_PERCOLATOR
+        - name: PERCOLATOR_SHARD_DISTRIBUTION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATOR_SHARD_DISTRIBUTION
+        - name: ATTR_PERCOLATOR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ATTR_PERCOLATOR
+        - name: ATTR_DOCS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ATTR_DOCS
+        - name: N_SHARDS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: N_SHARDS
+        - name: N_REPLICAS
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: N_REPLICAS
+        - name: EMB_DATA_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EMB_DATA_DIR
+        - name: EMB_FILENAME_PREFIX
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EMB_FILENAME_PREFIX
+        - name: GCS_TREE_BASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GCS_TREE_BASE
+        - name: BULK_CHUNK_SIZE
+          value: '1000'
+        - name: BULK_MAX_CHUNK_BYTES
+          value: '20971520'
+        volumeMounts:
+        - name: scripts
+          mountPath: /app/ingest_tree_pipeline.py
+          subPath: ingest_tree_pipeline.py
+        - name: scripts
+          mountPath: /app/percolate_query_builder.py
+          subPath: percolate_query_builder.py
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: '0.5'
+            memory: 3Gi
+          limits:
+            cpu: '0.5'
+            memory: 6Gi
+      volumes:
+      - name: scripts
+        configMap:
+          name: es-scripts
+          defaultMode: 493
+      - name: results
+        emptyDir: {}
+      - name: data
+        emptyDir:
+          sizeLimit: 12Gi

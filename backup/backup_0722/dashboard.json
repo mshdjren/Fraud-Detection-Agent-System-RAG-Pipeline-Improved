@@ -1,0 +1,102 @@
+{
+  "title": "AgentRAG — Fraud Detection (forward ⚖ agent)",
+  "uid": "agentrag-fraud",
+  "tags": ["agentrag", "fraud", "llm-serving"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {"name": "mode", "type": "custom", "query": "agent,forward", "current": {"text": "agent", "value": "agent"}}
+    ]
+  },
+  "panels": [
+    {
+      "title": "① LLM 호출 절감률 (agent 핵심 가치)",
+      "type": "stat",
+      "description": "confident-skip으로 evaluator를 건너뛴 비율. agent가 forward 대비 절감하는 비용의 직접 지표.",
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "thresholds": {"steps": [
+        {"color": "red", "value": null}, {"color": "yellow", "value": 0.3}, {"color": "green", "value": 0.5}]}}},
+      "targets": [{"expr": "1 - ( sum(rate(analyzer_llm_calls_total[5m])) / sum(rate(detect_requests_total{pipeline_mode=\"agent\"}[5m])) )", "legendFormat": "skip rate"}]
+    },
+    {
+      "title": "② end-to-end latency p50/p95 (mode 비교)",
+      "type": "timeseries",
+      "description": "detect_latency 히스토그램. forward(전수 LLM) vs agent(선택적) 총 지연 대비.",
+      "gridPos": {"h": 8, "w": 16, "x": 8, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum by (le, pipeline_mode) (rate(detect_latency_seconds_bucket[5m])))", "legendFormat": "p50 {{pipeline_mode}}"},
+        {"expr": "histogram_quantile(0.95, sum by (le, pipeline_mode) (rate(detect_latency_seconds_bucket[5m])))", "legendFormat": "p95 {{pipeline_mode}}"}
+      ]
+    },
+    {
+      "title": "③ analyzer(0.5B GGUF) latency p50/p95",
+      "type": "timeseries",
+      "description": "CPU 추론 병목 관측. decode는 bandwidth-bound라 p95 급등이 곧 SLA 위반 신호.",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 6},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(analyzer_latency_seconds_bucket[5m])))", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, sum by (le) (rate(analyzer_latency_seconds_bucket[5m])))", "legendFormat": "p95"}
+      ]
+    },
+    {
+      "title": "④ 게이트 발동률 (accept / expand / reroute)",
+      "type": "timeseries",
+      "description": "Selective Tool Gate 분포. expand+reroute가 과도하면 비용↑, 0이면 loop 무의미.",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}},
+      "targets": [
+        {"expr": "sum(rate(gate_action_total{action=\"accept\"}[5m])) / sum(rate(gate_action_total[5m]))", "legendFormat": "accept"},
+        {"expr": "sum(rate(gate_action_total{action=\"expand\"}[5m])) / sum(rate(gate_action_total[5m]))", "legendFormat": "expand"},
+        {"expr": "sum(rate(gate_action_total{action=\"reroute\"}[5m])) / sum(rate(gate_action_total[5m]))", "legendFormat": "reroute"}
+      ]
+    },
+    {
+      "title": "⑤ nd min-fusion — 재검색이 판정을 바꾼 비율",
+      "type": "stat",
+      "description": "reroute/expand 후 nd_final < nd_round0 인 요청 비율. agent loop의 실제 판정 기여.",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}},
+      "targets": [{"expr": "sum(rate(nd_fusion_improved_total[5m])) / sum(rate(gate_action_total{action=~\"expand|reroute\"}[5m]))", "legendFormat": "nd improved / loop"}]
+    },
+    {
+      "title": "⑥ what_missing direction 분포 (cm / ni)",
+      "type": "timeseries",
+      "description": "evaluator가 보고한 결함 유형. cm(cluster_mismatch)→reroute, ni(neighbor_insufficient)→expand 와 정합해야 함.",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 14},
+      "targets": [
+        {"expr": "sum(rate(wm_direction_total{direction=\"cluster_mismatch\"}[5m]))", "legendFormat": "cm"},
+        {"expr": "sum(rate(wm_direction_total{direction=\"neighbor_insufficient\"}[5m]))", "legendFormat": "ni"}
+      ]
+    },
+    {
+      "title": "⑦ parse 실패율 (GBNF 도입 전후 추적)",
+      "type": "stat",
+      "description": "0.5B JSON 파싱 실패. 84%→99% 목표(GBNF grammar)의 관측 지표.",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "percentunit", "thresholds": {"steps": [
+        {"color": "green", "value": null}, {"color": "yellow", "value": 0.05}, {"color": "red", "value": 0.15}]}}},
+      "targets": [{"expr": "sum(rate(analyzer_parse_fail_total[5m])) / sum(rate(analyzer_llm_calls_total[5m]))", "legendFormat": "parse fail"}]
+    },
+    {
+      "title": "⑧ router: candidate recall@5 / routing ε-recall",
+      "type": "timeseries",
+      "description": "검색 계층 품질. recall@5 하락은 clustering drift, ε-recall 하락은 coreset 손실 신호.",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}},
+      "targets": [
+        {"expr": "avg_over_time(router_candidate_recall_at5[10m])", "legendFormat": "recall@5"},
+        {"expr": "avg_over_time(router_epsilon_recall_10pct[10m])", "legendFormat": "ε-recall 10%"}
+      ]
+    },
+    {
+      "title": "⑨ page fault delta (2GB coreset node)",
+      "type": "timeseries",
+      "description": "10% coreset 운영점의 메모리 압박. 급등은 page thrashing → latency p95 동반 상승.",
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 24},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(retriever_page_fault_delta_bucket[5m])))", "legendFormat": "p95 pf/req"}]
+    }
+  ]
+}

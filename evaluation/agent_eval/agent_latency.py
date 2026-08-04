@@ -44,6 +44,7 @@ def parse_latency_records(predictions: List[Dict]) -> Dict[str, List[float]]:
         "tool_delta_ms": [], "client_ms": [],
         "fast_total_ms": [], "deep_total_ms": [],
         "deep_with_tool_ms": [], "deep_no_tool_ms": [],
+        "ttft_ms": [], "tpot_ms": [], "out_tokens": [],
     }
 
     for pred in predictions:
@@ -60,6 +61,14 @@ def parse_latency_records(predictions: List[Dict]) -> Dict[str, List[float]]:
         if not isinstance(lms, dict):
             continue
 
+        _ah = pred.get("analyzer_history") or []
+        if _ah and isinstance(_ah[-1], dict):
+            for _src, _dst in (("ttft_ms", "ttft_ms"), ("tpot_ms", "tpot_ms"),
+                               ("n_output_tokens", "out_tokens")):
+                _v = _ah[-1].get(_src)
+                if _v is not None:
+                    records[_dst].append(float(_v))
+    
         total = lms.get("total")
         base  = lms.get("base_retrieve")
         cli   = pred.get("_client_latency_ms")

@@ -10,7 +10,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: agent-eval-report-0720forward
+  name: 0722-agent-none
   namespace: elastic
   labels:
     app: evaluation
@@ -59,6 +59,11 @@ spec:
               key: EXPERIMENT_CASE
         - name: GCS_OUTPUT_BUCKET
           value: "gs://fraud_ecomm/evaluation/agent-eval"
+# ── run 식별자: Job metadata.name 을 그대로 주입 ──────────
+        - name: RUN_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['job-name']
 
         command:
         - /bin/bash

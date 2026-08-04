@@ -121,8 +121,20 @@ data:
   N_SHARDS: "1"
   N_REPLICAS: "0"
 
+  # ── vec 인덱스 축 (재적재 필요) ─────────────────────────
+  VEC_QUANT:             "bbq_hnsw"      # f32 | int8_hnsw | bbq_hnsw   (ES 8.18)
+  HNSW_M:                "16"
+  HNSW_EF_CONSTRUCTION:  "100"
+  N_SHARDS_VEC:          "1"    # 정상 index용
+  VEC_INDEX_SUFFIX:      ""
+
+  # ── 쿼리 축 (재적재 0) ──────────────────────────────────
+  RETRIEVER_OVERSAMPLE:  "3.0"        # f32=0, 양자화 인덱스=3.0
+  BUCKET_TOLERANCE:      "2"
+  BUCKET_MIN_MATCH:      "3"
+
   # Bucketization depth 비율
-  ENABLE_BUCKETIZATION: "true"
+  ENABLE_BUCKETIZATION: "false"  # true // false
   BUCKET_DEPTH_PCT: "15"
 
   # [Retriever용] RETRIEVER_CORESET_PERCENTAGE >>> 더이상 활용 x
@@ -152,8 +164,10 @@ data:
   AUG_SHARD_DISTRIBUTION: "true"
   # ★ v5: Retriever 검색 모드
   #   exact : Exact NN  (vec index=False 환경, gaussian_aug 인덱스 기본)
-  #   hnsw          : HNSW      (vec index=True 환경, 원본 coreset 인덱스)
-  SEARCH_MODE: "hnsw"
+  #   hnsw_filtered          : HNSW      (vec index=True 환경, 원본 coreset 인덱스)
+  #   faiss          : HNSW      (vec index=True 환경, 원본 coreset 인덱스)
+
+  SEARCH_MODE: "hnsw_filtered"
   # # 일반 coreset 실험 시 (값 자체는 무의미하나 명시)
   # KNN_NUM_CANDIDATES: "200"
 
@@ -198,24 +212,40 @@ data:
 
   BASE_TOP_K: "3"
   EXPAND_TOP_K: "5"
-  ANALYZER_DECISION_MODE: "det"     # 비교실험 시 "llm"으로 patch
   CLS_ND_THRESHOLD: "0.42"  # ===========================
   # Agent eval
   # ===========================
 
   SUFFICIENCY_BOUNDARY_LOW:  "0.3"
   SUFFICIENCY_BOUNDARY_HIGH: "0.55"
-  EVAL_JSONL_GCS: "tree-search/analyzer_ft/pca_64_k100/hf_0713/training_data_mined_eval.jsonl"
-  EVAL_SOURCE: "eval_set"
+  EVAL_JSONL_GCS: "tree-search/analyzer_ft/pca_64_k100/hf_0713/training_data_mined_s5_eval.jsonl"
+  EVAL_SOURCE: "smoke"   # eval_set // smoke : agent_batch_inference.py
   AGENT_EVAL_GCS_PREFIX: "gs://fraud_ecomm/agent_eval"
 
   EVAL_RATIO: "0.1"          # NB01 EVAL_RATIO와 동일 (역매핑 구간)
-
   DIST_TOP_K : "5"
-
   PIPELINE_MODE: "agent"    #forward, agent
+  TOOL_EXECUTION_MODE: "mcp_native"
 
 # ===========================
+  # ★ [V3] Agent 재검색 실험 스위치 — 기본값 = legacy (기존 동작 100% 보존)
+  # ===========================
+# ★ [V3] 재검색 의미론 스위치 — "legacy"(reroute/expand) | "v3"(verify_global/
+#   expand_reweight + fetch_contrast). tool 이름(enum)은 유지하고 description만
+#   교체해 controller 그래프/FOLLOWUP_ACTIONS 무수정으로 A/B 가능하게 한다.
+
+  # controller/agent_tools/mcp: reroute→verify_global(전역 HNSW), expand→PatchCore
+  RESEARCH_MODE: "v3"          # "legacy" | "v3"
+  # router: 후보 생성 정렬 metric (dynamic=test emb 기준 L2 — R2 실측 +10.3%p)
+  ROUTER_CANDIDATE_MODE: "dynamic"  # "static" | "dynamic"
+
+  # ── [S5/v3] 프롬프트 & 스키마 ────────────────────────────────
+  PROMPT_VERSION:  "v3"
+  WM_SCHEMA:       "v3"
+  ANALYZER_DECISION_MODE: "det"
+
+  RUN_ID: "smoke-bbq-cs100"
+
 # Index Name Convention (참고용)
 # ===========================
 #

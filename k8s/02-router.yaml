@@ -246,6 +246,44 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: BUCKET_DEPTH_PCT
+        - name: BUCKET_TOLERANCE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: BUCKET_TOLERANCE
+        - name: BUCKET_MIN_MATCH
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: BUCKET_MIN_MATCH
+
+        - name: VEC_QUANT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VEC_QUANT
+        - name: HNSW_M
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: HNSW_M
+        - name: HNSW_EF_CONSTRUCTION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: HNSW_EF_CONSTRUCTION
+        - name: VEC_INDEX_SUFFIX
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VEC_INDEX_SUFFIX
+
+      # ★ [V3] 후보 생성 모드 — router.py _augment_with_centroid 분기
+        - name: ROUTER_CANDIDATE_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ROUTER_CANDIDATE_MODE
 
         # ── Cache ────────────────────────────────────────
         - name: CACHE_TTL_HOT

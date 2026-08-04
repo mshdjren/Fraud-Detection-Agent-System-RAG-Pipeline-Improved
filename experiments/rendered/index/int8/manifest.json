@@ -1,0 +1,32 @@
+{
+  "index_id": "int8",
+  "inline": false,
+  "stage": 1,
+  "ingest_percolator": false,
+  "experiment_case": "pca_64_k100",
+  "config": {
+    "EXPERIMENT_CASE": "pca_64_k100",
+    "INGEST_SEARCH_MODE": "hnsw",
+    "SEARCH_MODE": "hnsw_filtered",
+    "VERSIONS": "",
+    "PERCOLATE_QUERY_VERSION": "v1",
+    "ENABLE_BUCKETIZATION": "false",
+    "VEC_INDEX_CORESET_PCT": "100",
+    "VEC_QUANT": "int8_hnsw",
+    "HNSW_M": "16",
+    "HNSW_EF_CONSTRUCTION": "100",
+    "KNN_NUM_CANDIDATES": "200",
+    "RETRIEVER_OVERSAMPLE": "0",
+    "TOOL_EXECUTION_MODE": "mcp_native",
+    "RESEARCH_MODE": "v3",
+    "PIPELINE_MODE": "agent",
+    "EVAL_SOURCE": "smoke",
+    "CORESET_PERCENTAGES": "100",
+    "SKIP_RAW_VEC": "false",
+    "RUN_ID": "ingest-int8"
+  },
+  "src_hash": {
+    "ingest": "0c9d9fdf",
+    "agent_eval": "b854c548"
+  }
+}
