@@ -1,0 +1,246 @@
+=========================================
+ ingest_tree_pipeline.py V4.5
+  EXPERIMENT_CASE     : pca_64_k100
+  VERSIONS            : v1
+  CORESET_PERCENTAGES : 100,10,1
+  SKIP_RAW_VEC        : false
+=========================================
+[verify] Coreset parquets:
+total 4.0K
+drwxr-xr-x 2 root root 4.0K Aug  5 13:47 pca_64_k100
+[verify] Embeddings:
+total 300M
+-rw-r--r-- 1 root root 270M Aug  5 13:47 anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_100_merged.npy
+-rw-r--r-- 1 root root  27M Aug  5 13:47 anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_10_merged.npy
+-rw-r--r-- 1 root root 2.7M Aug  5 13:47 anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_1_merged.npy
+[verify] Tree artifacts:
+total 3.9M
+drwxr-xr-x 3 root root 4.0K Aug  5 13:47 bucketization
+-rw-r--r-- 1 root root 2.0K Aug  5 13:47 cluster_tree_params.json
+-rw-r--r-- 1 root root 3.9M Aug  5 13:47 tree_rules_docs.jsonl
+
+[run] Starting ingest_tree_pipeline.py ...
+
+================================================================================
+INGESTION V4.4: Coreset Parquet + original_index as _id + tree_id 제거
+================================================================================
+Experiment cases     : ['pca_64_k100']
+Versions             : ['v1']
+Coreset percentages  : [100, 10, 1]
+SKIP_RAW_VEC         : false
+Coreset parquet dir  : /data/coreset_parquets
+GCS tree base        : gs://fraud_ecomm/tree-search/tree_fraudecom
+Persona JSON         : per experiment_case → ['pca_64_k100']/cluster_personas.json
+Emb dir              : /data/embeddings
+Emb prefix           : anollm_lr5e-05_standard_smolLM_train_embeddings_percentage
+
+Coreset parquet files (per experiment_case):
+  [pca_64_k100][100%]  /data/coreset_parquets/pca_64_k100/raw_plus_cluster_tree_percentage_100.parquet  ✅
+  [pca_64_k100][ 10%]  /data/coreset_parquets/pca_64_k100/raw_plus_cluster_tree_percentage_10.parquet  ✅
+  [pca_64_k100][  1%]  /data/coreset_parquets/pca_64_k100/raw_plus_cluster_tree_percentage_1.parquet  ✅
+
+Embedding files:
+  [100%]  /data/embeddings/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_100_merged.npy  ✅
+  [ 10%]  /data/embeddings/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_10_merged.npy  ✅
+  [  1%]  /data/embeddings/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_1_merged.npy  ✅
+
+Persona source (per experiment_case):
+  [pca_64_k100]  /data/coreset_parquets/pca_64_k100/raw_plus_cluster_tree_percentage_100.parquet  ✅
+
+[es] Connected: elasticsearch-ha
+
+================================================================================
+PROCESSING: pca_64_k100  (SKIP_RAW_VEC=false)
+================================================================================
+
+[load] tree rules: /data/tree_artifacts/pca_64_k100/tree_rules_docs.jsonl
+  Total rules: 5725
+  Used vector fields in rules: 64 (max v64)
+
+[persona] Loading pca_64_k100 parquet: /data/coreset_parquets/pca_64_k100/raw_plus_cluster_tree_percentage_100.parquet
+[persona] Generated 100 cluster personas
+[persona] Saved JSON → /data/coreset_parquets/pca_64_k100/cluster_personas.json (100 clusters)
+[persona] Uploaded → gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/cluster_personas.json
+
+[parquet] Loading 100% coreset: /data/coreset_parquets/pca_64_k100/raw_plus_cluster_tree_percentage_100.parquet
+  Shape          : (122810, 11)
+  original_index : 0 ~ 122809
+  n_docs         : 122,810
+
+[emb] Loading 100% embeddings: /data/embeddings/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_100_merged.npy
+  Shape: (122810, 576)
+
+[es] Creating RAW+VEC index: fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100
+  ✅ Created — 11 fields, vec dim=576, expected_docs=122,810
+    Progress: 5,000 indexed...
+    Progress: 10,000 indexed...
+    Progress: 15,000 indexed...
+    Progress: 20,000 indexed...
+    Progress: 25,000 indexed...
+    Progress: 30,000 indexed...
+    Progress: 35,000 indexed...
+    Progress: 40,000 indexed...
+    Progress: 45,000 indexed...
+    Progress: 50,000 indexed...
+    Progress: 55,000 indexed...
+    Progress: 60,000 indexed...
+    Progress: 65,000 indexed...
+    Progress: 70,000 indexed...
+    Progress: 75,000 indexed...
+    Progress: 80,000 indexed...
+    Progress: 85,000 indexed...
+    Progress: 90,000 indexed...
+    Progress: 95,000 indexed...
+    Progress: 100,000 indexed...
+    Progress: 105,000 indexed...
+    Progress: 110,000 indexed...
+    Progress: 115,000 indexed...
+    Progress: 120,000 indexed...
+  RAW+VEC (100%): ok=122,810, fail=0, time=311.63s
+  [stats] docs=122810, size=616.8mb
+[stats] fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100: disk=616.8MB ws=284.8MB docs=122,810 segs=15
+
+[parquet] Loading 10% coreset: /data/coreset_parquets/pca_64_k100/raw_plus_cluster_tree_percentage_10.parquet
+  Shape          : (12281, 11)
+  original_index : 2 ~ 122780
+  n_docs         : 12,281
+
+[emb] Loading 10% embeddings: /data/embeddings/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_10_merged.npy
+  Shape: (12281, 576)
+
+[es] Creating RAW+VEC index: fraud_ecom_pca_64_k100_percentage_10_cluster_tree_vec_f32_m16ef100
+  ✅ Created — 11 fields, vec dim=576, expected_docs=12,281
+    Progress: 5,000 indexed...
+    Progress: 10,000 indexed...
+  RAW+VEC (10%): ok=12,281, fail=0, time=30.51s
+  [stats] docs=12281, size=61.8mb
+[stats] fraud_ecom_pca_64_k100_percentage_10_cluster_tree_vec_f32_m16ef100: disk=61.8MB ws=28.5MB docs=12,281 segs=12
+
+[parquet] Loading 1% coreset: /data/coreset_parquets/pca_64_k100/raw_plus_cluster_tree_percentage_1.parquet
+  Shape          : (1228, 11)
+  original_index : 71 ~ 122778
+  n_docs         : 1,228
+
+[emb] Loading 1% embeddings: /data/embeddings/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_1_merged.npy
+  Shape: (1228, 576)
+
+[es] Creating RAW+VEC index: fraud_ecom_pca_64_k100_percentage_1_cluster_tree_vec_f32_m16ef100
+  ✅ Created — 11 fields, vec dim=576, expected_docs=1,228
+  RAW+VEC (1%): ok=1,228, fail=0, time=3.26s
+  [stats] docs=1228, size=227b
+[stats] fraud_ecom_pca_64_k100_percentage_1_cluster_tree_vec_f32_m16ef100: disk=0.0MB ws=2.8MB docs=1,228 segs=3
+[bucketization] ENABLED — depth_pct_15
+  Features: 9 ['v1', 'v12', 'v17', 'v2', 'v3', 'v4', 'v5', 'v6', 'v9']
+
+[percolator] Creating 1 indices...
+
+[es] Percolator index: fraud_ecom_pca_64_k100_v1_tree_rules_percolator
+  ✅ Created — 88 fields
+    Progress: 5,000 indexed...
+  PERCOLATOR (v1): ok=5,725, fail=0, time=5.91s
+  [stats] docs=5725, size=4.8mb
+
+✅ DONE: pca_64_k100
+
+================================================================================
+✅ ALL DONE (V4.4)
+================================================================================
+Cases processed    : ['pca_64_k100']
+Versions           : ['v1']
+Coreset percentages: [100, 10, 1]
+Total time         : 362.75s
+
+[verify] Refreshing indices...
+
+[verify] Final indices (post-refresh):
+  fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_bbq_hnsw_m16ef100: 122810 docs  (616.8mb)
+  fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100: 122810 docs  (616.8mb)
+  fraud_ecom_pca_64_k100_percentage_10_cluster_tree_vec_bbq_hnsw_m16ef100: 12281 docs  (63mb)
+  fraud_ecom_pca_64_k100_percentage_10_cluster_tree_vec_f32_m16ef100: 12281 docs  (61.8mb)
+  fraud_ecom_pca_64_k100_percentage_1_cluster_tree_vec_bbq_hnsw_m16ef100: 1228 docs  (6.2mb)
+  fraud_ecom_pca_64_k100_percentage_1_cluster_tree_vec_f32_m16ef100: 1228 docs  (227b)
+  fraud_ecom_pca_64_k100_v1_tree_rules_percolator: 5725 docs  (4.8mb)
+
+=========================================
+ ingest_tree_pipeline.py Complete!
+=========================================
+[init] ==================================================
+[init] ingest-tree-pipeline V4.5 — GCS Download
+[init] EXPERIMENT_CASE     : pca_64_k100
+[init] CORESET_PERCENTAGES : 100,10,1
+[init] GCS_EMB_BASE        : gs://fraud_ecomm/tree-search/embeddings_fraudecom
+[init] GCS_TREE_BASE       : gs://fraud_ecomm/tree-search/tree_fraudecom
+[init] EMB_DATA_DIR        : /data/embeddings
+[init] CORESET_PARQUET_DIR : /data/coreset_parquets
+[init] SKIP_RAW_VEC        : false
+[init] ==================================================
+
+[init] (1/4) Downloading embedding files...
+[init]   (1/3) pct=100%  gs://fraud_ecomm/tree-search/embeddings_fraudecom/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_100_merged.npy
+Copying gs://fraud_ecomm/tree-search/embeddings_fraudecom/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_100_merged.npy...
+/ [0/1 files][    0.0 B/269.8 MiB]   0% Done                                    -- [0/1 files][ 37.6 MiB/269.8 MiB]  13% Done                                    \|| [0/1 files][ 87.1 MiB/269.8 MiB]  32% Done                                    // [0/1 files][145.9 MiB/269.8 MiB]  54% Done                                    -\\ [0/1 files][196.2 MiB/269.8 MiB]  72% Done                                    |// [0/1 files][252.4 MiB/269.8 MiB]  93% Done                                    / [1/1 files][269.8 MiB/269.8 MiB] 100% Done                                    
+Operation completed over 1 objects/269.8 MiB.                                    
+[init]   ✅  270M
+[init]   (2/3) pct=10%  gs://fraud_ecomm/tree-search/embeddings_fraudecom/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_10_merged.npy
+Copying gs://fraud_ecomm/tree-search/embeddings_fraudecom/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_10_merged.npy...
+/ [0/1 files][    0.0 B/ 27.0 MiB]   0% Done                                    / [1/1 files][ 27.0 MiB/ 27.0 MiB] 100% Done                                    -
+Operation completed over 1 objects/27.0 MiB.                                     
+[init]   ✅  27M
+[init]   (3/3) pct=1%  gs://fraud_ecomm/tree-search/embeddings_fraudecom/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_1_merged.npy
+Copying gs://fraud_ecomm/tree-search/embeddings_fraudecom/anollm_lr5e-05_standard_smolLM_train_embeddings_percentage_1_merged.npy...
+/ [0/1 files][    0.0 B/  2.7 MiB]   0% Done                                    / [1/1 files][  2.7 MiB/  2.7 MiB] 100% Done                                    
+Operation completed over 1 objects/2.7 MiB.                                      
+[init]   ✅  2.7M
+[init] (2/4) Downloading coreset parquets + persona parquet...
+[init] (2/4) Downloading coreset parquets (all percentages) + persona parquet...
+[init]   (1/3) pct=100%  gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/raw_plus_cluster_tree_percentage_100.parquet
+Copying gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/raw_plus_cluster_tree_percentage_100.parquet...
+/ [0/1 files][    0.0 B/  1.3 MiB]   0% Done                                    / [1/1 files][  1.3 MiB/  1.3 MiB] 100% Done                                    
+Operation completed over 1 objects/1.3 MiB.                                      
+[init]   ✅  1.4M
+         (parquet preview skipped)
+[init]   (2/3) pct=10%  gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/raw_plus_cluster_tree_percentage_10.parquet
+Copying gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/raw_plus_cluster_tree_percentage_10.parquet...
+/ [0/1 files][    0.0 B/145.8 KiB]   0% Done                                    / [1/1 files][145.8 KiB/145.8 KiB] 100% Done                                    
+Operation completed over 1 objects/145.8 KiB.                                    
+[init]   ✅  148K
+         (parquet preview skipped)
+[init]   (3/3) pct=1%  gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/raw_plus_cluster_tree_percentage_1.parquet
+Copying gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/raw_plus_cluster_tree_percentage_1.parquet...
+/ [0/1 files][    0.0 B/ 21.8 KiB]   0% Done                                    / [1/1 files][ 21.8 KiB/ 21.8 KiB] 100% Done                                    
+Operation completed over 1 objects/21.8 KiB.                                     
+[init]   ✅  24K
+         (parquet preview skipped)
+[init]   persona: gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/raw_plus_cluster_tree_percentage_100.parquet
+Copying gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/raw_plus_cluster_tree_percentage_100.parquet...
+/ [0/1 files][    0.0 B/  1.3 MiB]   0% Done                                    / [1/1 files][  1.3 MiB/  1.3 MiB] 100% Done                                    
+Operation completed over 1 objects/1.3 MiB.                                      
+[init]   ✅  1.4M
+
+[init] (3/4) Downloading tree_rules_docs.jsonl ...
+Copying gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/tree_rules_docs.jsonl...
+/ [0/1 files][    0.0 B/  3.8 MiB]   0% Done                                    / [1/1 files][  3.8 MiB/  3.8 MiB] 100% Done                                    
+Operation completed over 1 objects/3.8 MiB.                                      
+[init] ✅  3.9M
+
+[init] (4/4) Downloading cluster_tree_params.json ...
+Copying gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/cluster_tree_params.json...
+/ [0/1 files][    0.0 B/  2.0 KiB]   0% Done                                    / [1/1 files][  2.0 KiB/  2.0 KiB] 100% Done                                    
+Operation completed over 1 objects/2.0 KiB.                                      
+[init] ✅  cluster_tree_params.json  use_pca=true, pca_dim=64
+[init] Downloading bucketization assets...
+[init] Checking gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/bucketization/depth_pct_15 ...
+[init] Downloading bucketization assets for pca_64_k100 ...
+Copying gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/bucketization/depth_pct_15/bucket_stats.csv...
+/ [0/4 files][    0.0 B/ 11.4 KiB]   0% Done                                    Copying gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/bucketization/depth_pct_15/tree_split_points.json...
+/ [0/4 files][    0.0 B/ 11.4 KiB]   0% Done                                    Copying gs://fraud_ecomm/tree-search/tree_fraudecom/pca_64_k100/bucketization/depth_pct_15/feature_importance_rank.json...
+[init] OK bucketization for pca_64_k100
+
+[init] ==================================================
+[init] Download Summary
+[init]   Embeddings       : 3 files
+[init]   Coreset parquets : 1 files
+[init]   Tree artifacts   : 3 files
+[init]   Bucketization    : 1 cases enabled (Total size: 20K)
+[init] ==================================================
+/ [0/4 files][    0.0 B/ 11.4 KiB]   0% Done                                    / [1/4 files][   75.0 B/ 11.4 KiB]   0% Done                                    / [2/4 files][  3.5 KiB/ 11.4 KiB]  30% Done                                    / [3/4 files][ 11.4 KiB/ 11.4 KiB]  99% Done                                    

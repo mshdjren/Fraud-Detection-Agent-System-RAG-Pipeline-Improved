@@ -1,0 +1,3003 @@
+[
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.997",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 95,
+    "top_5_clusters": [
+      {
+        "cluster_id": 95,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.9965683615883343,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.805)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 139.0697956085205,
+      "controller_agent_loop": 30.583858489990234,
+      "total": 170.1812744140625
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.9965683615883343,
+        "nd": 0.8049,
+        "cluster_id": 95,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          96779,
+          107853,
+          8437,
+          48424,
+          70837
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.8049,
+        "nd_final": 0.8049,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 195.79264300045907,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.8049,
+    "_nd_final": 0.8049,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      96779,
+      107853,
+      8437,
+      48424,
+      70837
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 95,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "95": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26000,
+    "_gt_label": 1,
+    "_gt_cluster": 95,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.781",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 81,
+    "top_5_clusters": [
+      {
+        "cluster_id": 81,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.7807142594579215,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.703)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 111.18960380554199,
+      "controller_agent_loop": 25.551557540893555,
+      "total": 137.19964027404785
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.7807142594579215,
+        "nd": 0.7026,
+        "cluster_id": 81,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          92304,
+          101828,
+          82777,
+          21708,
+          101427
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.7026,
+        "nd_final": 0.7026,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 145.9865910001099,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.7026,
+    "_nd_final": 0.7026,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      92304,
+      101828,
+      82777,
+      21708,
+      101427
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 81,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "81": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26001,
+    "_gt_label": 1,
+    "_gt_cluster": 81,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.681",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 46,
+    "top_5_clusters": [
+      {
+        "cluster_id": 46,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.6808119698986936,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.646)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 138.14806938171387,
+      "controller_agent_loop": 26.392698287963867,
+      "total": 166.58496856689453
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.6808119698986936,
+        "nd": 0.646,
+        "cluster_id": 46,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          80585,
+          48176,
+          41860,
+          54197,
+          88820
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.646,
+        "nd_final": 0.646,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 174.86334900240763,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.646,
+    "_nd_final": 0.646,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      80585,
+      48176,
+      41860,
+      54197,
+      88820
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 46,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "46": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26002,
+    "_gt_label": 1,
+    "_gt_cluster": 46,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.599",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 75,
+    "top_5_clusters": [
+      {
+        "cluster_id": 75,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.598705014830151,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.596)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 119.39764022827148,
+      "controller_agent_loop": 28.53107452392578,
+      "total": 148.64706993103027
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.598705014830151,
+        "nd": 0.5961,
+        "cluster_id": 75,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          71448,
+          14987,
+          24598,
+          11512,
+          83739
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.5961,
+        "nd_final": 0.5961,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 158.70619999986957,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.5961,
+    "_nd_final": 0.5961,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      71448,
+      14987,
+      24598,
+      11512,
+      83739
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 75,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "75": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26003,
+    "_gt_label": 1,
+    "_gt_cluster": 75,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=2.098",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 94,
+    "top_5_clusters": [
+      {
+        "cluster_id": 94,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 2.098415116319305,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.843)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 123.82960319519043,
+      "controller_agent_loop": 37.95027732849121,
+      "total": 162.36543655395508
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 2.098415116319305,
+        "nd": 0.843,
+        "cluster_id": 94,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          36670,
+          94930,
+          31809,
+          95239,
+          15784
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.843,
+        "nd_final": 0.843,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 172.40835700067692,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.843,
+    "_nd_final": 0.843,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      36670,
+      94930,
+      31809,
+      95239,
+      15784
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 94,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "94": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26004,
+    "_gt_label": 1,
+    "_gt_cluster": 94,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.754",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 70,
+    "top_5_clusters": [
+      {
+        "cluster_id": 70,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.7542369503180075,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.688)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 131.54244422912598,
+      "controller_agent_loop": 26.160478591918945,
+      "total": 158.2009792327881
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.7542369503180075,
+        "nd": 0.6881,
+        "cluster_id": 70,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          104649,
+          44788,
+          240,
+          58158,
+          27247
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.6881,
+        "nd_final": 0.6881,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 166.384594002011,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.6881,
+    "_nd_final": 0.6881,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      104649,
+      44788,
+      240,
+      58158,
+      27247
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 70,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "70": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26005,
+    "_gt_label": 0,
+    "_gt_cluster": 27,
+    "_category": "smoke"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.127",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 52,
+    "top_5_clusters": [
+      {
+        "cluster_id": 52,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.126804607691299,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp",
+      "fetch_contrast:sex=M",
+      "analyze:skipped_evaluator_once",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 133.4221363067627,
+      "controller_agent_loop": 8180.182695388794,
+      "total": 8314.68677520752
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.126804607691299,
+        "nd": 0.3037,
+        "cluster_id": 52,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "neighbor_insufficient: sex, source \u2014 neighbors spread out; both fields differ.",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": "neighbor_insufficient",
+        "wm_axes": [
+          "sex",
+          "source"
+        ],
+        "wm_rationale": "neighbors spread out; both fields differ.",
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          99467,
+          107076,
+          31549,
+          96619,
+          43891
+        ]
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.126804607691299,
+        "nd": 0.301,
+        "cluster_id": 52,
+        "cls": "NORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": 0.4914,
+        "reweight_mode": "isolation",
+        "research_ms": 565.0,
+        "nd_source": "patchcore_top5",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": "sex",
+        "contrast_distance": 1.126804607691299,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          99467,
+          107076,
+          31549,
+          96619,
+          43891
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.3037,
+        "nd_final": 0.301,
+        "n_rounds": 2,
+        "researched": true,
+        "nd_source": "patchcore_top5",
+        "reweight_w": 0.4914,
+        "reweight_mode": "isolation",
+        "nd_delta": -0.0027,
+        "patchcore_status": "ok",
+        "plateau": 0.2986,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 8322.526209001808,
+    "_round0_classification": "NORMAL",
+    "_nd_round0": 0.3037,
+    "_nd_final": 0.301,
+    "_nd_n_rounds": 2,
+    "_researched": true,
+    "_nd_source": "patchcore_top5",
+    "retrieved_original_indices": [
+      99467,
+      107076,
+      31549,
+      96619,
+      43891
+    ],
+    "_research_ms": 565.0,
+    "_wm_type": "neighbor_insufficient",
+    "_wm_axes": [
+      "sex",
+      "source"
+    ],
+    "_wm_rationale": "neighbors spread out; both fields differ.",
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": "sex",
+    "_contrast_distance": 1.126804607691299,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 52,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "52": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26006,
+    "_gt_label": 0,
+    "_gt_cluster": 52,
+    "_category": "smoke"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.331",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 46,
+    "top_5_clusters": [
+      {
+        "cluster_id": 46,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.330641684369981,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp",
+      "fetch_contrast:sex=F",
+      "analyze:skipped_evaluator_once",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 136.60335540771484,
+      "controller_agent_loop": 7910.170316696167,
+      "total": 8047.470808029175
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.330641684369981,
+        "nd": 0.4248,
+        "cluster_id": 46,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "neighbor_insufficient: sex, source \u2014 neighbors spread out; both fields differ.",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": "neighbor_insufficient",
+        "wm_axes": [
+          "sex",
+          "source"
+        ],
+        "wm_rationale": "neighbors spread out; both fields differ.",
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          59583,
+          26242,
+          5221,
+          47377,
+          92209
+        ]
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.330641684369981,
+        "nd": 0.3674,
+        "cluster_id": 46,
+        "cls": "NORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": 0.365,
+        "reweight_mode": "isolation",
+        "research_ms": 349.3,
+        "nd_source": "patchcore_top5",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": "sex",
+        "contrast_distance": 1.3794060280219833,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          59583,
+          26242,
+          5221,
+          47377,
+          92209
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.4248,
+        "nd_final": 0.3674,
+        "n_rounds": 2,
+        "researched": true,
+        "nd_source": "patchcore_top5",
+        "reweight_w": 0.365,
+        "reweight_mode": "isolation",
+        "nd_delta": -0.0574,
+        "patchcore_status": "ok",
+        "plateau": 0.1254,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 8056.167591999838,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.4248,
+    "_nd_final": 0.3674,
+    "_nd_n_rounds": 2,
+    "_researched": true,
+    "_nd_source": "patchcore_top5",
+    "retrieved_original_indices": [
+      59583,
+      26242,
+      5221,
+      47377,
+      92209
+    ],
+    "_research_ms": 349.3,
+    "_wm_type": "neighbor_insufficient",
+    "_wm_axes": [
+      "sex",
+      "source"
+    ],
+    "_wm_rationale": "neighbors spread out; both fields differ.",
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": "sex",
+    "_contrast_distance": 1.3794060280219833,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 46,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "46": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26007,
+    "_gt_label": 0,
+    "_gt_cluster": 46,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=2.036",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 87,
+    "top_5_clusters": [
+      {
+        "cluster_id": 87,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 2.0362466235306735,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.821)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 122.92790412902832,
+      "controller_agent_loop": 23.69213104248047,
+      "total": 147.18270301818848
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 2.0362466235306735,
+        "nd": 0.8205,
+        "cluster_id": 87,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          19874,
+          33068,
+          56541,
+          36962,
+          86297
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.8205,
+        "nd_final": 0.8205,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 156.60050999940722,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.8205,
+    "_nd_final": 0.8205,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      19874,
+      33068,
+      56541,
+      36962,
+      86297
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 87,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "87": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26008,
+    "_gt_label": 0,
+    "_gt_cluster": 87,
+    "_category": "smoke"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=0.950",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 25,
+    "top_5_clusters": [
+      {
+        "cluster_id": 25,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 0.9501433587524925,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.216)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 116.26958847045898,
+      "controller_agent_loop": 25.786638259887695,
+      "total": 142.62032508850098
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 0.9501433587524925,
+        "nd": 0.2165,
+        "cluster_id": 25,
+        "cls": "NORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          45111,
+          29184,
+          31073,
+          114542,
+          38071
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.2165,
+        "nd_final": 0.2165,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 151.69089899791288,
+    "_round0_classification": "NORMAL",
+    "_nd_round0": 0.2165,
+    "_nd_final": 0.2165,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      45111,
+      29184,
+      31073,
+      114542,
+      38071
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 25,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "25": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26009,
+    "_gt_label": 0,
+    "_gt_cluster": 25,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.474",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 21,
+    "top_5_clusters": [
+      {
+        "cluster_id": 21,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.4739979173600972,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp",
+      "analyze:skipped_evaluator_once",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 118.76964569091797,
+      "controller_agent_loop": 8293.745994567871,
+      "total": 8412.994623184204
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.4739979173600972,
+        "nd": 0.5168,
+        "cluster_id": 21,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "neighbor_insufficient: IP_country=United States(0.52) \u2014 neighbors spread out;",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": "neighbor_insufficient",
+        "wm_axes": [
+          "IP_country=United States(0.52)"
+        ],
+        "wm_rationale": "neighbors spread out;",
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          8365,
+          92344,
+          62266,
+          22133,
+          93544
+        ]
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.4739979173600972,
+        "nd": 0.4659,
+        "cluster_id": 21,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": 0.4016,
+        "reweight_mode": "isolation",
+        "research_ms": 255.5,
+        "nd_source": "patchcore_top5",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          8365,
+          92344,
+          62266,
+          22133,
+          93544
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.5168,
+        "nd_final": 0.4659,
+        "n_rounds": 2,
+        "researched": true,
+        "nd_source": "patchcore_top5",
+        "reweight_w": 0.4016,
+        "reweight_mode": "isolation",
+        "nd_delta": -0.0509,
+        "patchcore_status": "ok",
+        "plateau": 0.1235,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 8422.628387001168,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.5168,
+    "_nd_final": 0.4659,
+    "_nd_n_rounds": 2,
+    "_researched": true,
+    "_nd_source": "patchcore_top5",
+    "retrieved_original_indices": [
+      8365,
+      92344,
+      62266,
+      22133,
+      93544
+    ],
+    "_research_ms": 255.5,
+    "_wm_type": "neighbor_insufficient",
+    "_wm_axes": [
+      "IP_country=United States(0.52)"
+    ],
+    "_wm_rationale": "neighbors spread out;",
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 21,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "21": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26010,
+    "_gt_label": 1,
+    "_gt_cluster": 21,
+    "_category": "smoke"
+  },
+  {
+    "classification": "NORMAL",
+    "confidence": 55,
+    "reasoning": "sufficiency=ambiguous; what_missing=accept: purchase_value z=+0.13 \u2014 in-range and neighbors dense.",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.205",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "NORMAL",
+    "primary_cluster_id": 98,
+    "top_5_clusters": [
+      {
+        "cluster_id": 98,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.2052857850341894,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 127.68363952636719,
+      "controller_agent_loop": 7504.895925521851,
+      "total": 7634.974479675293
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.2052857850341894,
+        "nd": 0.3482,
+        "cluster_id": 98,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "accept: purchase_value z=+0.13 \u2014 in-range and neighbors dense.",
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": "accept",
+        "wm_axes": [
+          "purchase_value z=+0.13"
+        ],
+        "wm_rationale": "in-range and neighbors dense.",
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          52660,
+          92661,
+          116774,
+          80386,
+          99668
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.3482,
+        "nd_final": 0.3482,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 7644.916331002605,
+    "_round0_classification": "NORMAL",
+    "_nd_round0": 0.3482,
+    "_nd_final": 0.3482,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      52660,
+      92661,
+      116774,
+      80386,
+      99668
+    ],
+    "_research_ms": null,
+    "_wm_type": "accept",
+    "_wm_axes": [
+      "purchase_value z=+0.13"
+    ],
+    "_wm_rationale": "in-range and neighbors dense.",
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 98,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "98": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26011,
+    "_gt_label": 0,
+    "_gt_cluster": 98,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.365",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 86,
+    "top_5_clusters": [
+      {
+        "cluster_id": 86,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.3653203856417155,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp",
+      "fetch_contrast:sex=M",
+      "analyze:skipped_evaluator_once",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 144.61421966552734,
+      "controller_agent_loop": 7756.085157394409,
+      "total": 7901.453256607056
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.3653203856417155,
+        "nd": 0.4468,
+        "cluster_id": 86,
+        "cls": "ABNORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "neighbor_insufficient: sex, source \u2014 neighbors spread out; both fields differ.",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": "neighbor_insufficient",
+        "wm_axes": [
+          "sex",
+          "source"
+        ],
+        "wm_rationale": "neighbors spread out; both fields differ.",
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          40273,
+          114076,
+          56242,
+          22958,
+          73014
+        ]
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.3653203856417155,
+        "nd": 0.605,
+        "cluster_id": 86,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": 0.854,
+        "reweight_mode": "isolation",
+        "research_ms": 345.4,
+        "nd_source": "patchcore_top5",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": "sex",
+        "contrast_distance": 1.7757002647118563,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          40273,
+          114076,
+          56242,
+          22958,
+          73014
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.4468,
+        "nd_final": 0.605,
+        "n_rounds": 2,
+        "researched": true,
+        "nd_source": "patchcore_top5",
+        "reweight_w": 0.854,
+        "reweight_mode": "isolation",
+        "nd_delta": 0.1582,
+        "patchcore_status": "ok",
+        "plateau": 0.3553,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 7909.829284002626,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.4468,
+    "_nd_final": 0.605,
+    "_nd_n_rounds": 2,
+    "_researched": true,
+    "_nd_source": "patchcore_top5",
+    "retrieved_original_indices": [
+      40273,
+      114076,
+      56242,
+      22958,
+      73014
+    ],
+    "_research_ms": 345.4,
+    "_wm_type": "neighbor_insufficient",
+    "_wm_axes": [
+      "sex",
+      "source"
+    ],
+    "_wm_rationale": "neighbors spread out; both fields differ.",
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": "sex",
+    "_contrast_distance": 1.7757002647118563,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 86,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "86": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26012,
+    "_gt_label": 0,
+    "_gt_cluster": 32,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.821",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 89,
+    "top_5_clusters": [
+      {
+        "cluster_id": 89,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.8209223799792191,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.724)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 114.18318748474121,
+      "controller_agent_loop": 25.6040096282959,
+      "total": 140.43021202087402
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.8209223799792191,
+        "nd": 0.7238,
+        "cluster_id": 89,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          54562,
+          97842,
+          58385,
+          45314,
+          92829
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.7238,
+        "nd_final": 0.7238,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 148.6435150000034,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.7238,
+    "_nd_final": 0.7238,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      54562,
+      97842,
+      58385,
+      45314,
+      92829
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 89,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "89": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26013,
+    "_gt_label": 1,
+    "_gt_cluster": 89,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.795",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 71,
+    "top_5_clusters": [
+      {
+        "cluster_id": 71,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.7947562308559146,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.710)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 119.85993385314941,
+      "controller_agent_loop": 28.156757354736328,
+      "total": 149.08337593078613
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.7947562308559146,
+        "nd": 0.7101,
+        "cluster_id": 71,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          120873,
+          100144,
+          89484,
+          98933,
+          65850
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.7101,
+        "nd_final": 0.7101,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 156.8464709998807,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.7101,
+    "_nd_final": 0.7101,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      120873,
+      100144,
+      89484,
+      98933,
+      65850
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 71,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "71": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26014,
+    "_gt_label": 1,
+    "_gt_cluster": 71,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=2.348",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 50,
+    "top_5_clusters": [
+      {
+        "cluster_id": 50,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 2.3483917994655625,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.911)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 211.41815185546875,
+      "controller_agent_loop": 27.109384536743164,
+      "total": 238.99388313293457
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 2.3483917994655625,
+        "nd": 0.9111,
+        "cluster_id": 50,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          35715,
+          3059,
+          16252,
+          108746,
+          16062
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.9111,
+        "nd_final": 0.9111,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 247.1641730007832,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.9111,
+    "_nd_final": 0.9111,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      35715,
+      3059,
+      16252,
+      108746,
+      16062
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 50,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "50": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26015,
+    "_gt_label": 1,
+    "_gt_cluster": 11,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.676",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 90,
+    "top_5_clusters": [
+      {
+        "cluster_id": 90,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.676353920068051,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.643)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 181.1048984527588,
+      "controller_agent_loop": 29.148101806640625,
+      "total": 210.85262298583984
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.676353920068051,
+        "nd": 0.6434,
+        "cluster_id": 90,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          75478,
+          101985,
+          13276,
+          15770,
+          122666
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.6434,
+        "nd_final": 0.6434,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 299.88765599773615,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.6434,
+    "_nd_final": 0.6434,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      75478,
+      101985,
+      13276,
+      15770,
+      122666
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 90,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "90": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26016,
+    "_gt_label": 0,
+    "_gt_cluster": 52,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.305",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 71,
+    "top_5_clusters": [
+      {
+        "cluster_id": 71,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.3054828100905043,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze",
+      "plan:expand_within_cluster",
+      "expand_within_cluster:mcp",
+      "fetch_contrast:sex=F",
+      "analyze:skipped_evaluator_once",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 122.84421920776367,
+      "controller_agent_loop": 7467.166423797607,
+      "total": 7590.968132019043
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.3054828100905043,
+        "nd": 0.409,
+        "cluster_id": 71,
+        "cls": "NORMAL",
+        "sufficiency": "ambiguous",
+        "what_missing": "neighbor_insufficient: sex, source \u2014 neighbors spread out; both fields differ.",
+        "action": "expand_within_cluster",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "expand_within_cluster",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": "neighbor_insufficient",
+        "wm_axes": [
+          "sex",
+          "source"
+        ],
+        "wm_rationale": "neighbors spread out; both fields differ.",
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          105719,
+          98123,
+          115569,
+          25450,
+          40708
+        ]
+      },
+      {
+        "round": 1,
+        "track": "deep",
+        "top1_distance": 1.3054828100905043,
+        "nd": 0.4466,
+        "cluster_id": 71,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 5,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": 0.592,
+        "reweight_mode": "isolation",
+        "research_ms": 350.9,
+        "nd_source": "patchcore_top5",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": "sex",
+        "contrast_distance": 1.4959759495149911,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          105719,
+          98123,
+          115569,
+          25450,
+          40708
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.409,
+        "nd_final": 0.4466,
+        "n_rounds": 2,
+        "researched": true,
+        "nd_source": "patchcore_top5",
+        "reweight_w": 0.592,
+        "reweight_mode": "isolation",
+        "nd_delta": 0.0376,
+        "patchcore_status": "ok",
+        "plateau": 0.2523,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 7599.871907001216,
+    "_round0_classification": "NORMAL",
+    "_nd_round0": 0.409,
+    "_nd_final": 0.4466,
+    "_nd_n_rounds": 2,
+    "_researched": true,
+    "_nd_source": "patchcore_top5",
+    "retrieved_original_indices": [
+      105719,
+      98123,
+      115569,
+      25450,
+      40708
+    ],
+    "_research_ms": 350.9,
+    "_wm_type": "neighbor_insufficient",
+    "_wm_axes": [
+      "sex",
+      "source"
+    ],
+    "_wm_rationale": "neighbors spread out; both fields differ.",
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": "sex",
+    "_contrast_distance": 1.4959759495149911,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 71,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "71": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26017,
+    "_gt_label": 0,
+    "_gt_cluster": 71,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.726",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 29,
+    "top_5_clusters": [
+      {
+        "cluster_id": 29,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.7263559810639408,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.672)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 126.6472339630127,
+      "controller_agent_loop": 31.139135360717773,
+      "total": 158.18047523498535
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.7263559810639408,
+        "nd": 0.6724,
+        "cluster_id": 29,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          73229,
+          5875,
+          95348,
+          16361,
+          115847
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.6724,
+        "nd_final": 0.6724,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 166.80616299709072,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.6724,
+    "_nd_final": 0.6724,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      73229,
+      5875,
+      95348,
+      16361,
+      115847
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 29,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "29": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26018,
+    "_gt_label": 1,
+    "_gt_cluster": 29,
+    "_category": "smoke"
+  },
+  {
+    "classification": "ABNORMAL",
+    "confidence": 85,
+    "reasoning": "sufficiency=confident; what_missing=(none)",
+    "key_evidence": [
+      "track=deep",
+      "top1=1.655",
+      "planner_used=True",
+      "tool_execution_mode=mcp"
+    ],
+    "final_verdict": "ABNORMAL",
+    "primary_cluster_id": 12,
+    "top_5_clusters": [
+      {
+        "cluster_id": 12,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "vec_index": "fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100",
+    "match_type": "strict",
+    "match_score": 0.0,
+    "top_1_distance": 1.6547778724587212,
+    "top_k": 1,
+    "track": "deep",
+    "planner_used": true,
+    "agent_trace": [
+      "pre_router:deep",
+      "deep_retrieve",
+      "pre_router",
+      "retrieve:base_reused",
+      "analyze:skipped_confident(nd=0.630)",
+      "plan:accept_verdict",
+      "finalize"
+    ],
+    "latency_ms": {
+      "base_retrieve": 95.9160327911377,
+      "controller_agent_loop": 41.76020622253418,
+      "total": 138.34691047668457
+    },
+    "agent_rounds": [
+      {
+        "round": 0,
+        "track": "deep",
+        "top1_distance": 1.6547778724587212,
+        "nd": 0.6305,
+        "cluster_id": 12,
+        "cls": "ABNORMAL",
+        "sufficiency": "confident",
+        "what_missing": null,
+        "action": "accept_verdict",
+        "planner_backend": "deterministic",
+        "evidence_top_k": 3,
+        "action_planner": "accept_verdict",
+        "gate_nd": null,
+        "gate_plateau": null,
+        "gate_ratio": null,
+        "match_type": "strict",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "research_ms": null,
+        "nd_source": "raw_top1",
+        "wm_type": null,
+        "wm_axes": null,
+        "wm_rationale": null,
+        "nd_global": null,
+        "flip": null,
+        "global_cluster": null,
+        "contrast_axis": null,
+        "contrast_distance": null,
+        "research_mode": "v3",
+        "neighbor_oidx": [
+          89660,
+          121327,
+          84426,
+          35453,
+          105167
+        ]
+      },
+      {
+        "round": "final",
+        "nd_round0": 0.6305,
+        "nd_final": 0.6305,
+        "n_rounds": 1,
+        "researched": false,
+        "nd_source": "raw_top1",
+        "reweight_w": null,
+        "reweight_mode": null,
+        "nd_delta": 0.0,
+        "patchcore_status": "not_researched",
+        "plateau": null,
+        "research_error": null
+      }
+    ],
+    "termination": "accept_verdict",
+    "experiment_case": "pca_64_k100",
+    "percolate_version": "v1",
+    "_client_latency_ms": 146.47415099898353,
+    "_round0_classification": "ABNORMAL",
+    "_nd_round0": 0.6305,
+    "_nd_final": 0.6305,
+    "_nd_n_rounds": 1,
+    "_researched": false,
+    "_nd_source": "raw_top1",
+    "retrieved_original_indices": [
+      89660,
+      121327,
+      84426,
+      35453,
+      105167
+    ],
+    "_research_ms": null,
+    "_wm_type": null,
+    "_wm_axes": null,
+    "_wm_rationale": null,
+    "_nd_global": null,
+    "_flip": null,
+    "_global_cluster": null,
+    "_contrast_axis": null,
+    "_contrast_distance": null,
+    "_research_mode": "v3",
+    "_candidate_mode": "dynamic",
+    "top_k_clusters": [
+      {
+        "cluster_id": 12,
+        "rank": 1,
+        "score": 0.0
+      }
+    ],
+    "cluster_distances": {
+      "12": 0.0
+    },
+    "_distance_band": "abnormal_clear",
+    "idx": 26019,
+    "_gt_label": 1,
+    "_gt_cluster": 12,
+    "_category": "smoke"
+  }
+]

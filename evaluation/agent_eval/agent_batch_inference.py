@@ -2,26 +2,26 @@
 agent_batch_inference.py — Agent Loop 전체 평가용 배치 추론
 ===========================================================
 batch_inference_agent.py(smoke) 를 확장하여:
-  1. GT 라벨 비교 (AUROC, FNR 계산 가능)
-  2. round 0 판정 저장 (_round0_classification) → verdict change 추적
-  3. distance band 분류 → boundary zone 분리 측정
-  4. agent_eval_metrics.AgentMetricCalculator 연동
+1. GT 라벨 비교 (AUROC, FNR 계산 가능)
+2. round 0 판정 저장 (_round0_classification) → verdict change 추적
+3. distance band 분류 → boundary zone 분리 측정
+4. agent_eval_metrics.AgentMetricCalculator 연동
 
 설계 원칙:
-  - GTLoader / get_test_case 무변경 재사용
-  - 기존 evaluation_metrics.MetricCalculator의 calculate_distance_based_auroc
+- GTLoader / get_test_case 무변경 재사용
+- 기존 evaluation_metrics.MetricCalculator의 calculate_distance_based_auroc
     / calculate_anomaly_auroc도 그대로 호출 가능
-  - FORCE_MOCK_ANALYZER 모드에서도 동작 (loop 검증 목적)
+- FORCE_MOCK_ANALYZER 모드에서도 동작 (loop 검증 목적)
 
 Usage:
-  python agent_batch_inference.py \\
+python agent_batch_inference.py \\
     --experiment-case pca_64_k100 \\
     --percolate-version v14 \\
     --n-samples 200 \\
     --output-dir /results/agent_eval
 
-  # boundary zone만 타깃 (start-index를 조정하거나 --boundary-only)
-  python agent_batch_inference.py --n-samples 500 --boundary-only
+# boundary zone만 타깃 (start-index를 조정하거나 --boundary-only)
+python agent_batch_inference.py --n-samples 500 --boundary-only
 """
 
 import os
@@ -57,11 +57,11 @@ PIPELINE_MODE_DEFAULT = os.getenv("PIPELINE_MODE", "agent").lower()
 
 # L48 (ORCHESTRATOR_URL 아래)
 _AXIS_ENV_KEYS = ("EXPERIMENT_CASE", "PERCOLATE_QUERY_VERSION", "ENABLE_BUCKETIZATION",
-                  "BUCKET_TOLERANCE", "BUCKET_MIN_MATCH", "VEC_INDEX_CORESET_PCT",
-                  "VEC_QUANT", "HNSW_M", "HNSW_EF_CONSTRUCTION", "VEC_INDEX_SUFFIX",
-                  "KNN_NUM_CANDIDATES", "RETRIEVER_OVERSAMPLE", "SEARCH_MODE",
-                  "TOOL_EXECUTION_MODE", "TOOL_GATE_ENABLE", "RESEARCH_MODE",
-                  "GGUF_QUANT", "ENABLE_KV_CACHE")
+                "BUCKET_TOLERANCE", "BUCKET_MIN_MATCH", "VEC_INDEX_CORESET_PCT",
+                "VEC_QUANT", "HNSW_M", "HNSW_EF_CONSTRUCTION", "VEC_INDEX_SUFFIX",
+                "KNN_NUM_CANDIDATES", "RETRIEVER_OVERSAMPLE", "SEARCH_MODE",
+                "TOOL_EXECUTION_MODE", "TOOL_GATE_ENABLE", "RESEARCH_MODE",
+                "GGUF_QUANT", "ENABLE_KV_CACHE")
 
 def _collect_axes() -> Dict[str, Optional[str]]:
     return {k: os.getenv(k) for k in _AXIS_ENV_KEYS if os.getenv(k) is not None}
@@ -89,8 +89,8 @@ async def call_agent_detect(
     """
     orchestrator /detect 호출.
     응답에 _round0_classification 추가:
-      analyzer_history가 있으면 round 0의 cls를 저장.
-      없으면 최종 classification으로 fallback.
+    analyzer_history가 있으면 round 0의 cls를 저장.
+    없으면 최종 classification으로 fallback.
     """
     try:
         t = time.perf_counter()
@@ -107,7 +107,7 @@ async def call_agent_detect(
         # r0으로 저장)은 verdict_change_rate가 항상 0으로 나오는 원인이었음.
         rounds = result.get("agent_rounds") or []
         r0 = (rounds[0].get("cls") if rounds else None) \
-             or result.get("classification")   # rounds 없을 때만 fallback
+            or result.get("classification")   # rounds 없을 때만 fallback
         result["_round0_classification"] = r0
 
         # ★ [NB v3 — 잔여 실험 B] controller finalize가 round_log에 남기는
@@ -126,24 +126,24 @@ async def call_agent_detect(
         #   round 0(=base retrieve 결과)을 우선 사용하고, 없으면 첫 유효 라운드.
         _num_rounds = [r for r in rounds if isinstance(r.get("round"), int)]
         _oidx = next((r.get("neighbor_oidx") for r in _num_rounds
-                      if r.get("neighbor_oidx")), None)
+                    if r.get("neighbor_oidx")), None)
         if _oidx:
             result["retrieved_original_indices"] = [int(v) for v in _oidx]
 
         # ★ [EXP] 재검색 소요 시간 (round>=1 엔트리에만 존재)
         result["_research_ms"] = next((r.get("research_ms") for r in reversed(_num_rounds)
-                                       if r.get("research_ms") is not None), None)
+                                    if r.get("research_ms") is not None), None)
 
         # ── ★ [V3] typed wm + verify_global/contrast 트레이스 승격 ──────────
         #   controller round_entry의 v3 키를 per-sample 최상위 컬럼으로 복사.
         #   (v2/legacy 실행에서는 전부 None — 리포트 스키마 하위호환)
         _last = next((r for r in reversed(rounds)
-                      if isinstance(r.get("round"), int)), {}) if rounds else {}
+                    if isinstance(r.get("round"), int)), {}) if rounds else {}
         for _k in ("wm_type", "wm_axes", "wm_rationale", "nd_global", "flip",
-                   "global_cluster", "contrast_axis", "contrast_distance",
-                   "research_mode"):
+                "global_cluster", "contrast_axis", "contrast_distance",
+                "research_mode"):
             result[f"_{_k}"] = next((r.get(_k) for r in reversed(rounds)
-                                     if isinstance(r, dict) and r.get(_k) is not None),
+                                    if isinstance(r, dict) and r.get(_k) is not None),
                                     None)
         result["_candidate_mode"] = os.getenv("ROUTER_CANDIDATE_MODE", "static")
 
@@ -216,12 +216,12 @@ def load_eval_set_indices(args, gt_data, n_total: int):
     eval jsonl 레코드 → test idx 매핑 + n_samples 층화 서브샘플.
 
     매핑 전략 (2단):
-      1) metadata["test_idx"] 존재 시 그대로 사용 (NB01 1줄 추가분 — 신규 생성분)
-      2) fallback: top1_orig_index 역매핑.
-         gt_loader의 top5_indices와 NB01의 gt_knn_indices_576d는 동일 컬럼이므로
-         top5_indices[idx][0] == metadata.top1_orig_index 매칭이 유효.
-         후보 복수 시 gt_label 일치 → |top1_l2_distance − top5_dist[idx][0]| 최소로 tie-break.
-         탐색 범위는 eval 구간(테스트셋 끝 EVAL_RATIO)으로 제한.
+    1) metadata["test_idx"] 존재 시 그대로 사용 (NB01 1줄 추가분 — 신규 생성분)
+    2) fallback: top1_orig_index 역매핑.
+        gt_loader의 top5_indices와 NB01의 gt_knn_indices_576d는 동일 컬럼이므로
+        top5_indices[idx][0] == metadata.top1_orig_index 매칭이 유효.
+        후보 복수 시 gt_label 일치 → |top1_l2_distance − top5_dist[idx][0]| 최소로 tie-break.
+        탐색 범위는 eval 구간(테스트셋 끝 EVAL_RATIO)으로 제한.
 
     Returns: (indices, eval_meta)  — eval_meta[idx] = NB 메타(teacher 응답/nd/top_k)
     """
@@ -255,7 +255,7 @@ def load_eval_set_indices(args, gt_data, n_total: int):
                 continue
             if len(cands) > 1 and top5_dist is not None and m.get("top1_l2_distance") is not None:
                 cands = sorted(cands, key=lambda c:
-                               abs(float(top5_dist[c][0]) - float(m["top1_l2_distance"])))
+                            abs(float(top5_dist[c][0]) - float(m["top1_l2_distance"])))
             idx = cands[0]; n_fallback += 1
         if idx in eval_meta:                                   # 중복 매핑 방지
             continue
@@ -279,7 +279,7 @@ def load_eval_set_indices(args, gt_data, n_total: int):
         n_pos = min(len(pos), args.n_samples // 2)
         n_neg = min(len(neg), args.n_samples - n_pos)
         indices = sorted(rng.choice(pos, n_pos, replace=False).tolist()
-                         + rng.choice(neg, n_neg, replace=False).tolist())
+                        + rng.choice(neg, n_neg, replace=False).tolist())
         print(f"  층화 샘플      : {len(indices)} (pos={n_pos}, neg={n_neg}, seed={args.sample_seed})")
     return indices, eval_meta
 
@@ -391,7 +391,7 @@ async def run_batch(args) -> List[Dict]:
         return out
 
     _limits = httpx.Limits(max_connections=CONCURRENCY * 2,
-                           max_keepalive_connections=CONCURRENCY * 2)
+                        max_keepalive_connections=CONCURRENCY * 2)
     async with httpx.AsyncClient(limits=_limits) as client:
         # ★ gather는 입력 순서를 보존 — predictions[i] ↔ indices[i] 정렬이
         #   gt_arrays(= np.asarray(...)[indices])와 맞아야 하므로 필수.
@@ -447,16 +447,16 @@ async def run_batch(args) -> List[Dict]:
     # print(f"\n[batch] DONE  n={len(predictions)}  errors={n_err}")
     # ── 서버 mode 불일치 감지: forward 모드 요청인데 agent 응답(또는 반대) ──
     _n_fwd = sum(1 for p in predictions
-                 if not p.get("error") and p.get("termination") == "forward")
+                if not p.get("error") and p.get("termination") == "forward")
     _n_ok  = sum(1 for p in predictions if not p.get("error"))
     if _n_ok:
         _fwd_ratio = _n_fwd / _n_ok
         if args.pipeline_mode == "forward" and _fwd_ratio < 0.5:
             print(f"⚠ mode 불일치 의심: --pipeline-mode=forward 인데 forward 종결 "
-                  f"{_fwd_ratio:.0%} — orchestrator PIPELINE_MODE 확인")
+                f"{_fwd_ratio:.0%} — orchestrator PIPELINE_MODE 확인")
         if args.pipeline_mode == "agent" and _fwd_ratio > 0.5:
             print(f"⚠ mode 불일치 의심: --pipeline-mode=agent 인데 forward 종결 "
-                  f"{_fwd_ratio:.0%} — orchestrator PIPELINE_MODE 확인")
+                f"{_fwd_ratio:.0%} — orchestrator PIPELINE_MODE 확인")
 
     wall = {"total_s": round(time.perf_counter() - _t_wall0, 1),
             "n": len(predictions),
@@ -467,13 +467,13 @@ async def run_batch(args) -> List[Dict]:
     gt_arrays = {}
     # ★ [E1 수정] 키 alias — gt_cluster_tree가 없으면 gt_cluster_id로 조회
     for _k, _aliases in (("gt_cluster_tree", ("gt_cluster_tree", "gt_cluster_id")),
-                         ("gt_top5_cluster_ids",  ("gt_top5_cluster_ids",)),
-                         ("gt_top5_cluster_dist", ("gt_top5_cluster_dist",)),
-                         ("gt_top5_dist",         ("gt_top5_dist",)),
-                         ("gt_top5_indices",      ("gt_top5_indices",)),                 # ★
-                         ("gt_top5_indices_coreset_adjusted",
-                          ("gt_top5_indices_coreset_adjusted",)),
-                         ):
+                        ("gt_top5_cluster_ids",  ("gt_top5_cluster_ids",)),
+                        ("gt_top5_cluster_dist", ("gt_top5_cluster_dist",)),
+                        ("gt_top5_dist",         ("gt_top5_dist",)),
+                        ("gt_top5_indices",      ("gt_top5_indices",)),                 # ★
+                        ("gt_top5_indices_coreset_adjusted",
+                        ("gt_top5_indices_coreset_adjusted",)),
+                        ):
         _a = next((gt_data.get(_al) for _al in _aliases if gt_data.get(_al) is not None), None)
         if _a is not None:
             gt_arrays[_k] = np.asarray(_a)[indices]
@@ -508,7 +508,7 @@ def calculate_path_conditioned_metrics(predictions: List[Dict], gt_sub: np.ndarr
         fn = ((preds == 0) & (gts == 1)).sum()
         pos = (gts == 1).sum()
         out[tool] = {"n": len(pairs), "fnr": float(fn / pos) if pos else None,
-                     "accuracy": float((preds == gts).mean())}
+                    "accuracy": float((preds == gts).mean())}
     return out
 
 # ============================================================
@@ -679,6 +679,12 @@ def run_evaluation(
                 "recall": round(tp / max(tp + fn, 1), 4),
                 "tp": tp, "fn": fn, "fp": fp, "tn": tn,
             }
+        def _auroc_only(y, s):
+            try:
+                from sklearn.metrics import roc_auc_score
+                return round(float(roc_auc_score(y, s)), 4) if len(set(y.tolist())) > 1 else None
+            except Exception:
+                return None
 
         nd_dual = {
             "n": int(len(_nd)),
@@ -695,6 +701,29 @@ def run_evaluation(
             "researched_mean_nd":  round(float(_nd[_researched].mean()), 4) if _researched.any() else None,
             "raw_mean_nd":         round(float(_nd[~_researched].mean()), 4) if (~_researched).any() else None,
         }
+
+        # ── ★ [coreset 비교] run 별 경험적 nd 재캘리브레이션 ────────────
+        #   AUROC 는 단조변환 불변이므로 nd 로 재도 값이 같다(검증용으로 함께 출력).
+        #   실제로 바뀌는 것은 고정 임계 판정뿐 — P50/IQR 이 coreset 100% 기준이라
+        #   10%/1% 에서 어긋난다. 이 run 자신의 거리 분포로 다시 맞춰 비교 가능하게 한다.
+        _d = np.array([p.get("top_1_distance") for p in predictions
+                    if not p.get("error") and p.get("top_1_distance") is not None],
+                    dtype=float)
+        if _d.size >= 10:
+            _p50 = float(np.percentile(_d, 50))
+            _iqr = float(np.percentile(_d, 75) - np.percentile(_d, 25)) or 1e-6
+            _nd_recal = 1.0 / (1.0 + np.exp(-(_d - _p50) / _iqr))
+            _y = np.array([int(g) for p, g in zip(predictions, gt_sub)
+                        if not p.get("error") and p.get("top_1_distance") is not None])
+            nd_dual["recalibrated"] = {
+                "p50": round(_p50, 4), "iqr": round(_iqr, 4),
+                "serving_p50": float(_os.getenv("DIST_P50", "1.448")),
+                "serving_iqr": float(_os.getenv("DIST_IQR", "0.387")),
+                # ★ AUROC 는 raw 와 동일해야 정상 — 다르면 계산 버그
+                "auroc_nd_recal": _auroc_only(_y, _nd_recal),
+                "cls_at_recal_threshold": _cls_at(_nd_recal, _y, CLS_ND_THRESHOLD),
+                "_note": "AUROC(nd) == AUROC(raw) by monotonicity; only cls@thr changes",
+            }
 
     # ── 10-b. ★ [EXP] Research Effect — 재검색 전/후 판정 변화 인과 분해 ──
     #   nd_dual이 "최종 nd 한 벌"만 보는 것과 달리, (nd_round0 → nd_final)
@@ -737,7 +766,7 @@ def run_evaluation(
         "latency_breakdown":  latency,
         "router_retriever":   rr_metrics,              # ★ 상세 검색 계층 지표
         "path_conditioned":   (calculate_path_conditioned_metrics(predictions, gt_sub)
-                               if pipeline_mode == "agent" else None),
+                            if pipeline_mode == "agent" else None),
         "agent_summary":      calc.get_agent_summary(),
     }
 
@@ -776,14 +805,14 @@ async def main():
     parser.add_argument("--pipeline-mode",       type=str, default=PIPELINE_MODE_DEFAULT,
                         choices=["agent", "forward"],
                         help="agent=S4 evaluator 루프 / forward=S2 forwardRAG baseline "
-                             "(서버 orchestrator PIPELINE_MODE와 일치 필요)")
+                            "(서버 orchestrator PIPELINE_MODE와 일치 필요)")
     parser.add_argument("--eval-source",         type=str, default="smoke",
                         choices=["smoke", "eval_set"],
                         help="smoke: 테스트셋 범위/랜덤 N_SAMPLE | "
-                             "eval_set: NB01 teacher 생성 eval jsonl(GCS) 기반")
+                            "eval_set: NB01 teacher 생성 eval jsonl(GCS) 기반")
     parser.add_argument("--eval-jsonl-gcs",      type=str, default=EVAL_JSONL_GCS,
                         help="eval_set 모드에서 다운로드할 GCS blob 경로 "
-                             "(bucket 제외, env EVAL_JSONL_GCS)")
+                            "(bucket 제외, env EVAL_JSONL_GCS)")
     parser.add_argument("--eval-ratio",          type=float,
                         default=float(os.getenv("EVAL_RATIO", "0.1")),
                         help="eval 구간 비율 — NB01 EVAL_RATIO와 동일해야 역매핑 유효")
@@ -801,12 +830,12 @@ async def main():
     if args.report_only:
         preds = json.loads(Path(args.report_only).read_text())
         loader = GTLoader(experiment_case=args.experiment_case,
-                          coreset_percentage=str(args.coreset_percentage))
+                        coreset_percentage=str(args.coreset_percentage))
         _, _, gt_data = loader.load_all()
         indices = [p["idx"] for p in preds if not p.get("error")]
         report  = run_evaluation(preds, gt_data["label"], indices,
-                                 out_dir, args.experiment_case,
-                                 pipeline_mode=args.pipeline_mode)
+                                out_dir, args.experiment_case,
+                                pipeline_mode=args.pipeline_mode)
         print(json.dumps(report["agent_summary"], indent=2))
         return
 
@@ -831,13 +860,13 @@ async def main():
 
     # ── ★ 총 실험 시간 + 요소별 시간 (forwardRAG ↔ agent 비교의 공통 축) ──
     print(f"\n  [시간] total={wall['total_s']}s  n={wall['n']}  "
-          f"per-sample={wall['per_sample_s']}s")
+        f"per-sample={wall['per_sample_s']}s")
     _lb = report.get("latency_breakdown", {})
     for _k, _lab in (("base_retrieve_ms", "router+retriever(base)"),
-                     ("forward_analyzer_ms", "forward analyzer"),
-                     ("controller_loop_ms", "agent loop(controller)"),
-                     ("tool_delta_ms", "analyzer+planner+tool Δ"),
-                     ("total_ms", "end-to-end")):
+                    ("forward_analyzer_ms", "forward analyzer"),
+                    ("controller_loop_ms", "agent loop(controller)"),
+                    ("tool_delta_ms", "analyzer+planner+tool Δ"),
+                    ("total_ms", "end-to-end")):
         _st = _lb.get(_k)
         if isinstance(_st, dict) and _st.get("mean") is not None:
             print(f"    {_lab:26s}: mean {_st['mean']}ms  p95 {_st['p95']}ms")
@@ -851,37 +880,37 @@ async def main():
         print(f"    router MRR           : {(_rr.get('router_mrr') or {}).get('router_mrr')}")
         print(f"    candidate recall@5   : {(_rr.get('candidate_recall') or {}).get('candidate_recall_top5')}")
         print(f"    routing ε-recall(10%): "
-              f"{(_rr.get('routing_epsilon_recall') or {}).get('routing_epsilon_recall_10pct')}")
+            f"{(_rr.get('routing_epsilon_recall') or {}).get('routing_epsilon_recall_10pct')}")
         print(f"    coreset ε-recall(10%): "
-              f"{(_rr.get('coreset_epsilon_recall') or {}).get('coreset_epsilon_recall_10pct')}")
+            f"{(_rr.get('coreset_epsilon_recall') or {}).get('coreset_epsilon_recall_10pct')}")
 
     # ── ★ Agent 전용 지표 (forward 모드는 skip — 루프 없음) ──
     if args.pipeline_mode == "agent":
         print(f"\n  verdict change rate  : {s.get('verdict_change_rate')}")
         _ad = report.get("action_distribution") or {}
         print(f"  expand / reroute rate: {_ad.get('expand_rate')} / {_ad.get('reroute_rate')}"
-              f"  (deep n={_ad.get('deep_track_n')})")
+            f"  (deep n={_ad.get('deep_track_n')})")
         print(f"  wm direction         : cm {_ad.get('cm_n')} ({_ad.get('cm_ratio')})  "
-              f"ni {_ad.get('ni_n')} ({_ad.get('ni_ratio')})  "
-              f"none {_ad.get('wm_none_n')}  [ambiguous rounds={_ad.get('wm_rounds_n')}]")
+            f"ni {_ad.get('ni_n')} ({_ad.get('ni_ratio')})  "
+            f"none {_ad.get('wm_none_n')}  [ambiguous rounds={_ad.get('wm_rounds_n')}]")
     # ── ★ [요청 7] Agent nd 이중 리포트 ──────────────────────
     if args.pipeline_mode == "agent":
         _nd = report.get("agent_nd_dual") or {}
         _cls = _nd.get("cls_at_nd_threshold") or {}
         print(f"\n  [agent nd 이중 리포트] n={_nd.get('n')}  "
-              f"(재검색 {_nd.get('n_researched')} / raw {_nd.get('n_raw')})")
+            f"(재검색 {_nd.get('n_researched')} / raw {_nd.get('n_raw')})")
         print(f"    (1) agent nd AUROC (연속, threshold 무관) : {_nd.get('agent_nd_auroc_all')}")
         print(f"    (2) cls@CLS_ND_THRESHOLD={_nd.get('cls_nd_threshold')} → "
-              f"acc {_cls.get('accuracy')} / FNR {_cls.get('fnr')} / FPR {_cls.get('fpr')}")
+            f"acc {_cls.get('accuracy')} / FNR {_cls.get('fnr')} / FPR {_cls.get('fpr')}")
         print(f"    (3) 척도분리 AUROC — 재검색군(patchcore) {_nd.get('researched_nd_auroc')} "
-              f"(mean nd {_nd.get('researched_mean_nd')}) | "
-              f"raw군 {_nd.get('raw_nd_auroc')} (mean nd {_nd.get('raw_mean_nd')})")
+            f"(mean nd {_nd.get('researched_mean_nd')}) | "
+            f"raw군 {_nd.get('raw_nd_auroc')} (mean nd {_nd.get('raw_mean_nd')})")
         print(f"       ↑ 두 AUROC/mean 차가 크면 한 임계 공유가 미스캘리브레이션 신호")
 
         # ── ★ [요청 5] round0/round1 재검색 시간 ──
         _r0 = [p.get("latency_ms", {}).get("base_retrieve") for p in predictions
-               if not p.get("error") and isinstance(p.get("latency_ms"), dict)
-               and p["latency_ms"].get("base_retrieve") is not None]
+            if not p.get("error") and isinstance(p.get("latency_ms"), dict)
+            and p["latency_ms"].get("base_retrieve") is not None]
         _r1 = []
         for p in predictions:
             for r in (p.get("agent_rounds") or []):
@@ -902,42 +931,42 @@ async def main():
                                     _re.get("selection", {}), _re.get("cost", {}))
             _v  = (_re.get("by_view", {}) or {}).get(_tr.get("main_view", "pre_best_frozen"), {})
             print(f"\n  [재검색 효과] n={_re.get('n')} / 재검색 {_dn.get('n_researched')}건  "
-                  f"(주 임계 view={_tr.get('main_view')} thr={_v.get('threshold_pre')})")
+                f"(주 임계 view={_tr.get('main_view')} thr={_v.get('threshold_pre')})")
             print(f"    AUROC  pre {(_re.get('auroc') or {}).get('pre')} → "
-                  f"post {(_re.get('auroc') or {}).get('post')}  "
-                  f"(Δ {(_re.get('auroc') or {}).get('delta')})")
+                f"post {(_re.get('auroc') or {}).get('post')}  "
+                f"(Δ {(_re.get('auroc') or {}).get('delta')})")
             for _b in ("ambiguous", "confident"):
                 _pb, _pa = (_v.get(_b, {}) or {}).get("pre", {}), (_v.get(_b, {}) or {}).get("post", {})
                 if not _pb.get("n"):
                     continue
                 _inv = "" if _b == "confident" and _v.get(_b, {}).get("_invariant_ok", True) \
-                       else ("  ⚠ 대조군 변동" if _b == "confident" else "")
+                    else ("  ⚠ 대조군 변동" if _b == "confident" else "")
                 print(f"    [{_b:<9}] n={_pb.get('n')}  "
-                      f"pre  TPR {_pb.get('TPR')} FPR {_pb.get('FPR')} "
-                      f"FNR {_pb.get('FNR')} TNR {_pb.get('TNR')} acc {_pb.get('accuracy')}")
+                    f"pre  TPR {_pb.get('TPR')} FPR {_pb.get('FPR')} "
+                    f"FNR {_pb.get('FNR')} TNR {_pb.get('TNR')} acc {_pb.get('accuracy')}")
                 print(f"    {'':<12}  post TPR {_pa.get('TPR')} FPR {_pa.get('FPR')} "
-                      f"FNR {_pa.get('FNR')} TNR {_pa.get('TNR')} acc {_pa.get('accuracy')}{_inv}")
+                    f"FNR {_pa.get('FNR')} TNR {_pa.get('TNR')} acc {_pa.get('accuracy')}{_inv}")
             print(f"    전이  flip {_tr.get('n_flip')}  "
-                  f"rescued {(_tr.get('rescued') or {}).get('n')} {(_tr.get('rescued') or {}).get('by_band')}  "
-                  f"degraded {(_tr.get('degraded') or {}).get('n')} {(_tr.get('degraded') or {}).get('by_band')}  "
-                  f"→ net_gain {_tr.get('net_gain')}")
+                f"rescued {(_tr.get('rescued') or {}).get('n')} {(_tr.get('rescued') or {}).get('by_band')}  "
+                f"degraded {(_tr.get('degraded') or {}).get('n')} {(_tr.get('degraded') or {}).get('by_band')}  "
+                f"→ net_gain {_tr.get('net_gain')}")
             print(f"    Δnd   mean {_dn.get('mean')}  |Δ| {_dn.get('mean_abs')}  "
-                  f"moved {_dn.get('n_moved')}  방향정확도 {_dn.get('directional_accuracy')}")
+                f"moved {_dn.get('n_moved')}  방향정확도 {_dn.get('directional_accuracy')}")
             print(f"          by_wm  ni={_dn.get('by_wm_type', {}).get('ni')}  "
-                  f"cm={_dn.get('by_wm_type', {}).get('cm')}")
+                f"cm={_dn.get('by_wm_type', {}).get('cm')}")
             print(f"    선택  ambiguous_precision {_sel.get('ambiguous_precision')} / "
-                  f"recall {_sel.get('ambiguous_recall')} / missed {_sel.get('missed')}")
+                f"recall {_sel.get('ambiguous_recall')} / missed {_sel.get('missed')}")
             print(f"    비용  mean {_cst.get('research_ms_mean')}ms  "
-                  f"ms/rescue {_cst.get('ms_per_rescue')}")
+                f"ms/rescue {_cst.get('ms_per_rescue')}")
             if _re.get("_warning"):
                 print(f"    ⚠ {_re['_warning']}")
         elif args.pipeline_mode == "agent":
             print(f"\n  [재검색 효과] 계산 불가 — _nd_round0/_nd_final 쌍 없음 "
-                  f"(controller round_log의 final 엔트리 확인)")
+                f"(controller round_log의 final 엔트리 확인)")
     # routing 정확도: 서빙 primary_cluster_id vs GT cluster (gt_cluster_tree)
     _r = [(p.get("primary_cluster_id"), p.get("_gt_cluster"))
-          for p in predictions if not p.get("error")
-          and p.get("_gt_cluster") is not None and p.get("_gt_cluster") >= 0]
+        for p in predictions if not p.get("error")
+        and p.get("_gt_cluster") is not None and p.get("_gt_cluster") >= 0]
     if _r:
         _acc = sum(int(a == b) for a, b in _r) / len(_r)
         print(f"  routing accuracy     : {_acc:.4f}  (n={len(_r)})")

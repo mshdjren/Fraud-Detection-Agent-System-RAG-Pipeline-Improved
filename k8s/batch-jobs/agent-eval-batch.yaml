@@ -44,7 +44,7 @@ metadata:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: 0802-agent-eval-smoke-bbq-cs100
+  name: 0805-agent-eval-smoke-bbq-llmopt-n100-coreset100-prompmid
   namespace: elastic
   labels:
     app: evaluation
@@ -139,7 +139,7 @@ spec:
         # N_SAMPLES: 전체 평가 샘플 수.
         #   smoke(검증): 10~20, 정식 평가: 500~1000
         - name: N_SAMPLES
-          value: "20"
+          value: "100"
         - name: START_INDEX
           value: "26000"
         - name: CORESET_PERCENTAGE

@@ -1,4 +1,5 @@
 {
+  "inline_index": false,
   "run_id": "g-toolgate-gateon",
   "group": "G_toolgate",
   "variant": "gateon",
@@ -6,7 +7,7 @@
   "index_id": "f32",
   "eval": "agent",
   "n_samples": 20,
-  "concurrency": 1,
+  "concurrency": 4,
   "note": "CV C6 — conditional re-retrieval 유무",
   "experiment_case": "pca_64_k100",
   "config": {
@@ -32,6 +33,6 @@
   },
   "src_hash": {
     "ingest": "0c9d9fdf",
-    "agent_eval": "b854c548"
+    "agent_eval": "2b535188"
   }
 }

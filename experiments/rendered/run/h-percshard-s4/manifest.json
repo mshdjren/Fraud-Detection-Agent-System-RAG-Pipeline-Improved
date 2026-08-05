@@ -1,0 +1,38 @@
+{
+  "inline_index": true,
+  "run_id": "h-percshard-s4",
+  "group": "H_percshard",
+  "variant": "s4",
+  "stage": 4,
+  "index_id": "perc_s4",
+  "eval": "agent",
+  "n_samples": 20,
+  "concurrency": 4,
+  "note": "percolate 샤드 분산 — 등록 쿼리 5,725개를 N 샤드로 병렬 실행",
+  "experiment_case": "pca_64_k100",
+  "config": {
+    "EXPERIMENT_CASE": "pca_64_k100",
+    "INGEST_SEARCH_MODE": "hnsw",
+    "SEARCH_MODE": "hnsw_filtered",
+    "VERSIONS": "v1",
+    "PERCOLATE_QUERY_VERSION": "v14",
+    "ENABLE_BUCKETIZATION": "true",
+    "VEC_INDEX_CORESET_PCT": "100",
+    "VEC_QUANT": "f32",
+    "HNSW_M": "16",
+    "HNSW_EF_CONSTRUCTION": "100",
+    "KNN_NUM_CANDIDATES": "200",
+    "RETRIEVER_OVERSAMPLE": "0",
+    "TOOL_EXECUTION_MODE": "mcp_native",
+    "RESEARCH_MODE": "v3",
+    "PIPELINE_MODE": "agent",
+    "EVAL_SOURCE": "smoke",
+    "N_SHARDS": "4",
+    "SKIP_ANALYZER": "false",
+    "RUN_ID": "h-percshard-s4"
+  },
+  "src_hash": {
+    "ingest": "0c9d9fdf",
+    "agent_eval": "2b535188"
+  }
+}

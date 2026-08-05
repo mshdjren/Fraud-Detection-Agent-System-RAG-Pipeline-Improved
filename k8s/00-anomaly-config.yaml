@@ -151,7 +151,7 @@ data:
   #
   #   VEC_INDEX_CORESET_PCT: 원본 coreset 인덱스의 percentage (100 | 10 | 1)
   #     → fraud_ecom_{experiment_case}_percentage_{pct}_cluster_tree_vec
-  VEC_INDEX_CORESET_PCT: "100"
+  VEC_INDEX_CORESET_PCT: "100"    #100
   #
   #   AUG_MULTIPLIER: gaussian aug 인덱스 사용 시 배수 ("" = 원본 coreset 사용)
   #     "" | "2" | "5" | "10" | "20" | "30"
@@ -243,6 +243,12 @@ data:
   PROMPT_VERSION:  "v3"
   WM_SCHEMA:       "v3"
   ANALYZER_DECISION_MODE: "det"
+
+#   off        : v3 원문
+#   safe       : nd(top1) 제거 + TEST 섹션헤더 제거   (ni 증거 전부 보존)
+#   mid        : safe + CLUSTER FIT 의 value= 제거 + PERSONA 'ok' 행 필터
+#   aggressive : mid + PERSONA dom 값 제거 + spread 수치 제거  ← acc 회귀 발생
+  PROMPT_COMPACT: "mid"
 
   RUN_ID: "smoke-bbq-cs100"
 

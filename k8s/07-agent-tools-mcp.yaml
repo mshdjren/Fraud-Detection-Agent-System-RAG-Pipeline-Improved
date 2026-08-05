@@ -54,8 +54,6 @@ data:
   # agent_tools_mcp_server.py 의 --host / --port 와 동일.
   # Dockerfile CMD 에 하드코딩되어 있으나, 재정의가 필요할 때를 위해
   # ConfigMap 에도 명시해 둔다.
-  MCP_HOST: "0.0.0.0"
-  MCP_PORT: "8080"
 
   # ── Tool 토글 ─────────────────────────────────────────────────
   # compare_features 는 3-axis 비교실험(Arm 3) 단계에서만 활성화한다.
@@ -64,8 +62,7 @@ data:
   MCP_HOST: "0.0.0.0"
   MCP_PORT: "8080"
   # ★ [FIX] DNS rebinding 허용 목록 (쉼표 구분, 포트는 * 와일드카드)
-  MCP_ALLOWED_HOSTS: "agent-tools-mcp:*,agent-tools-mcp.elastic.svc.cluster.local:*,localhost:*,127.0.0.1:*,[::1]:*"
-
+  MCP_ALLOWED_HOSTS: "agent-tools-mcp,agent-tools-mcp:*,agent-tools-mcp.elastic.svc.cluster.local,agent-tools-mcp.elastic.svc.cluster.local:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*,[::1],[::1]:*"
 ---
 # ───────────────────────────
 # Deployment

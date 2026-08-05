@@ -1,0 +1,40 @@
+{
+  "inline_index": false,
+  "run_id": "b-coreset-cs100",
+  "group": "B_coreset",
+  "variant": "cs100",
+  "stage": 1,
+  "index_id": "f32",
+  "eval": "agent",
+  "n_samples": 100,
+  "concurrency": 4,
+  "note": "CV C2 — coreset 10% → 메모리 −89%, AUROC 손실 0.4%p 이내",
+  "experiment_case": "pca_64_k100",
+  "config": {
+    "EXPERIMENT_CASE": "pca_64_k100",
+    "INGEST_SEARCH_MODE": "hnsw",
+    "SEARCH_MODE": "hnsw_filtered",
+    "VERSIONS": "v1",
+    "PERCOLATE_QUERY_VERSION": "v1",
+    "ENABLE_BUCKETIZATION": "false",
+    "VEC_INDEX_CORESET_PCT": "100",
+    "VEC_QUANT": "f32",
+    "HNSW_M": "16",
+    "HNSW_EF_CONSTRUCTION": "100",
+    "KNN_NUM_CANDIDATES": "200",
+    "RETRIEVER_OVERSAMPLE": "0",
+    "TOOL_EXECUTION_MODE": "mcp_native",
+    "RESEARCH_MODE": "v3",
+    "PIPELINE_MODE": "agent",
+    "EVAL_SOURCE": "smoke",
+    "SKIP_ANALYZER": "false",
+    "RUN_ID": "b-coreset-cs100"
+  },
+  "src_hash": {
+    "ingest": "0c9d9fdf",
+    "agent_eval": "2b535188"
+  },
+  "suspect_restart": false,
+  "exit_code": 0,
+  "status": "ok"
+}

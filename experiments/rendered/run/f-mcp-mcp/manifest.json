@@ -1,4 +1,5 @@
 {
+  "inline_index": false,
   "run_id": "f-mcp-mcp",
   "group": "F_mcp",
   "variant": "mcp",
@@ -31,6 +32,6 @@
   },
   "src_hash": {
     "ingest": "0c9d9fdf",
-    "agent_eval": "b854c548"
+    "agent_eval": "2b535188"
   }
 }

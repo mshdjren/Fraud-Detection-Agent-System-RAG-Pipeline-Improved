@@ -1,0 +1,8 @@
+index_id,index,coreset_pct,vec_quant,hnsw_m,hnsw_ef,docs,store_mb,working_set_mb,segments
+bbq,fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_bbq_hnsw_m16ef100,100,bbq_hnsw,16,100,122810,627.1,23.4,22
+f32,fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m16ef100,100,f32,16,100,122810,616.8,284.8,15
+f32,fraud_ecom_pca_64_k100_percentage_10_cluster_tree_vec_f32_m16ef100,10,f32,16,100,12281,61.8,28.5,12
+f32,fraud_ecom_pca_64_k100_percentage_1_cluster_tree_vec_f32_m16ef100,1,f32,16,100,1228,0.0,2.8,3
+int8,fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_int8_hnsw_m16ef100,100,int8_hnsw,16,100,122810,652.8,82.5,17
+m32ef200,fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m32ef200,100,f32,32,200,122810,617.1,299.8,13
+m8ef64,fraud_ecom_pca_64_k100_percentage_100_cluster_tree_vec_f32_m8ef64,100,f32,8,64,122810,581.4,277.3,18

@@ -94,10 +94,14 @@ _TOOL_META = {t["name"]: t for t in FOLLOWUP_TOOLS}
 #   "Invalid Host header" → 421 Misdirected Request 로 거부된다.
 #   (REST shim /tools/* 는 이 미들웨어를 타지 않아 mcp 모드만 살아 있었다)
 _MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
+# After — ★ [FIX] wildcard(":*")는 포트가 명시된 Host 헤더에만 매칭됨.
+#   K8s Service 기본 포트(80)로 접속 시 클라이언트가 Host 헤더에서 :80을
+#   생략하므로, 포트 없는 bare hostname을 반드시 별도로 추가해야 한다.
 _ALLOWED_HOSTS = [h.strip() for h in os.getenv(
     "MCP_ALLOWED_HOSTS",
-    "agent-tools-mcp:*,agent-tools-mcp.elastic.svc.cluster.local:*,"
-    "localhost:*,127.0.0.1:*,[::1]:*"
+    "agent-tools-mcp,agent-tools-mcp:*,"
+    "agent-tools-mcp.elastic.svc.cluster.local,agent-tools-mcp.elastic.svc.cluster.local:*,"
+    "localhost,localhost:*,127.0.0.1,127.0.0.1:*,[::1],[::1]:*"
 ).split(",") if h.strip()]
 
 mcp = FastMCP(
@@ -429,7 +433,7 @@ def main():
     parser = argparse.ArgumentParser(description="agent_tools MCP server")
     parser.add_argument("--transport", choices=["stdio", "http"], default="http")
     parser.add_argument("--host", default=os.getenv("MCP_HOST", "0.0.0.0"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("MCP_PORT", "8090")))
+    parser.add_argument("--port", type=int, default=int(os.getenv("MCP_PORT", "8080")))
     args = parser.parse_args()
 
     if args.transport == "stdio":
@@ -441,7 +445,6 @@ def main():
         mcp.settings.host = args.host
         mcp.settings.port = args.port
         mcp.run(transport="streamable-http")
-
 
 if __name__ == "__main__":
     main()

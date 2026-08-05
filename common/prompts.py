@@ -20,7 +20,20 @@ import os as _os
 
 PROMPT_VERSION = _os.getenv("PROMPT_VERSION", "v1").lower()
 AGENT_OUTPUT_KEYS = _os.getenv("AGENT_OUTPUT_KEYS", "1key").lower()
-
+# ★ [v4-compact] 동적 블록만 압축. instruction/SYSTEM 은 KV 캐시 영역이라
+#   줄여도 prefill 이득이 0 이므로 손대지 않는다(정확도 리스크만 발생).
+#   실측: prompt 589 = kv_reused 345(무료) + prefill 244(22ms/token).
+# ★ [v4] 압축 레벨. off | safe | mid | aggressive
+#   off        : v3 원문
+#   safe       : nd(top1) 제거 + TEST 섹션헤더 제거   (ni 증거 전부 보존)
+#   mid        : safe + CLUSTER FIT 의 value= 제거 + PERSONA 'ok' 행 필터
+#   aggressive : mid + PERSONA dom 값 제거 + spread 수치 제거  ← acc 회귀 발생
+PROMPT_COMPACT = _os.getenv("PROMPT_COMPACT", "off").strip().lower()
+if PROMPT_COMPACT in ("true", "1", "yes"):
+    PROMPT_COMPACT = "aggressive"        # 하위호환
+elif PROMPT_COMPACT in ("false", "0", "no"):
+    PROMPT_COMPACT = "off"
+_COMPACT_ON = PROMPT_COMPACT != "off"
 
 NUMERIC_COLS     = ["purchase_value", "age"]
 CATEGORICAL_COLS = ["sex", "source", "browser", "IP_country",
@@ -574,6 +587,117 @@ def format_cluster_fit(test_features: Dict, persona: Optional[Dict],
         lines.append(f"  - {col}: value={round(float(v), 2)}, z={z:+.2f} [{tag}]")
     return "\n".join(lines) if lines else "  (no cluster profile)"
 
+# ── [v4-compact] 동적 블록 압축 포맷터 ──────────────────────────────
+#   instruction 은 건드리지 않는다. 여기만 줄여야 실제 prefill 이 줄어든다.
+
+def format_transaction_compact(data: Dict) -> str:
+    """섹션 헤더/불릿/공백줄 제거. 값은 그대로 보존."""
+    cols = ["purchase_value", "age", "sex", "source", "browser",
+            "weekday_purchase", "month_purchase", "IP_country"]
+    out = []
+    for c in cols:
+        v = data.get(c)
+        if v is None:
+            continue
+        out.append(f"{c}={round(v, 2) if isinstance(v, float) else v}")
+    return "\n".join(out)
+
+
+def format_cluster_fit_compact(test_features: Dict, persona: Optional[Dict],
+                               z_tau: float = None) -> str:
+    """value= 제거 — TEST 블록과 중복. z 와 태그는 유지(instruction 이 참조)."""
+    z_tau = Z_TAU if z_tau is None else z_tau
+    nst = (persona or {}).get("numeric_stats") or {}
+    lines = []
+    for col in NUMERIC_COLS:
+        s, v = nst.get(col), test_features.get(col)
+        if not s or v is None:
+            continue
+        sd = float(s.get("std", 0.0)) or 1e-6
+        z = (float(v) - float(s.get("mean", 0.0))) / sd
+        lines.append(f"{col} z={z:+.2f} [{'DEVIANT' if abs(z) >= z_tau else 'ok'}]")
+    return "\n".join(lines) if lines else "(no cluster profile)"
+
+
+def _retrieval_differs(distances, test_features, topk_feats) -> set:
+    """PERSONA 압축에서 '남길 행'을 정하기 위해 differs 집합만 뽑는다."""
+    feats = [f for f in (topk_feats or []) if f]
+    dif = set()
+    for c in CATEGORICAL_COLS:
+        tv = test_features.get(c)
+        if tv is None:
+            continue
+        votes = [f.get(c) for f in feats if f.get(c) is not None]
+        if not votes:
+            continue
+        if sum(str(tv) == str(v) for v in votes) * 2 < len(votes):
+            dif.add(c)
+    return dif
+
+
+def format_persona_dominance_compact(test_features: Dict, persona: Optional[Dict],
+                                     keep: Optional[set] = None) -> str:
+    """★ dominant '값'과 빈도를 모두 유지한다 (safe/mid).
+       V3 instruction 이 'HIGHEST dom(...) value' 로 ni 축을 랭킹하므로
+       값을 지우면 ni 가 선택되지 않는다(실측: ni=0/1000).
+       mid 이상에서만 'ok' 행을 differs 기준으로 필터링한다."""
+    node = (persona or {}).get("categorical_distribution") or {}
+    _drop_val = (PROMPT_COMPACT == "aggressive")
+    _filter_ok = PROMPT_COMPACT in ("mid", "aggressive")
+    rows = []
+    for c in CATEGORICAL_COLS:
+        nd_ = node.get(c)
+        if not nd_:
+            continue
+        fr = float(nd_.get("frequency", 0.0))
+        dist = nd_.get("distribution") or {}
+        tot = sum(float(v) for v in dist.values()) or 1.0
+        p = float(dist.get(str(test_features.get(c)), 0)) / tot
+        tag = ("RARE" if (fr >= W_CAT and p < P_MISS)
+               else "match" if str(test_features.get(c)) == str(nd_.get("dominant"))
+               else "ok")
+        if tag == "ok" and _filter_ok and keep is not None and c not in keep:
+            continue
+        if _drop_val:
+            rows.append(f"{c} dom={fr:.2f} [{tag}]")
+        else:
+            rows.append(f"  - {c}: dom={nd_.get('dominant')}({fr:.2f}) [{tag}]")
+    return "\n".join(rows) if rows else "  (no categorical profile)"
+
+
+def format_retrieval_digest_compact(distances, test_features,
+                                    topk_feats=None, spread_tau=None) -> str:
+    """★ nd(top1) 만 제거한다 (instruction: never restate the distance).
+       neighbor_spread 수치는 ni 게이트의 1차 증거이므로 반드시 유지 —
+       태그만 남기면 neighbor_insufficient 가 0 으로 붕괴한다(실측)."""
+    if not distances:
+        return "No retrieved results."
+    d = sorted(float(x) for x in distances if x != float("inf"))
+    spread_tau = NI_SPREAD_TAU if spread_tau is None else spread_tau
+    line1 = ""
+    if len(d) >= 3 and d[0] > 0:
+        sp = float(np.std(d[:3]))
+        line1 = f"neighbor_spread={sp:.3f} [{'spread' if sp >= spread_tau else 'dense'}]"
+    elif PROMPT_COMPACT == "aggressive":
+        line1 = "[dense]"
+    lines = [line1] if line1 else []
+    feats = [f for f in (topk_feats or []) if f]
+    if feats:
+        agr, dif = [], []
+        for c in CATEGORICAL_COLS:
+            tv = test_features.get(c)
+            if tv is None:
+                continue
+            votes = [f.get(c) for f in feats if f.get(c) is not None]
+            if not votes:
+                continue
+            (agr if sum(str(tv) == str(v) for v in votes) * 2 >= len(votes)
+             else dif).append(c)
+        lines.append(f"agrees: {', '.join(agr) or '(none)'} | "
+                     f"differs: {', '.join(dif) or '(none)'}")
+    else:
+        lines.append("agrees: (unavailable) | differs: (unavailable)")
+    return "\n".join(lines)
 
 def format_retrieval_digest(distances, test_features, topk_feats=None, spread_tau=None):
     if not distances: return "No retrieved results."
@@ -626,11 +750,43 @@ def format_persona_dominance(test_features: Dict, persona: Optional[Dict]) -> st
     return "\n".join(rows) if rows else "  (no categorical profile)"
 
 # ── ⑥ : _build_v2 ────────────────────────────────────────────────────
+
 def _build_v2(instruction, test_features, cluster_id, distances, persona, topk_feats):
     _v3 = (PROMPT_VERSION == "v3")
-    # ★ 삼항 연산자를 f-string 나열 안에 두면 리터럴 결합이 먼저 묶여 블록이 소실됨
     fit_hdr = ("## CLUSTER FIT (z vs persona)" if _v3
                else f"## CLUSTER #{cluster_id} FIT (z vs profile)")
+
+    # ★ [v4-compact] instruction 은 항상 원문 유지(KV 캐시 영역, 이득 0/리스크 有).
+    #   동적 블록만 교체한다.
+    if _COMPACT_ON:
+        _keep = _retrieval_differs(distances, test_features, topk_feats)
+        # ★ CLUSTER FIT 의 value= 제거는 mid 이상에서만 (TEST 와 중복이지만
+        #   모델이 'name+value' 인용을 학습했을 수 있어 safe 에서는 보존)
+        _fit = (format_cluster_fit_compact(test_features, persona)
+                if PROMPT_COMPACT in ("mid", "aggressive")
+                else format_cluster_fit(test_features, persona))
+        return (
+            f"{instruction}\n\n"
+            f"## TEST\n{format_transaction_compact(test_features)}\n\n"
+            f"{fit_hdr}\n{_fit}\n\n"
+            f"## PERSONA DOMINANCE (categorical)\n"
+            f"{format_persona_dominance_compact(test_features, persona, keep=_keep)}\n\n"
+            f"## RETRIEVAL\n"
+            f"{format_retrieval_digest_compact(distances, test_features, topk_feats)}"
+        )
+    # if PROMPT_COMPACT:
+    #     _keep = _retrieval_differs(distances, test_features, topk_feats)
+    #     return (
+    #         f"{instruction}\n\n"
+    #         f"## TEST\n{format_transaction_compact(test_features)}\n\n"
+    #         f"{fit_hdr}\n"
+    #         f"{format_cluster_fit_compact(test_features, persona)}\n\n"
+    #         f"## PERSONA DOMINANCE (categorical)\n"
+    #         f"{format_persona_dominance_compact(test_features, persona, keep=_keep)}\n\n"
+    #         f"## RETRIEVAL\n"
+    #         f"{format_retrieval_digest_compact(distances, test_features, topk_feats)}"
+    #     )
+
     return (
         f"{instruction}\n\n"
         f"## TEST\n{format_transaction(test_features)}\n\n"

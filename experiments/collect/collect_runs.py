@@ -57,6 +57,9 @@ _METRIC_PATHS: List[tuple] = [
     ("mean_anomaly_dist",     "dist_auroc.mean_anomaly_dist"),
     ("researched_mean_nd",    "agent_nd_dual.researched_mean_nd"),
     ("raw_mean_nd",           "agent_nd_dual.raw_mean_nd"),
+    ("nd_recal_p50",          "agent_nd_dual.recalibrated.p50"),
+    ("nd_recal_auroc",        "agent_nd_dual.recalibrated.auroc_nd_recal"),
+    ("cls_recal_acc",         "agent_nd_dual.recalibrated.cls_at_recal_threshold.accuracy"),
 
     # ── 검색 품질 (CV C1/C2/C3) ──────────────────────────────
     ("routing_accuracy",      "router_retriever.routing_accuracy.cluster_assignment_accuracy"),

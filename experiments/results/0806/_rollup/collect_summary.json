@@ -1,0 +1,40 @@
+{
+  "n_runs": 24,
+  "n_indices": 7,
+  "skipped": [],
+  "groups": [
+    "A_percolate",
+    "B_coreset",
+    "C_quant",
+    "D_hnsw",
+    "E_numcand",
+    "F_mcp",
+    "I_bucket"
+  ],
+  "run_ids": [
+    "a-percolate-v1",
+    "a-percolate-v14",
+    "a-percolate-v14bucket",
+    "b-coreset-cs1",
+    "b-coreset-cs10",
+    "b-coreset-cs100",
+    "c-quant-bbqos3",
+    "c-quant-f32",
+    "c-quant-int8os0",
+    "c-quant-int8os3",
+    "d-hnsw-s0",
+    "d-hnsw-s1",
+    "d-hnsw-s2",
+    "e-numcand-nc100",
+    "e-numcand-nc200",
+    "e-numcand-nc400",
+    "e-numcand-nc50",
+    "f-mcp-direct",
+    "f-mcp-mcp",
+    "f-mcp-mcpnative",
+    "i-bucket-t0m7",
+    "i-bucket-t1m3",
+    "i-bucket-t1m5",
+    "i-bucket-t2m3"
+  ]
+}

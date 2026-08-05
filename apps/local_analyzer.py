@@ -514,6 +514,11 @@ def run_inference(user_prompt: str, meta: Optional[Dict] = None) -> Dict:
             # ★ [KV prefix 관측] 호출 직전 llama_cpp 내부 상태를 읽어둔다.
             #   _input_ids = 직전 요청의 토큰열. 새 프롬프트와의 공통 접두
             #   길이만큼 KV가 재사용되고, 나머지만 prefill된다.
+            # ★ timing 리셋 추가 (지원 안하는 버전 방어)
+            try:
+                _model.reset_timings()
+            except Exception:
+                pass
             _prev_ids = getattr(_model, "_input_ids", None)
             _prev_n   = int(getattr(_model, "n_tokens", 0) or 0)
             try:
@@ -558,6 +563,7 @@ def run_inference(user_prompt: str, meta: Optional[Dict] = None) -> Dict:
             _n_prompt = len(_cur_ids) if _cur_ids is not None else -1
             _infer_ms = (time.perf_counter() - _t_i) * 1000.0
 
+
             # ★ [EXP] TTFT / TPOT 기록 — TTFT는 lock 획득 시점(_t_i) 기준이므로
             #   큐 대기(lock_wait_ms)를 제외한 순수 prefill 시간이 된다.
             _tpot_ms = None
@@ -573,6 +579,23 @@ def run_inference(user_prompt: str, meta: Optional[Dict] = None) -> Dict:
                         "n_output_tokens": _n_out,
                     })
 
+            # ★ [수정] llama.cpp timing 객체 안전 파싱
+            _prefill_ms = None
+            _decode_ms = None
+            try:
+                _t = getattr(_model, "timings", None)
+                if _t is not None:
+                    # 1) dict 형태인 경우
+                    if isinstance(_t, dict):
+                        _prefill_ms = _t.get("prompt_eval_ms") or _t.get("t_p_eval_ms")
+                        _decode_ms = _t.get("eval_ms") or _t.get("t_eval_ms")
+                    # 2) C++ Wrapper/Dataclass 객체 형태인 경우
+                    else:
+                        _prefill_ms = getattr(_t, "prompt_eval_ms", getattr(_t, "t_p_eval_ms", None))
+                        _decode_ms = getattr(_t, "eval_ms", getattr(_t, "t_eval_ms", None))
+            except Exception:
+                pass
+
             _INFER_STAT["n"] += 1
             _INFER_STAT["lock_wait_ms_sum"] += wait_ms
             if _INFER_STAT["first_ms"] is None:
@@ -581,6 +604,9 @@ def run_inference(user_prompt: str, meta: Optional[Dict] = None) -> Dict:
                 "gguf_infer_timing",
                 call_n=_INFER_STAT["n"],
                 infer_ms=round(_infer_ms, 1),
+                # ★ [추가] C++ 내부 측정 exact prefill / decode 시간
+                prefill_ms=(round(_prefill_ms, 1) if _prefill_ms is not None else None),
+                decode_ms=(round(_decode_ms, 1) if _decode_ms is not None else None),                
                 lock_wait_ms=round(wait_ms, 1),
                 prompt_tokens=_n_prompt,
                 out_tokens=_n_out,
@@ -618,41 +644,6 @@ def run_inference(user_prompt: str, meta: Optional[Dict] = None) -> Dict:
     except json.JSONDecodeError as e:
         logger.error("model_output_json_parse_failed", error=str(e), pred_txt_full=pred_txt)
         raise
-# def run_inference(user_prompt: str) -> Dict:
-#     """단건 추론. 백엔드에 따라 HF generate() 또는 llama_cpp completion을 탄다."""
-#     prompt = (
-#         f"<|im_start|>system\n{prompts.SYSTEM_PROMPT}<|im_end|>\n"
-#         f"<|im_start|>user\n{user_prompt}<|im_end|>\n"
-#         f"<|im_start|>assistant\n"
-#     )
-
-#     if MODEL_BACKEND == "gguf":
-#         out = _model(
-#             prompt, max_tokens=MAX_NEW_TOKENS, temperature=0.0,
-#             stop=["<|im_end|>"],
-#         )
-#         pred_txt = out["choices"][0]["text"].strip()
-#     else:
-#         inputs = _tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(DEVICE)
-#         with torch.no_grad():
-#             out = _model.generate(
-#                 **inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
-#                 temperature=None, top_p=None, top_k=None,
-#                 pad_token_id=_tokenizer.pad_token_id, eos_token_id=_tokenizer.eos_token_id,
-#             )
-#         decoded = _tokenizer.decode(out[0], skip_special_tokens=False)
-#         pred_txt = decoded.split("<|im_start|>assistant\n")[-1].split("<|im_end|>")[0].strip()
-
-#     logger.info("model_raw_output", backend=MODEL_BACKEND,
-#                 pred_txt_len=len(pred_txt), pred_txt_preview=pred_txt[:300])
-
-#     pred_txt = _extract_json(pred_txt)
-#     try:
-#         return json.loads(pred_txt)
-#     except json.JSONDecodeError as e:
-#         logger.error("model_output_json_parse_failed", error=str(e), pred_txt_full=pred_txt)
-#         raise
-
 
 def run_inference_batch(user_prompts: List[str]) -> List[Dict]:
     """
@@ -922,8 +913,9 @@ def _run_single(
         top1_distance        = req.top1_distance,
         persona              = effective_persona,
     )
-    logger.info("run_single_prompt_built", prompt_len=len(user_prompt), sufficiency=suf,
-                elapsed_s=f"{time.time()-t0:.2f}")
+    logger.info("run_single_prompt_built", elapsed_s=f"{time.time()-t0:.2f}",
+                prompt_len=len(user_prompt), sufficiency=suf,
+                prompt_compact=prompts.PROMPT_COMPACT)   # ★ 추가
 
     logger.info("run_single_inference_start", backend=MODEL_BACKEND,
                 model_loaded=(_model is not None))

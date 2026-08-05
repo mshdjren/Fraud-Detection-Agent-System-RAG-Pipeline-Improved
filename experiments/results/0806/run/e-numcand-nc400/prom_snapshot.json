@@ -1,0 +1,31 @@
+{
+  "run_id": "e-numcand-nc400",
+  "window": {
+    "from": "2026-08-05T16:19:11Z",
+    "to": "2026-08-05T16:22:33Z"
+  },
+  "page_fault_p50": null,
+  "page_fault_p95": null,
+  "page_fault_rate": null,
+  "es_jvm_heap_pct": null,
+  "es_query_cache_mb": null,
+  "mcp_p50_ms": null,
+  "mcp_p95_ms": null,
+  "mcp_calls": null,
+  "mcp_errors": null,
+  "ttft_p50_s": null,
+  "ttft_p95_s": null,
+  "tpot_p50_ms": null,
+  "out_tokens_p50": null,
+  "analyzer_calls": null,
+  "analyzer_parse_err": null,
+  "retriever_p50_ms": null,
+  "retriever_p95_ms": null,
+  "percolate_p50_ms": null,
+  "percolate_p95_ms": null,
+  "top1_dist_p50": null,
+  "agent_rounds_p95": null,
+  "planner_fail_rate": null,
+  "_n_metrics_ok": 0,
+  "_n_metrics_total": 22
+}

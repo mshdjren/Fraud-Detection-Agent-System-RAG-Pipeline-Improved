@@ -99,7 +99,7 @@ spec:
         - name: TIMEOUT
           value: '1200'
         - name: AGENT_CONCURRENCY
-          value: '1'
+          value: '4'
         - name: BOUNDARY_ONLY
           value: 'false'
         - name: GCS_OUTPUT_BUCKET
