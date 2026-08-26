@@ -22,7 +22,9 @@ Tabular 이상 거래를 "retrieval → 거리 기반 이상탐지 → 판정 �
 | 메모리 제약 | Coreset Sampling 10% 운영점 | 메모리 −89% (2.8GB→0.31GB), AUROC 손실 0.4%p 이내, median latency −46% |
 | Teacher 오답이 학습 신호 오염 | Rejection Sampling (GT-free 생성 → GT 필터) | teacher 정답률 60~65% 감안 ×1.7 oversample로 품질·수량 동시 확보 |
 | SFT-GRPO Training으로 llm 역할 분배 | 과제 설계 원인 정량 규명 → Deterministic-LLM 역할 분리 | what_missing 생성 타이밍 11%→100%, 실제 이탈 feature 지목 정합도 70% |
-| Deterministic-planner 역할 분담 | 측정 기반 Selective Tool Gate (rule search) | expand 발동 84%→10~12%, 게이트 영역 내 good/bad flip 3.2:1 |
+| Deterministic-planner 역할 분담 | 2-stage — 결정론 게이트 + GRPO tool selector | 게이트 AUC: nd 스칼라 0.68~0.82 vs LLM 0.44~0.48 (3회) → 비용은 admission control로 분리 |
+| Planner에 LLM이 필요한가 | 전수 counterfactual 오라클(130,883 rollout)로 **상한 먼저 측정** | 제약 디코딩 +0.014(학습 0회) / GRPO 추가 +0.017 / 상한 대비 15.3% |
+| 재검색 turn 수 | λ_turn(1→2턴 가격) 유도 | 2턴 우세 state 0.3%(9/2,830), λ_turn/λ*=0.06 → **MAX_ROUND=1 측정 확정** |
 
 ---
 
@@ -31,18 +33,34 @@ Tabular 이상 거래를 "retrieval → 거리 기반 이상탐지 → 판정 �
 ```text
 Test Transaction
       ↓
-[Router]     Percolate Query → 클러스터 매칭 (rank1=percolate, rank2~5=centroid score)
+[Router]      Percolate Query → 클러스터 매칭 (rank1=percolate, rank2~5=centroid)
       ↓
-[Retriever]  Filtered HNSW → 거리 신호 top-5 / LLM evidence top-3
+[Retriever]   Filtered HNSW (cluster-scoped, k=3) → nd_before / 이웃 evidence
       ↓
-[Controller] LangGraph StateGraph — Evaluator(LLM) → Selective Tool Gate → Planner
-      │         ├─ confident            → accept
-      │         ├─ mismatch 신호        → reroute_cross_cluster (rank2 클러스터 + persona 교체)
-      │         └─ expand rule 충족     → expand_within_cluster (evidence 3→5)
+[Evaluator]   LLM 1회 — wm_type(cluster_mismatch / neighbor_insufficient / accept)
       ↓
-[Orchestrator] 최종 판정 + round_log/termination → API Response
+   sufficiency = f(nd_before)   ── confident(60.4%) → 종료, LLM 호출 없음
+      ↓ ambiguous (39.6%)
+┌─────────────────────────────────────────────────────────────┐
+│ [Stage A] 결정론 게이트   |nd − τ| 상위 B%          비용 0    │  ← admission control
+│ [Stage B] Planner(LLM)   think → tool + feature 선택         │  ← GRPO 학습 대상
+│              contextual_knn(f≤2)  |  attribute_knn(f≤2)      │
+└─────────────────────────────────────────────────────────────┘
+      ↓
+[Orchestrator] nd_final vs τ=0.42 → 최종 판정 + round_log/termination
 ```
 <img src="picture/Langgraph.jpg" width="100%">
+
+**Planner 재설계 (v2 → v3)** — 기존 `Selective Tool Gate + Gemini Planner`를
+**2-stage(결정론 게이트 + 학습된 tool selector)** 로 교체했습니다. 근거는 §5️⃣.
+
+| | v2 (이전) | v3 (현재) |
+|---|---|---|
+| 게이트 | rule search (`nd∈[0.48,0.60) ∧ plateau≤0.142`) | `|nd − τ|` 랭킹 상위 B% — 예산이 운영 파라미터 |
+| Planner | Gemini Flash Lite, tool 3종 | Qwen2.5-0.5B GRPO, tool 2종 + feature 조합 |
+| Tool | expand_within_cluster / reroute_cross_cluster / accept | contextual_knn(soft boost) / attribute_knn(hard filter) |
+| 출력 | action 1개 | `{"think": 근거, "action": tool, "features": [...]}` |
+| 비용 | reward에 λ·cost 스칼라화 | **admission control로 분리** (§5️⃣-C) |
 
 `PIPELINE_MODE=forward` 전환 시 동일 인프라에서 **정적 forwardRAG baseline**([route]→[Retrieve]→[Analyzer] 1회)으로 동작합니다 — Agent 시스템의 가치를 같은 문제지에서 A/B 측정하기 위한 구조입니다.
 
@@ -348,71 +366,199 @@ what_missing = LLM(prompt + "[SYSTEM-COMPUTED] sufficiency=...") # 유일한 LLM
 
 ---
 
-### 5️⃣ SFT → GRPO — 검증 가능 reward 설계 (실패 진단 3단계 포함)
+### 5️⃣ Planner GRPO — 전수 counterfactual 오라클 기반 상한 측정 후 설계
 
-SFT는 토큰 우도를 최적화해 **템플릿 암기를 보상**합니다. grounding을 직접 밀어올리기 위해 전 항이 **코드로 검증 가능한** reward를 설계했고, 실패를 2회 진단해 수정했습니다 — 이 진단 과정 자체가 RL 디버깅의 핵심 산출물입니다.
+Planner에 LLM을 넣기 전에 **"넣을 가치가 있는가"를 먼저 측정**했습니다. action space가 닫혀 있어(`tool 2종 × feature 조합`) **전수 counterfactual 오라클**을 만들 수 있었고 — 2,830 state × 46 후보 = **130,883 rollout**, 158분 — 그래서 "RL이 도달 가능한 상한의 몇 %를 회수했는가"를 직접 측정합니다. 문서검색 agent 연구가 tool별 전수 실행이 불가능해 못 하는 측정입니다.
 
-#### Reward 구성 (agent: what_missing / forward: reasoning)
+#### A. Reward 커널 — 어디에 gradient를 줄 것인가
 
-| 항 | 정의 | 검증 방식 |
-|---|---|---|
-| R_direction | 결함 채널(cm/ni) ↔ 결정론 신호(DEVIANT 존재 / spread) 일관성 | 프롬프트 파싱 (코드) |
-| R_grounded | 인용 feature 실재 + z/value 명시 + 채널 정합 | Deviation Table (코드) |
-| R_format | `"<direction>: <evidence>"` / 3-key JSON | 정규식 |
-| − P_template/length/dist | 그룹 내 중복 · 토큰 초과 · 거리 재진술 | dedup key / tokenizer |
+`nd`가 `dnd`만큼 움직였을 때의 반응으로 보면 네 커널은 **gradient의 지지집합**이 다릅니다.
 
-#### 실패 진단 체인 — reward는 "지형"이다
+| 커널 | 미분 형태 | EVPI | 여지>0 | 게이트 AUC (RF vs nd단독) |
+|---|---|---:|---:|---|
+| `R_margin` | `(2y−1)·1·dnd` — 균등 | +0.0357 | 30.3% | 0.702 vs 0.697 (**+0.005**) |
+| `R_flip` | `(2y−1)·δ(nd−τ)·dnd` — τ에 Dirac | +0.0854 | 9.0% | 0.747 vs 0.681 (**+0.066**) |
+| `R_resolve` | band 경계에 Dirac | +0.1228 | 12.5% | 0.700 vs 0.642 (+0.058) |
+| `R_auroc` | 반대라벨 밀도 가중 | +0.0448 | 23.9% | 0.748 vs 0.813 (**−0.065**) |
 
-| 버전 | 실행 결과 (실측) | 진단된 원인 | 수정 |
-|---|---|---|---|
-| **v4** | 전 스텝 skip (updated 0/786, reward 전부 0.0) | reward 최상단이 cls 요구 — 1-key(wm_only) 출력엔 cls가 없음 → 전 생성 0점 → 그룹 분산 0 | cls 검사를 forward 분기로 이동 |
-| **v5** (graded) | 학습은 됐으나 **P1 0%, direction 단독 출력만** (cm:ni 57:39 flip) | ① direction 단독 = 0.375 **안전지대** ② mining-GT 방향 맞히기(Δ0.35)가 최대 분산원 ③ dup 페널티가 direction-flip을 "다양성"으로 보상 — 전형적 reward hacking | v6 ladder |
-| **v6** (ladder) | *재실험 예정* | — | 무출력 0 < direction 단독 **0.10** < evidence 시도 0.30 < 실인용 0.50 < 채널 정합 0.75 < +z 0.90 < +일관성 1.0 — 모든 계단에 gradient. direction 채점은 GT가 아닌 **결정론 신호 일관성**, dup 페널티는 evidence 출력에만 |
+**`R_flip` 채택** — 게이트 probe 격차가 유일하게 유의미하게 양수입니다(+0.066). `R_auroc`은 격차가 음수, 즉 **스칼라 임계값 하나가 25-feature RF보다 낫다 = LLM이 불필요**하다는 결론이 나오는 커널입니다.
 
-> 병행 필요조건: GRPO는 정책이 실제 샘플한 출력만 학습한다 — 붕괴 모델은 temperature 1.1 / G=8 / colon prefix-forcing으로 **탐색을 먼저 복원**해야 ladder가 작동한다. v6로도 P1이 0%대면 같은 reward를 off-policy로 쓰는 best-of-n rejection SFT(RAFT)로 전환.
+**하이브리드 보정** — `R_flip`은 `{−1,0,+1}` 이산이라 flip 가능 state(9%) 밖에서 모든 후보가 동점입니다(동률 99.6%). 연속 성분을 섞어 지지집합을 넓혔습니다.
 
-#### 📊 실험 결과 (SFT vs GRPO — 동일 eval set)
+```
+R = R_flip + α·R_margin        α = 2.5  (flip ±1이 margin 최대 ±0.2를 5배 압도)
+→ 동률 99.6% → 64.2%,  EVPI +0.13 → +0.24
+```
 
-| 지표 | SFT (S4) | GRPO v5 (hacking) | GRPO v6 |
-|---|---:|---:|---:|
-| P1 grounded-consistency | — | **0.0%** | *추후 진행* |
-| P4 고유율 / top1 | 4.0% / 97% | 3.0% / 57% (direction flip) | *추후 진행* |
-| judge 평균 (0/0.5/1) | — | 0.300 (1점 0건) | *추후 진행* |
+#### B. Turn 수 — λ_turn 유도로 1-turn 확정
+
+`λ*`(검색할까 말까의 가격)와 같은 원리로 **`λ_turn`(한 번 더 할까의 가격)** 을 유도했습니다.
+
+| 커널 | 1턴 최적 | 2턴 최적 | 한계이득 | λ_turn/λ* | 2턴 우세 state |
+|---|---:|---:|---:|---:|---:|
+| `R_margin` | +0.0242 | +0.0242 | +0.0000 | 0.00× | 23.4% |
+| `R_auroc` | +0.0377 | +0.0551 | +0.0174 | 0.57× | 19.1% |
+| `R_resolve` | +0.1007 | +0.1332 | +0.0325 | 0.44× | 3.3% |
+| **`R_flip`** | **+0.0873** | **+0.0905** | **+0.0032** | **0.06×** | **0.3%** (9/2,830) |
+
+**`MAX_ROUND=1` 확정.** "복잡해서 1턴"이 아니라 **2턴의 한계이득이 1턴의 6%로 측정됐기 때문**입니다. 이산 커널일수록 1턴에 결판난다는 구조적 관찰이기도 합니다(margin 23.4% → flip 0.3%).
+
+#### C. 비용 — reward 스칼라화 대신 admission control
+
+`stop`을 action space에 넣으면 라벨이 91% `stop`으로 편중되고(SFT eval 100% stop), 빼면 `−λ·n_calls`가 그룹 내 상수가 되어 **advantage에서 완전히 소거**됩니다(`mean_cost 0.14` 100 step 고정). λ 튜닝으로 풀리지 않는 구조입니다.
+
+```
+maximize E[gain]  s.t.  E[cost] ≤ B     ← 라그랑주 스칼라화가 아니라 제약으로
+Stage A: |nd − τ| 랭킹 상위 B%          ← 예산은 운영 파라미터
+Stage B: 그 예산 안에서 gain만 최적화    ← LLM
+```
+
+**근거 3가지**: ① λ 스칼라화는 파레토 곡선의 한 점만 주는데 운영 예산은 SLA/트래픽에 따라 바뀝니다 ② `nd` 단독 게이트 AUC 0.68~0.82 vs **LLM 게이트 0.443~0.481(3회 독립 실행 전부 무정보 이하)** ③ 비용 축을 분리하면 예산 곡선 전체를 보고할 수 있습니다. 비용 단위는 latency(ms)가 아니라 **호출 수**입니다 — 실측 latency(contextual 3,677ms vs global 722ms)가 손으로 찍은 cost(1.2 vs 1.5)와 역전돼 있었고 인덱스/구현 변경마다 바뀝니다.
+
+#### D. 제약 디코딩 — format penalty를 구조적으로 제거
+
+`{"think":"[` 까지 강제 → think 자유(28 tok) → `","action":...` 부터 오라클 후보 trie. **집합 밖 출력이 생성 자체로 불가능**해집니다.
+
+| | 무제약 | 제약 |
+|---|---:|---:|
+| parse rate | 5.6% | **98.5~99.1%** |
+| achieved | −0.00186 | **+0.01401** (학습 0회) |
+
+#### 📊 실험 결과 (동일 eval set n=337)
+
+| 축 | achieved | regret | parse | 해석 |
+|---|---:|---:|---:|---|
+| ① base + 제약 | +0.01401 | 0.190 | 99.1% | 제약만으로 얻은 것 (학습 0회) |
+| ①' base 무제약 | −0.00186 | 0.206 | 5.6% | 제약 없으면 붕괴 |
+| **② GRPO_ONLY** | **+0.03127** | **0.173** | 98.5% | 학습 순이득 **+0.01725** |
+| ③ oracle 상한 | +0.20428 | 0.000 | 100% | 상한 대비 **15.3%** 달성 |
+
+**학습 가능성 사전 검정(`[G3]`)** — GBDT/RF는 표 데이터에서 0.5B LLM보다 강하므로, 이들이 majority를 못 넘으면 학습이 무의미합니다. 학습 전 게이트로 씁니다.
+
+| | majority | tree d=3 | RF-300 | leakage gap |
+|---|---:|---:|---:|---:|
+| 오라클 라벨 | 0.570 | **0.632** | 0.588 | −0.000 |
+
+#### E. think — LLM 정당성의 직접 증거
+
+출력이 `43-way 선택`이면 원리적으로 분류기로 환원되어 0.5B를 쓸 이유가 없습니다. `think`를 붙여 **"모델이 evidence를 읽는가"** 를 측정 가능하게 만들었습니다.
+
+| | v5-a (구체 예시) | v5-b (`[` 강제) |
+|---|---:|---:|
+| 태그 인용 | 10.8% | **41.7%** |
+| **없는 태그 지어냄** | **89.2%** | **0.8%** |
+| grounded (태그 ∧ 필드 언급) | 6.7% | 21.7% |
+
+> **🔧 정정** — 프롬프트에 진단-처방 힌트(`cluster_mismatch → attribute_knn`)를 명시했더니 모델이 83.5%로 따랐으나 **오라클 정합률은 61.2%(우연 수준)** 였고, 그 결과 `grounded=True` 케이스의 achieved가 오히려 낮았습니다(−0.168 vs +0.035). **설계 가설을 프롬프트로 주입하면 모델이 그 가설의 오류까지 학습합니다.** 처방 힌트 제거 후 재실험 중.
+
 
 ---
 
-### 6️⃣ Agent 가치 재정의 — Selective 호출 + nd min-fusion
+### 6️⃣ Tool 설계 — sparse 축 도입과 정량적 실패 진단
 
-<p align="center"><img src="picture/streamlit_forwardRAGvsAgentRAG.jpg" width="100%"><br><i>AgentRAG streamlit UI</i></p>
+`contextual_knn`(dense pool 확장 + soft rerank)과 `attribute_knn`(exact term filter)을 **서로 다른 정보축**으로 설계했습니다. 전자는 `neighbor_insufficient`, 후자는 `cluster_mismatch`를 겨냥합니다.
 
-4단계 측정의 귀결로 agent의 가치를 "정확도"가 아니라 **비용(호출량)과 판정 frame 선택**으로 재정의하고, 서빙에 반영했습니다.
+**이론적 임계** — contextual의 pool 크기 `P`, 반환 수 `k`, 필터 선택도 `s = support/N`일 때
 
-- **Confident-skip**: nd가 밴드 밖이면 LLM 호출 자체를 생략 (cls/wm 정답이 결정론) — 호출량 100% → **≈43%** (ambiguous 비율)
-- **Selective Tool Gate**: "ambiguous면 무조건 expand" 폐기 → 오프라인 rule search(N=28,302)로 `nd∈[0.48,0.60) ∧ plateau≤0.142` 도출 (good/bad flip 3.2:1) — expand 발동 84% → **10~12%**
-- **nd min-fusion** (서빙 반영 완료): reroute/expand로 라운드가 늘면 최종 nd = **min(라운드별 nd)** — "가장 잘 맞는 정상 frame"이 판정 기준이라는 memory-bank 원리와 동일. 실측 근거: after_reroute(min) AUROC 전체 0.815→**0.836**, boundary 0.558→**0.620**
+```
+P·s ≥ k  →  contextual이 이미 필터 일치 top-k를 pool 안에 갖고 있음 → 두 tool 동일
+임계 s* = k/P = 5/25 = 0.20  →  support* ≈ 24,600
+```
 
-#### 📊 실험 결과 (Agent vs forwardRAG — 보수적 상한)
+**실측이 예측과 일치**합니다.
 
-| 축 | forwardRAG (전수) | Agent (이론 상한) | 실측 |
+| support | n | Jaccard(attr, global) | flip_rate |
 |---|---:|---:|---:|
-| 판정 AUROC | 0.832 | ≤0.857 (fusion 물리 천장 Δ+0.077) | *A/B 추후 진행* |
-| LLM 호출량 | 100% | **≈43%** | *A/B 추후 진행* |
-| latency/건 | 60~120s | ≈25~50s | *A/B 추후 진행* |
+| <1k | 165 | **0.32** | 0.156 |
+| 1k–10k | 4,310 | **0.29** | 0.077 |
+| 10k–25k | 7,499 | 0.48 | 0.096 |
+| ≥25k | 9,586 | 0.58~0.68 | 0.12 |
 
----
+저선택도 구간에서는 **이질 축이 실증**되지만, **후보의 45%가 support ≥ 25,000** 입니다. candidate feature의 단일 조합이 전부 고선택도라 그 구간에 도달하지 못합니다.
 
-### 7️⃣ 평가 체계 — 우선순위 지표(Block 0) + LLM-as-Judge
-
-"통과하기 쉬운 지표(인용율·loss)"가 아니라 사실 정합을 우선 채점합니다. **P1** grounded-consistency(인용의 사실 방향) → **P2** teacher-parity(Jaccard) → **P3** ECE/형식 → **P4** 다양성(soft-top1이 진짜 신호) → **P5** cls acc(det 서빙에선 참고). Judge는 자유출력 2-key(`what_missing`/`reasoning`)만 이산 rubric(0/0.5/1)으로 채점하며, **신뢰성 3종(GT 상관·재현성·순서편향) 통과가 채택 조건**입니다 (judge ≠ student — teacher 14B만).
-
-#### 📊 실험 결과 (배포 후보 forward student — S2, GGUF Q4 CPU, Block 0 n=100)
-
-| 지표 | 실측 | 해석 |
+| 진단 | 값 | 의미 |
 |---|---:|---|
-| P1 grounded-consistency | **88.0%** | 인용 feature의 사실 정합 |
-| P3 confidence ECE | **0.099** | 라벨 함수 상한(0.109)에 근접 = 재라벨 학습 성공 |
-| P4 고유율 / soft-top1 | 100% / 2.7% | 붕괴 없음 |
-| P5 cls acc / FNR | 0.773 / 0.250 | FNR은 threshold(0.5→0.42) 직교 레버 |
+| `Jaccard(contextual, attribute)` | 0.905 | 같은 이웃을 가져옴 |
+| attribute 순기여 (EVPI 기여) | +0.0088 (3.4%) | 빼도 상한이 거의 안 변함 |
+| base logprob 차이 | 0.031 | 모델은 두 tool을 동등하게 봄 |
+
+> **원인은 tool 설계가 아니라 임베딩**입니다. AnoLLM 임베딩이 categorical feature를 이미 인코딩하고 있어, **같은 인덱스 안에서는 어떤 필터도 새 축이 되지 못합니다.** 코퍼스를 바꾸는 tool(사기 memory bank 조회 등)이 남은 탈출구입니다.
+
+---
+
+### 7️⃣ 평가 체계 — 결과 산출 포맷
+
+세 산출물이 자동 생성됩니다. **아래 표의 수치는 planner v2(Gemini) 시점 스모크(n=20)이며, v3 GRPO planner 서빙 후 교체 예정**입니다.
+
+#### (1) `results.md` — 컴포넌트 ablation (planner 무관 축)
+
+Router/Retriever/양자화/재검색 인과를 축별로 분해합니다.
+
+```
+T1-A  Percolate      | variant | cand_recall@5 | routing_acc | MRR | P95(ms) | dist AUROC |
+T1-B  Coreset        | coreset | docs | store(MB) | dist AUROC | recall@5 adj | ε-recall |
+T1-C  Quantization   | variant | quant | oversample | working set(MB) | dist AUROC | cls@0.42 |
+T1-D  재검색 인과분해 | run | n_res | AUROC pre→post | Δ | rescued | degraded | net_gain | dir_acc |
+```
+
+`T1-D`가 planner 교체의 직접 비교축입니다 — v2에서 `net_gain −2 ~ −6`, `dir_acc 0.48~0.57`로 **재검색이 순손실**이었고, 이것이 v3 재설계의 출발점입니다.
+
+#### (2) `agent_eval_report.json` — 서빙 배치 추론 집계
+
+```jsonc
+{
+  "run_id": "...", "pipeline_mode": "agent", "n_total": 20,
+  "threshold_info":   { "auroc", "best_threshold", "best_fpr/tpr/fnr", "youden_j" },
+  "agent_nd_dual":    { "n_researched", "cls_nd_threshold", "agent_nd_auroc_all" },
+  "research_effect":  { "auroc": {"pre","post","delta"},
+                        "by_view": {"fixed": {"overall": {"TP","FP","TN","FN","FNR","FPR"}}} },
+  "planner_policy":   { "action_distribution", "search_rate", "gate_rate", "gate_reasons",
+                        "model_action_distribution", "source_distribution",
+                        "planner_latency_ms": {"p50","p95"}, "output_tokens", "mean_cost" },
+  "evidence_novelty": { "mean_jaccard_round0_final", "mean_novelty",
+                        "cross_cluster_escape_rate", "mean_support", "jaccard_by_action" },
+  "budget_curve":     [ { "budget", "n_search", "accuracy", "delta_vs_no_search",
+                          "added_latency_ms_total" } ],
+  "verdict_change":   { "n_changed", "verdict_change_rate", "correct_flip_n", "wrong_flip_n" },
+  "latency_breakdown":{ "base_retrieve_ms", "total_ms" },
+  "agent_summary":    { "distance_auroc", "anomaly_auroc", "research_net_gain",
+                        "research_flip_rate", "research_dir_acc", "agent_rag_fnr/fpr" }
+}
+```
+
+**v3에서 핵심으로 볼 4개 블록**
+
+| 블록 | 무엇을 답하는가 | v2 스모크 (n=20) |
+|---|---|---|
+| `budget_curve` | **§5-C의 예산 곡선** — LLM 호출 B%로 상한의 몇 %를 얻는가 | B=0% acc 0.65 → B=20% **0.75** (Δ+0.10) |
+| `planner_policy` | tool 분포 / 게이트 발동 / p50·p95 latency / 평균 cost | `attribute 0.75 / stop 0.25`, gate 25%, p50 **10.3s** |
+| `evidence_novelty` | **재검색이 실제로 새 근거를 가져왔는가** (Jaccard/escape/support) | v2 미계측 (`null`) — v3에서 채워짐 |
+| `verdict_change` | 판정이 바뀐 비율과 그 방향 | 13.3% 변경, **correct_flip 2/2** |
+
+> `evidence_novelty`가 v3의 신규 축입니다. outcome(`flip`)과 **검색 품질(novelty)** 을 분리 보고해야 "검색 개선 → 탐지 개선"의 인과를 주장할 수 있습니다.
+
+#### (3) `agent_predictions.json` — 건별 trace
+
+```jsonc
+{ "classification", "confidence", "final_verdict",
+  "primary_cluster_id", "top_5_clusters", "match_type", "top_1_distance",
+  "planner_used", "agent_trace", "agent_rounds", "termination",
+  "_round0_classification", "_nd_round0", "_nd_final", "_nd_n_rounds",
+  "_researched", "_nd_source", "_wm_type", "_research_ms",
+  "retrieved_original_indices", "latency_ms" }
+```
+
+`_nd_round0` → `_nd_final` 변화와 `retrieved_original_indices`가 있어, **오프라인에서 novelty/escape를 재계산**할 수 있습니다(재수집 불필요).
+
+#### 학습 측 평가 (NB02b)
+
+| 지표 | 정의 | 판정 기준 |
+|---|---|---|
+| `[G3]` CV acc | GBDT/RF가 오라클 라벨을 예측 | **> majority** 여야 학습 의미 있음 |
+| `[B]` 3축 | base+제약 / 학습모델 / oracle 상한 | 학습 순이득 = ② − ① |
+| `[G]` grounded × achieved | 근거 인용 여부별 성능 차 | **유의하면 "evidence를 읽는 것이 성능에 기여"** |
+| `[T1]` 예산 곡선 | 게이트 B%별 achieved | 게이트 기여와 tool 선택 기여 분리 |
+
 
 ---
 
@@ -451,15 +597,27 @@ SFT는 토큰 우도를 최적화해 **템플릿 암기를 보상**합니다. gr
 | **🔧 정정** "ambiguous cls = evidence 판정" (evidence-GT 100%) | **순환논증** — rejection이 정답만 잔존. 무필터 Step 0 net −13/−14로 반전 → cls 전면 deterministic 전환 |
 | **🔧 정정** "GRPO: AUROC +2.3%p, ECE −8%" | v4 무효(cls-gate 버그, 전 스텝 skip) → v5 무효(안전지대 + direction-flip hacking, P1 0%) → **v6 ladder reward로 재실험** (5️⃣ 진단 체인) |
 | ✅ prompt v2 / deterministic sufficiency 주입 / Selective expand gate | 고유율 18.9→75.8% / wm 타이밍 11→100% / flip 3.2:1 |
+| ❌ Planner에 `stop` 포함 (flat action space) | 라벨 91% stop 편중 → SFT argmax 붕괴(non-stop 정답률 0/20), GRPO 게이트 AUC 0.443~0.481 3회 연속 무정보 이하 → **2-stage 분리** |
+| ❌ 비용을 reward에 λ 스칼라화 | `stop` 제거 시 `−λ·n_calls`가 그룹 상수 → advantage에서 소거(`mean_cost` 100 step 고정). λ 튜닝으로 불가 → **admission control** |
+| ❌ latency(ms)를 cost 단위로 | 실측(contextual 3,677ms / global 722ms)이 손으로 찍은 1.2/1.5와 **역전** → 호출 수로 통일, latency는 SLA 지표로 분리 |
+| ❌ `R_auroc` 커널 | K3 probe 격차 −0.065 — 스칼라 임계값이 25-feature RF보다 나음 = LLM 불필요 결론이 나오는 커널 |
+| ❌ 2-turn 확장 | `[K1-T]` 2턴 우세 0.3%(9/2,830) — 이산 커널에서 판정은 1턴에 결판 |
+| **🔧 정정** 진단-처방 힌트 프롬프트 주입 | 모델 정합률 83.5%인데 **오라클 정합률 61.2%(우연 수준)** → `grounded=True`의 achieved가 오히려 낮음(−0.168 vs +0.035). 가설을 주입하면 오류까지 학습 |
+| **🔧 정정** `attribute_knn` = 이질 축 | 저선택도(support<10k)에서만 Jaccard 0.29. 후보 45%가 support≥25k(임계 s*=k/P) → 순기여 EVPI의 3.4%. **임베딩이 categorical을 이미 인코딩** |
+| ✅ `R_flip + 2.5·R_margin` 하이브리드 | Dirac 커널의 좁은 지지집합을 균등 성분으로 확장 — 동률 99.6%→64.2%, EVPI +0.13→+0.24 |
+| ✅ 제약 디코딩 (think 자유 + JSON trie) | parse 5.6%→98.5%, format/invalid penalty가 구조적으로 발생 불가 |
 | ✅ 출력 자유도 5→1키 + 0.5B 전환 | 판정·진단은 코드, 서술만 LLM — 4단계 측정의 귀결 |
 
 > **6회 독립 측정 + 4단계(S1→S4) 실험의 일관된 결론** — 이 도메인에서 판정 신호는 임베딩 거리(nd)가 유일하며, LLM의 판정·진단 개입은 순손실이다. 따라서 LLM의 자유 출력을 5키 → 1키로 축소해 3B를 0.5B로 대체하고, **agent의 가치를 "정확도 개선"이 아닌 "선택적 호출에 의한 비용 절감(이론치 ≈57%)"과 감사 주석(what_missing)으로 재정의**했다.
 
 ## 🔜 남은 작업
 
-- [ ] **GRPO v6(ladder) reward 재실험** — 탐색 복원(temp 1.1 / G=8 / colon prefix-forcing) 병행 → 5️⃣ 결과 표 기입, 실패 시 best-of-n rejection SFT(RAFT) 전환
-- [ ] Judge 신뢰성 3종 통과 → 7️⃣ judge 표 채움 / 3B vs 0.5B 비교
-- [ ] parse 84%→99% (GBNF grammar) / KV prefix cache 재측정(현 N=5에서 −9% 역효과 — 표본·캐시 적중 재점검)
+- [ ] **Planner v3 서빙 교체** — GRPO adapter → GGUF Q8 → `local_planner` 배포 → 7️⃣ 결과 표/JSON 실측 교체 (현재 표는 v2 Gemini 시점 스모크 n=20)
+- [ ] 진단-처방 힌트 제거 후 재실험 — `grounded × achieved` 부호 확인 (§5️⃣-E)
+- [ ] `evidence_novelty` 블록 실측 — 재검색 novelty/escape/support를 outcome과 분리 보고
+- [ ] tool 축 재설계 검토 — 같은 인덱스 내 필터로는 새 축이 안 나옴(§6️⃣) → 코퍼스를 바꾸는 tool(사기 bank 조회) 타당성 측정
+- [ ] Judge 신뢰성 3종 통과 / 3B vs 0.5B 비교 — `grounded rate`가 모델 스펙 함수인지 확인
+- [ ] 하위 10% split 오라클로 EVPI 전이성 검증 (현재 상한은 상위 10% in-sample)
 
 ## 💻 기술 스택 & 실행
 
