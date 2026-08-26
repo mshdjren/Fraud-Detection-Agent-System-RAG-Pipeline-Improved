@@ -72,7 +72,7 @@ spec:
 
       containers:
       - name: streamlit
-        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/fraud-detection-ui:latest
+        image: us-west1-docker.pkg.dev/kakao-504812/elasticsearch-images/fraud-detection-ui:latest
         imagePullPolicy: Always
 
         ports:

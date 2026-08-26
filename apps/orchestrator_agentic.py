@@ -97,6 +97,17 @@ class TestCase(BaseModel):
     sex:            Literal["M", "F"]
     source:         Literal["Direct", "Ads", "SEO"]
     browser:        Literal["Chrome", "IE", "Safari", "FireFox", "Opera"]
+    # ★ forward orchestrator.py TestCase와 동일하게 3필드 복원.
+    #   이게 빠져 있어 analyzer가 받는 transaction에 categorical이 3개뿐이었고,
+    #   agrees/persona_match가 {sex,source,browser}로 상한이 걸려 있었다.
+    weekday_purchase: Optional[Literal[
+        "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
+    ]] = None
+    month_purchase: Optional[Literal[
+        "January","February","March","April","May","June",
+        "July","August","September","October","November","December"
+    ]] = None
+    IP_country: Optional[str] = None
     embedding:      List[float]
     experiment_case:   Optional[str] = None
     percolate_version: Optional[str] = None
@@ -364,8 +375,12 @@ async def detect(tc: TestCase):
     start = time.time()
     request_id = uuid.uuid4().hex[:8]
     lat: Dict[str, float] = {}
-    tx = {"purchase_value": tc.purchase_value, "age": tc.age, "sex": tc.sex,
-          "source": tc.source, "browser": tc.browser}
+    tx = {k: v for k, v in (
+            ("purchase_value", tc.purchase_value), ("age", tc.age), ("sex", tc.sex),
+            ("source", tc.source), ("browser", tc.browser),
+            ("IP_country", tc.IP_country), ("month_purchase", tc.month_purchase),
+            ("weekday_purchase", tc.weekday_purchase),
+        ) if v is not None}
     experiment_case   = tc.experiment_case   or "pca_64_k100"
     percolate_version = tc.percolate_version or "v14"
 

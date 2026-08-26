@@ -119,8 +119,8 @@ FEATURE_COLS     = NUMERIC_COLS + CATEGORICAL_COLS
 # ============================================================
 EXPERIMENT_CASE = "pca_64_k100"
 
-GCS_BUCKET  = "fraud_ecomm"
-GCP_PROJECT = "kakaoo-501107"
+GCS_BUCKET  = "fraud_ecommm"
+GCP_PROJECT = "kakao-504812"
 MOUNT_POINT = "/content/gcs_mount"
 GCS_ROOT    = MOUNT_POINT
 

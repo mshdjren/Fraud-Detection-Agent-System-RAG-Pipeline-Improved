@@ -122,6 +122,8 @@ VEC_TYPE              = os.getenv("VEC_TYPE", "float32")                  # floa
 
 # ★ [EXP] ingest 의 build_vec_index_suffix() 와 동일 규칙
 VEC_QUANT        = os.getenv("VEC_QUANT", "f32").strip().lower()
+_VEC_QUANT_LABELS = {"f32": "float32", "int8_hnsw": "int8", "bbq_hnsw": "bbq", "int4_hnsw": "int4"}
+VEC_TYPE = os.getenv("VEC_TYPE", _VEC_QUANT_LABELS.get(VEC_QUANT, VEC_QUANT))
 HNSW_M           = int(os.getenv("HNSW_M", "16"))
 HNSW_EF_C        = int(os.getenv("HNSW_EF_CONSTRUCTION", "100"))
 VEC_INDEX_SUFFIX = os.getenv("VEC_INDEX_SUFFIX", "")
@@ -304,8 +306,10 @@ def get_vec_index() -> str:
       - 미설정 시:            : fraud_ecom_{experiment_case}_percentage_{percentage}_cluster_tree_vec
 
     """
+# After — ★ [ADD] 명시적으로 설정했을 때만 붙는다 (기본값 "" → 기존과 동일)
     if AUG_MULTIPLIER:
-        return f"fraud_ecom_aug_{AUG_MULTIPLIER}x_{AUG_PCT}pct_{VEC_TYPE}_vec"
+        _aug_suffix = f"_{VEC_INDEX_SUFFIX}" if VEC_INDEX_SUFFIX else ""
+        return f"fraud_ecom_aug_{AUG_MULTIPLIER}x_{AUG_PCT}pct_{VEC_TYPE}_vec{_aug_suffix}"
     return (f"fraud_ecom_{EXPERIMENT_CASE}_percentage_{VEC_INDEX_CORESET_PCT}_cluster_tree_vec{_vec_index_suffix()}")
 
 # ===========================

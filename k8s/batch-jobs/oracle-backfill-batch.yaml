@@ -1,0 +1,162 @@
+# ===========================
+# oracle-backfill-batch.yaml
+# ===========================
+# 목적: persona/neighbors 필드가 없는(=controller.py RolloutResponse 패치 전에
+#       뽑힌) 기존 oracle parquet에 그 2개 컬럼만 backfill한다.
+#       action/reward/delta_margin/cost 등은 원본 그대로 보존 — 재수집(~4h)
+#       불필요. test_idx당 router+retriever 1쌍만 호출(oracle_extractor.py의
+#       _base_call 재사용)하므로 훨씬 빠르다.
+#
+# 전제: 기존 oracle-rollout-batch.yaml로 이미 parquet이
+#       gs://fraud_ecommm/oracle/{experiment_case}/query_{...}_pct_{...}/에
+#       있어야 한다. 이 Job은 그 파일을 다운로드 → backfill → 같은 경로에
+#       *_backfilled.parquet으로 업로드한다.
+#
+# ConfigMap 등록 (최초 1회 + oracle_backfill.py 변경 시):
+  # kubectl create configmap evaluation-oracle-code \
+  #   --from-file=oracle_extractor.py \
+  #   --from-file=oracle_backfill.py \
+  #   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#   (기존 evaluation-oracle-code ConfigMap을 oracle_backfill.py 추가해서 갱신
+#    — oracle_extractor.py는 이미 있던 것 그대로, import 대상이라 같이 있어야 함)
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oracle-backfill-pca64-k100-v1-pct100-0811-personabug
+  namespace: elastic
+  labels:
+    app: oracle-backfill
+    version: v1.0
+    pipeline: grpo-planner
+    step: oracle-backfill
+spec:
+  ttlSecondsAfterFinished: 604800
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: oracle-backfill
+        pipeline: grpo-planner
+        step: oracle-backfill
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: evaluation-sa
+
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+
+      containers:
+      - name: oracle-backfill
+        image: python:3.10-slim
+
+        env:
+        - name: ROUTER_URL
+          value: "http://anomaly-router:80"
+        - name: RETRIEVER_URL
+          value: "http://anomaly-retriever:80"
+
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+
+        - name: CORESET_PERCENTAGE
+          value: "100"
+        # ★ backfill 대상 parquet의 GCS 경로 — oracle-rollout-batch.yaml이
+        #   찍어낸 실제 파일명으로 맞출 것 (날짜 접미 포함)
+        - name: ORACLE_GCS_PATH
+          value: "oracle/pca_64_k100/query_v1_pct_100/oracle_rollout_0811.parquet"
+        - name: BACKFILL_CONCURRENCY
+          value: "8"     # router+retriever만 호출하므로 전수 rollout(4)보다 올려도 안전
+        - name: TIMEOUT
+          value: "60"    # router/retriever 개별 호출 — 전수 rollout(300초)보다 훨씬 짧아도 됨
+
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Oracle Backfill (persona/neighbors only)"
+          echo "  experiment_case    : ${EXPERIMENT_CASE}"
+          echo "  percolate_version  : ${PERCOLATE_QUERY_VERSION}"
+          echo "  target parquet     : gs://fraud_ecommm/${ORACLE_GCS_PATH}"
+          echo "  concurrency        : ${BACKFILL_CONCURRENCY}"
+          echo "================================================"
+
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx structlog google-cloud-storage
+
+          cd /app
+          mkdir -p /results/oracle
+
+          echo "── GCS에서 원본 parquet 다운로드 ──"
+          python -c "
+          from google.cloud import storage
+          client = storage.Client()
+          bucket = client.bucket('fraud_ecommm')
+          blob = bucket.blob('${ORACLE_GCS_PATH}')
+          local = '/results/oracle/' + '${ORACLE_GCS_PATH}'.split('/')[-1]
+          blob.download_to_filename(local)
+          print(f'다운로드 완료: {local}')
+          "
+          LOCAL_INPUT="/results/oracle/$(basename ${ORACLE_GCS_PATH})"
+
+          python oracle_backfill.py \
+            --input                 "${LOCAL_INPUT}" \
+            --experiment-case       ${EXPERIMENT_CASE} \
+            --percolate-version     ${PERCOLATE_QUERY_VERSION} \
+            --coreset-percentage    ${CORESET_PERCENTAGE} \
+            --timeout               ${TIMEOUT} \
+            --output-dir            /results/oracle
+
+          echo "================================================"
+          echo " Backfill 완료 — *_backfilled.parquet 업로드됨"
+          echo "================================================"
+
+        resources:
+          requests:
+            cpu: 200m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app/gt_loader.py
+          subPath: gt_loader.py
+        - name: oracle-code-volume
+          mountPath: /app/oracle_extractor.py
+          subPath: oracle_extractor.py
+        - name: oracle-backfill-code-volume
+          mountPath: /app/oracle_backfill.py
+          subPath: oracle_backfill.py
+
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code
+      - name: oracle-code-volume
+        configMap:
+          name: evaluation-oracle-code
+      - name: oracle-backfill-code-volume
+        configMap:
+          name: evaluation-oracle-code

@@ -8,7 +8,7 @@ metadata:
   name: evaluation-sa
   namespace: elastic
   annotations:
-    iam.gke.io/gcp-service-account: evaluation-sa@kakaoo-501107.iam.gserviceaccount.com
+    iam.gke.io/gcp-service-account: evaluation-sa@kakao-504812.iam.gserviceaccount.com
 
 # ★ agent 전용 ConfigMap 등록 (기존 evaluation-code 와 분리):
 # kubectl create configmap evaluation-agent-code \

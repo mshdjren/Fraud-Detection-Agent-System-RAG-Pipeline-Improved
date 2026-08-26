@@ -1,0 +1,167 @@
+# 인수인계 문서 — Planner GRPO 설계
+
+## 0. txt 수용/거절
+
+**수용**
+- Evaluator = SFT 전용. **GRPO 대상 아님** (정답 존재 → SFT 우세, 실패 사례 1회로 충분)
+- Planner = GRPO 대상. 정답 action이 사전에 없음
+- contextual의 **feature set 구성까지** planner action space에 포함
+- `features ⊆ evaluator가 준 agree/persona-match` 로 제한
+- oracle = **평가용 counterfactual reference**, 학습 label 아님
+- reward = decision improvement(주) + evidence novelty + cost + degradation
+- GBNF = decode 시 logit masking. **prompt 길이 증가 없음** → prefill 영향 없음
+- 프로젝트 framing: anomaly는 application layer, 핵심은 retrieval agent
+
+**거절/수정**
+
+| txt | 수정 |
+|---|---|
+| "AnoLLM 논문 AUROC=1.0이라 detection 개선 근거 약함" | **다른 시스템.** NLL 방식 ≠ 현재 embedding-kNN(0.89). 0.11 여지 존재 |
+| "global HNSW recall@5=1.0 → global shortcut 자명" | recall@5는 **dense 회수율**이지 detection 상한 아님. 실측은 `nd_global vs nd_local = AUROC +0.074`. shortcut 위험은 real이지만 **자명하지 않음** → V1로 확인 |
+| evidence novelty를 초기 reward에 포함 | **Stage 2로 연기.** task utility와 무관한 축을 초기에 넣는 것이 evaluator GRPO 실패 패턴 |
+| "SFT 최소화 후 바로 GRPO" | 방향은 맞으나 **SFT-on-oracle을 baseline으로 반드시 측정**해야 함 (§3) |
+
+---
+
+## 1. 최종 정의
+
+**Evaluator** (재학습 없음, 응답 스키마만 확장)
+```
+역할: deterministic evidence interpreter (SFT 완료 상태 유지)
+출력: wm_type, agrees[], differs[], deviant[], rare[], spread_tag
+금지: action 지시 (_V3_TOOL_MAP 삭제)
+```
+
+**Planner** (0.5B, GRPO 학습, controller에 서빙)
+```
+질문: "부족한 evidence를 어떤 검색 관점으로 보완할 것인가"
+state: wm_type, agrees, differs, deviant, rare, spread, nd, margin_12, round
+action:
+  {"action":"stop"}
+  {"action":"global_knn"}
+  {"action":"contextual_knn","features":[...]}   features ⊆ agrees∪persona_match, |f|≤2
+action space ≈ 10~12개
+```
+
+**Tool** (1개)
+```
+retrieve(view ∈ {global, contextual}, scope ∈ {cluster, global}, features[])
+  global     : cluster 필터 해제, boost 없음
+  contextual : features를 should-boost (soft, hybrid). scope는 planner가 선택
+```
+
+**Reward (Stage 1)**
+```
+R = Δmargin − λ·cost
+margin(nd,y) = (2y−1)·(nd−τ)
+cost = {stop:0, contextual@cluster:1.0, contextual@global:1.2, global:1.5}
+λ는 V1에서 global의 평균 Δmargin을 측정한 뒤 역산
+```
+Stage 2: `+ degradation 페널티` → Stage 3: `+ evidence novelty` → Stage 4: `+ validity`
+
+---
+
+## 2. 코드 변경 (개념)
+
+| 파일 | 변경 |
+|---|---|
+| `local_analyzer.py` | `AnalyzeResponse`에 `agrees/differs/deviant/rare/spread_tag` 추가. **프롬프트·SFT 무변경** |
+| `agent_tools_mcp_server.py` | `retrieve(view, scope, features, k)` 단일 tool. 반환에 `support`, `neighbor_ids`, `top1_distance`, `latency_ms` |
+| `controller.py` | `_V3_TOOL_MAP` 삭제 / `PLAN_SCHEMA`에 `features[]`·`scope` / `build_prompt`를 구조화 state로 / `PLANNER_BACKEND`에 `local`(0.5B GGUF) 추가 / `_apply_patchcore_after_research` 제거(nd는 raw 거리) / Round2는 evaluator 재호출 없이 결정론적 state 갱신 / `round_entry`에 rollout 필드 기록 |
+| `retriever.py` | `should` boost 절 + `scope` 파라미터 |
+| `router.py` | `margin_12`(percolate top1-top2 점수차) 응답 노출 |
+| `evaluation_metrics.py` | `calculate_planner_metrics`: oracle agreement / regret / action 분포 / state별 조건부 |
+| `agent_batch_inference.py` | `--rollout` 모드 (전 action 전수 실행 후 저장) |
+| NB03 | V1~V3 검증 (§4) |
+| NB02 | reward 함수 교체, `num_generations`=action수 전수, `max_new_tokens`=24 |
+
+---
+
+## 3. Oracle / SFT vs GRPO 재정의 ★
+
+**Evaluator 실패의 정확한 조건**
+```
+(a) 정답이 state로부터 결정론적으로 계산 가능  → SFT가 그 mapping을 완전히 학습
+(b) GRPO reward가 task utility와 무관(짧은 토큰, 표현 다양성)  → SFT 성능을 퇴화시킴
+```
+
+**Planner에서 (a)가 성립하는가 — 부분적으로 성립합니다. 이게 위험 지점입니다.**
+
+rollout을 전수 실행하면 `oracle = argmax_a R(a)` 라벨이 생기고, 이걸로 SFT하면 **behavior cloning**이 됩니다. 그리고 그게 GRPO보다 잘 나올 수 있습니다. **evaluator 실패를 그대로 반복할 위험이 여기 있습니다.**
+
+**따라서 반드시 baseline으로 측정합니다.**
+
+| | 내용 |
+|---|---|
+| A | 규칙: `contextual(features=agrees[:1])` |
+| B | GBDT: state → 후보별 Δmargin 예측 → argmax |
+| **C** | **0.5B SFT-on-oracle** ← 이게 D를 이기면 GRPO 불필요 결론 |
+| D | 0.5B GRPO |
+| E | Gemini / gpt-4o-mini |
+
+**GRPO가 C보다 나을 이론적 근거 3가지** (실험으로 확인해야 함)
+1. C는 argmax만 배워 **cost trade-off의 연속적 구조를 잃음**. R이 근소한 차이일 때 항상 비싼 쪽을 선택
+2. C는 오프라인 분포에 고정. GRPO는 자기 정책 분포에서 rollout → distribution shift에 강함
+3. oracle 계산은 전수 실행이라 **서빙 불가**. C의 라벨 자체가 train-only
+
+> **판정 기준**: C ≈ D면 "이 문제도 SFT 문제였다"가 정직한 결론이고, 그 경우 GRPO를 억지로 유지하지 않습니다. 다만 **C가 존재한다는 것 자체가 evaluator 케이스와 다릅니다** — evaluator는 라벨이 서빙 시점에도 계산 가능했지만, planner의 oracle은 전수 실행이 필요해 서빙 불가입니다.
+
+**Contextual feature 자유도에 제약을 주는 이유**
+```
+무제한: 2^8 조합 → 0.5B가 support<200인 빈 쿼리를 대량 생성 → reward noise
+제약  : features ⊆ agrees∪persona_match, |f|≤2 → 후보 ~10개
+```
+제약이 SFT를 유리하게 만들지 않습니다. 후보가 10개여도 **어느 것이 최적인지는 실행해야 알 수 있기** 때문입니다. 이게 evaluator(state→label 결정론적)와의 결정적 차이입니다.
+
+**SFT 최소화 방침**
+```
+GBNF로 format 100% 보장 → SFT의 format 역할 소멸
+SFT는 200샘플·1epoch·형식 유효한 무작위 action만 (정책 편향 없음)
+★ 규칙 baseline A를 SFT 타깃으로 쓰지 않는다 (앵커링 방지)
+```
+
+---
+
+## 4. Fraudecom 검증 — 느슨하게, 가능성 확인 수준
+
+rollout 데이터만으로 계산. **ES 쿼리 ~4,000회 ≈ 15분.** n=500이면 충분합니다.
+
+| | 확인 | 통과 기준(느슨) |
+|---|---|---|
+| **V1** | oracle action 분포 | global < 80%. 균등할 필요 없음 |
+| **V2** | `corr(nd_contextual, nd_global)` | < 0.9. 0.95 이상이면 action 중복 |
+| **V3** | state별 oracle 분기 | wm_type 2개 그룹에서 oracle 최빈값이 다르면 OK |
+
+**해석**
+- V1 실패 → always-global이 최적. 프로젝트를 **stop vs search 2-way call/reject**로 축소
+- V2 실패 → contextual 삭제, action 2개
+- V3 실패 → 정책이 상수함수. planner 불필요
+
+세 개 다 통과할 필요는 없습니다. **V1만 통과해도 학습을 시작할 수 있고, V2·V3는 action space를 다듬는 용도**입니다.
+
+---
+
+## 5. 학습 절차
+
+```
+1. rollout 추출   n=500~2000 × action 전수 → (state, action, nd_before/after, support, latency, y)
+2. V1~V3 확인     통과 시 진행
+3. baseline A/B/C 측정
+4. SFT 최소(200샘플) → GRPO (group = action 전수 전개, temperature 무관)
+5. 평가           oracle agreement / mean regret / global 선택률 / state별 조건부 / 평균 검색횟수 / latency
+```
+
+**GRPO group 다양성**: action이 유한하므로 **샘플링 없이 전수 전개**. temperature 튜닝 불필요, advantage가 정확해짐.
+
+---
+
+## 6. 프로젝트 framing (대외용)
+
+> AnoLLM + HNSW + multi-cluster routing이라는 **강력한 dense retriever가 존재하는 환경**에서, evaluator가 retrieval insufficiency를 진단하고 planner가 alternative retrieval view를 선택하는 **agentic retrieval loop**를 구축. anomaly detection은 검색 결과의 정답·거리·비용을 수치로 통제할 수 있는 **재현 가능한 retrieval environment**로 사용.
+
+- 개선되면 → agentic retrieval 성공
+- 개선 안 되면 → **"강력한 dense representation 하에서 추가 retrieval의 marginal utility가 낮다"**는 negative result
+- 둘 다 유효. **억지로 개선을 만들지 않는다**
+
+**금지 표현**: "anomaly detection에 GRPO를 적용" / "7초 latency가 좋다"
+**권장 표현**: "retrieval critique → retrieval planning → outcome-based RL" / "CPU-only 제약에서 4× latency 감축"

@@ -32,7 +32,7 @@ metadata:
   name: evaluation-sa
   namespace: elastic
   annotations:
-    iam.gke.io/gcp-service-account: evaluation-sa@kakaoo-501107.iam.gserviceaccount.com
+    iam.gke.io/gcp-service-account: evaluation-sa@kakao-504812.iam.gserviceaccount.com
 
 ---
 # ===========================
@@ -44,7 +44,7 @@ metadata:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: 0805-agent-eval-smoke-bbq-llmopt-n100-coreset100-prompmid
+  name: 0819-agent-planner-test2
   namespace: elastic
   labels:
     app: evaluation
@@ -139,15 +139,15 @@ spec:
         # N_SAMPLES: 전체 평가 샘플 수.
         #   smoke(검증): 10~20, 정식 평가: 500~1000
         - name: N_SAMPLES
-          value: "100"
+          value: "20"
         - name: START_INDEX
           value: "26000"
         - name: CORESET_PERCENTAGE
           value: "100"
         - name: TIMEOUT
-          value: "1200"    # per-sample timeout (agent CPU 추론 포함)
+          value: "3600"    # per-sample timeout (agent CPU 추론 포함)
         - name: AGENT_CONCURRENCY
-          value: "4"
+          value: "8"
 
         # ── boundary-only 옵션 ────────────────────────────────────
         # "true" 로 설정하면 top1_dist 0.30~0.55 샘플만 대상으로 실행
@@ -157,7 +157,7 @@ spec:
 
         # ── GCS 저장 경로 ─────────────────────────────────────────
         - name: GCS_OUTPUT_BUCKET
-          value: "gs://fraud_ecomm/evaluation/agent-eval"
+          value: "gs://fraud_ecommm/evaluation/agent-eval"
 
 # ── run 식별자: Job metadata.name 을 그대로 주입 ──────────
         - name: RUN_NAME
@@ -343,7 +343,7 @@ spec:
 #               name: anomaly-config
 #               key: EXPERIMENT_CASE
 #         - name: GCS_OUTPUT_BUCKET
-#           value: "gs://fraud_ecomm/evaluation/agent-eval"
+#           value: "gs://fraud_ecommm/evaluation/agent-eval"
 
 #         command:
 #         - /bin/bash

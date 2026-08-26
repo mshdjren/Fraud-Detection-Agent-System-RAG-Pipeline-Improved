@@ -480,6 +480,41 @@ Output ONLY compact JSON (no markdown):
     return user_prompt, suf, nd
 
 
+def _evidence_kwargs(
+    test_transaction:     Dict,
+    top_k_normal_results: List[Dict],
+    persona:              Optional[Dict],
+) -> Dict:
+    """
+    ★ [신규, 추가 전용] AnalyzeResponse.agrees/differs/deviant/rare/
+    persona_match/spread_tag를 채우기 위한 어댑터. build_user_prompt()가
+    프롬프트에 넣으려고 만드는 topk_feats 추출 로직(v2/v3 top-3, flat-dict
+    하위호환)을 그대로 재사용해 prompts.compute_evidence_axes()에 넘긴다 —
+    프롬프트 텍스트 생성 경로와 완전히 분리된 별도 호출이므로 build_user_
+    prompt()의 반환값이나 프롬프트 문자열에는 영향이 없다.
+
+    반환 dict는 AnalyzeResponse 필드명과 동일한 키(agrees/differs/...)이므로
+    _parse_inference_result의 gen_meta로 그대로 병합할 수 있다.
+    """
+    _nb = (top_k_normal_results or [])[:3]
+    _tk = []
+    for nb in _nb:
+        f = nb.get("features")
+        if not f:
+            f = {k: v for k, v in nb.items()
+                 if k not in _NON_FEATURE_KEYS and v is not None}
+        _tk.append(f or {})
+    _ds = [float(r.get("distance", 0.0)) for r in _nb]
+    try:
+        return prompts.compute_evidence_axes(
+            test_features=test_transaction, persona=persona,
+            distances=_ds, topk_feats=_tk,
+        )
+    except Exception as e:
+        logger.warning("evidence_axes_compute_failed", error=str(e))
+        return {}
+
+
 # ===========================
 # 추론 — 백엔드 분기
 # ===========================
@@ -748,6 +783,20 @@ class AnalyzeResponse(BaseModel):
     tpot_ms:         Optional[float] = None
     n_output_tokens: Optional[int]   = None
 
+    # ── ★ [신규, 추가 전용] prompts.compute_evidence_axes()의 구조화 출력.
+    #   지금까지 "LLM이 프롬프트에서만 읽는 텍스트"였던 agrees/differs/
+    #   deviant/rare/persona_match/spread_tag를 응답 필드로 노출한다.
+    #   전부 Optional 신규 필드라 기존 6개 필드는 그대로이고, 이 필드들을
+    #   모르는 기존 소비자(batch_inference.py 등)는 영향받지 않는다.
+    #   ★ 프롬프트/SFT는 완전히 무변경 — build_user_prompt()는 손대지 않았고,
+    #   이 값은 _run_single/DynamicBatcher가 별도로 한 번 더 계산해 얹는다.
+    agrees:        Optional[List[str]] = None
+    differs:       Optional[List[str]] = None
+    deviant:       Optional[List[str]] = None
+    rare:          Optional[List[str]] = None
+    persona_match: Optional[List[str]] = None
+    spread_tag:    Optional[str]       = None
+
 
 # ===========================
 # FastAPI
@@ -920,6 +969,8 @@ def _run_single(
     logger.info("run_single_inference_start", backend=MODEL_BACKEND,
                 model_loaded=(_model is not None))
     _gen_meta: Dict = {}                                   # ★ [EXP] TTFT/TPOT 수집함
+    _gen_meta.update(_evidence_kwargs(                     # ★ [신규] agrees/differs/... 병합
+        req.test_transaction, req.top_k_normal_results, effective_persona))
     result = run_inference(user_prompt, meta=_gen_meta)    # ★ [EXP]
 
     logger.info("run_single_inference_done", elapsed_s=f"{time.time()-t0:.2f}",
@@ -953,6 +1004,7 @@ class _BatchItem:
     persona_used:     bool
     tree_rules_used:  bool
     t0:               float
+    evidence:         Dict = field(default_factory=dict)  # ★ [신규] agrees/differs/... (선계산, LLM 미개입)
     future:           "asyncio.Future" = field(default=None)
 
 
@@ -970,10 +1022,11 @@ class DynamicBatcher:
             self._loop_task = asyncio.create_task(self._run_loop())
             logger.info("dynamic_batcher_started", batch_wait_ms=BATCH_WAIT_MS, max_batch_size=MAX_BATCH_SIZE)
 
-    async def submit(self, user_prompt: str, *, sufficiency: str, nd: float, persona_used: bool, tree_rules_used: bool) -> AnalyzeResponse:
+    async def submit(self, user_prompt: str, *, sufficiency: str, nd: float, persona_used: bool,
+                     tree_rules_used: bool, evidence: Optional[Dict] = None) -> AnalyzeResponse:
         item = _BatchItem(
             user_prompt=user_prompt, sufficiency=sufficiency, nd=nd, persona_used=persona_used,
-            tree_rules_used=tree_rules_used, t0=time.time(),
+            tree_rules_used=tree_rules_used, t0=time.time(), evidence=(evidence or {}),
         )
         item.future = asyncio.get_event_loop().create_future()
         await self._queue.put(item)
@@ -1007,6 +1060,7 @@ class DynamicBatcher:
                         resp = _parse_inference_result(
                             raw, mode="batched", t0=item.t0, sufficiency=item.sufficiency, nd=item.nd,
                             persona_used=item.persona_used, tree_rules_used=item.tree_rules_used,
+                            gen_meta=item.evidence,          # ★ [신규] agrees/differs/... 병합
                         )
                         if not item.future.done():
                             item.future.set_result(resp)
@@ -1061,9 +1115,10 @@ async def analyze_transaction(
                 top_k_normal_results=request.top_k_normal_results, top1_distance=request.top1_distance,
                 persona=effective_persona,
             )
+            _evidence = _evidence_kwargs(request.test_transaction, request.top_k_normal_results, effective_persona)
             return await _batcher.submit(
                 user_prompt, sufficiency=suf, nd=nd, persona_used=effective_persona is not None,
-                tree_rules_used=effective_tree_rules_enabled,
+                tree_rules_used=effective_tree_rules_enabled, evidence=_evidence,
             )
         logger.info("analyze_dispatching_to_thread", backend=MODEL_BACKEND,
                     model_loaded=(_model is not None))

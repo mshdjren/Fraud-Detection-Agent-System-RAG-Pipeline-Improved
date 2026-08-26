@@ -104,7 +104,7 @@ spec:
         - name: GAUSSIAN_AUG_DATA_DIR
           value: "/data/gaussian_aug"
         - name: GCS_GAUSSIAN_AUG_BASE
-          value: "gs://fraud_ecom/tree-search/gaussian_aug"
+          value: "gs://fraud_ecommm/tree-search/gaussian_aug"
         - name: GAUSSIAN_AUG_MULTIPLIERS
           # value: "2,5,10"    # 필요한 multiplier 조합 (20,30은 USE_CHUNK=true 권장)
           value: "30"    # 필요한 multiplier 조합 (20,30은 USE_CHUNK=true 권장)
@@ -219,7 +219,7 @@ spec:
       # ===========================
       containers:
       - name: ingest
-        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/es-tree-ingest:3.0
+        image: us-west1-docker.pkg.dev/kakao-504812/elasticsearch-images/es-tree-ingest:3.0
         imagePullPolicy: Always
 
         command: ["bash", "-lc"]
@@ -270,7 +270,7 @@ spec:
         - name: GAUSSIAN_AUG_DATA_DIR
           value: "/data/gaussian_aug"
         - name: GCS_GAUSSIAN_AUG_BASE
-          value: "gs://fraud_ecom/tree-search/gaussian_aug"
+          value: "gs://fraud_ecommm/tree-search/gaussian_aug"
 
         # 적재할 multiplier 목록 (쉼표 구분)
         # 주의: 20x/30x는 USE_CHUNK=true + N_CHUNKS 설정 권장
@@ -306,7 +306,40 @@ spec:
         - name: BULK_CHUNK_SIZE
           value: "1000"
         - name: BULK_MAX_CHUNK_BYTES
-          value: "20971520"    # 20MB
+          value: "20971520"    # 
+# 01-ingest-gaussian-aug.yaml — main container env에 추가
+        - name: PYTHONUNBUFFERED
+          value: "1"
+
+# 292행(VEC_DIMS) 다음에 추가
+        - name: VEC_TYPE                     # ★ [ADD] router.py get_vec_index()와 동일 소스
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VEC_TYPE
+# 01-ingest-gaussian-aug.yaml — VEC_TYPE 블록 다음에 추가
+        - name: AUG_RETRIEVAL_MODE           # ★ [ADD]
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: AUG_RETRIEVAL_MODE
+# 316행(INGEST_SEARCH_MODE 블록) 다음에 추가
+        - name: VEC_QUANT                    # ★ [ADD]
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: VEC_QUANT
+        - name: HNSW_M                       # ★ [ADD]
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: HNSW_M
+        - name: HNSW_EF_CONSTRUCTION         # ★ [ADD]
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: HNSW_EF_CONSTRUCTION
+
 
         # ── HNSW 유무 ───────────────────────────────────────────────
         - name: INGEST_SEARCH_MODE
@@ -326,11 +359,11 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: ATTR_DOCS
-        - name: N_SHARDS
+        - name: N_SHARDS_VEC
           valueFrom:
             configMapKeyRef:
               name: anomaly-config
-              key: N_SHARDS
+              key: N_SHARDS_VEC
         - name: N_REPLICAS
           valueFrom:
             configMapKeyRef:

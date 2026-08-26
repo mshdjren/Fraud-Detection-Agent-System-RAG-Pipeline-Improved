@@ -58,7 +58,7 @@ spec:
               name: anomaly-config
               key: EXPERIMENT_CASE
         - name: GCS_OUTPUT_BUCKET
-          value: "gs://fraud_ecomm/evaluation/agent-eval"
+          value: "gs://fraud_ecommm/evaluation/agent-eval"
 # ── run 식별자: Job metadata.name 을 그대로 주입 ──────────
         - name: RUN_NAME
           valueFrom:

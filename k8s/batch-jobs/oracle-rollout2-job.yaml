@@ -1,0 +1,241 @@
+# ===========================
+# oracle-rollout2-batch.yaml  (v3)
+# ===========================
+# 목적: 2-step 오라클 rollout 전수 수집.
+#       step1 ∈ {stop, contextual_knn(f), attribute_knn(f), global_knn}
+#       step2 = step1 상위 N개에서 분기, "step1과 다른 tool"만
+#
+# ★ v3 재발 방지 (14시간분 소실 사고 대응)
+#   · restartPolicy: Never + backoffLimit: 0
+#       → 실패해도 파드를 새로 띄우지 않는다. 이전엔 OnFailure라 예외 한 번에
+#         Job이 재시작되며 메모리에만 있던 2,829건이 통째로 사라졌다.
+#   · STATE_TIMEOUT
+#       → state 하나가 MCP에서 무한 대기하면 as_completed 전체가 막힌다.
+#         900초 상한을 걸어 그 건만 실패 처리하고 진행한다.
+#   · CKPT_EVERY + CKPT_TO_GCS
+#       → 100 state마다 로컬 + GCS로 증분 저장. 죽어도 여기까지는 남는다.
+#         emptyDir은 파드와 함께 사라지므로 GCS 동기화가 실질적인 보험이다.
+#   · --resume
+#       → 재실행 시 GCS/로컬 체크포인트에서 이어받아 완료분을 건너뛴다.
+#         (--date-tag를 이전 실행과 같게 줘야 같은 체크포인트를 찾는다)
+#
+# ★ 성능
+#   실측 880분(state당 18.7초, 후보당 0.4초) — ES 검색 자체는 20~40ms이므로
+#   오버헤드가 10배다. 아래 상향으로 2~4배 단축을 노린다.
+#     ORACLE_CONCURRENCY   8 → 16   (배치 레벨 state 동시성)
+#     GRPO_MCP_CONCURRENCY 4 → 16   (controller 내부 후보 동시성 — controller Deployment에 설정)
+#   추가로 retriever의 client.count 캐시(=attribute 후보마다 나가던 8만 회 제거)와
+#   controller의 MCP 우회(ROLLOUT_DIRECT_RETRIEVER)를 적용하면 더 줄어든다.
+#
+# ★ 저장 경로 (기존 관례 유지)
+#   gs://fraud_ecommm/oracle/{case}/query_{ver}_pct_{pct}/oracle_rollout2_{split}_{MMDD}.parquet
+#   gs://fraud_ecommm/oracle/{case}/query_{ver}_pct_{pct}/_ckpt/..._partial.pkl
+#
+# ConfigMap 등록 (oracle_rollout_batch.py 변경 시):
+  # kubectl create configmap evaluation-oracle-code \
+  #   --from-file=oracle_rollout_batch.py \
+  #   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+# ===========================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: oracle-rollout2-pca64-k100-v1-pct100-head-full-retry
+  namespace: elastic
+  labels:
+    app: oracle-rollout2
+    version: v3.0
+    pipeline: grpo-planner
+    step: oracle-rollout
+    split: head
+spec:
+  ttlSecondsAfterFinished: 604800
+  # ★ 실패 시 재시작 금지 — 재시작되면 진행분이 통째로 사라진다.
+  #   중단되면 --resume 을 켠 Job을 수동으로 다시 띄우는 것이 옳다.
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: oracle-rollout2
+        pipeline: grpo-planner
+        step: oracle-rollout
+        split: head
+    spec:
+      restartPolicy: Never
+      serviceAccountName: evaluation-sa
+
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+
+      containers:
+      - name: oracle-rollout2
+        image: python:3.10-slim
+
+        env:
+        - name: CONTROLLER_URL
+          value: "http://anomaly-controller:80"
+        - name: ROUTER_URL
+          value: "http://anomaly-router:80"
+        - name: RETRIEVER_URL
+          value: "http://anomaly-retriever:80"
+
+        - name: EXPERIMENT_CASE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: EXPERIMENT_CASE
+        - name: PERCOLATE_QUERY_VERSION
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PERCOLATE_QUERY_VERSION
+
+        - name: CORESET_PERCENTAGE
+          value: "100"
+        - name: BASE_TOP_K
+          value: "3"
+
+        # ── split / 표본 ──
+        #   head = test set 앞 10% (negative mining / evaluator SFT와 동일 구간)
+        #   tail = 뒤 10% (서빙 성능 검증 구간 — EVPI 전이성 확인)
+        - name: SPLIT
+          value: "head"
+        - name: N_SAMPLES
+          value: "0"          # 0이면 split 전체(앞 10% = 2830건)
+        - name: START_INDEX
+          value: "0"
+
+        # ── 2-step 제어 ──
+        - name: MAX_STEPS
+          value: "2"
+        - name: STEP2_TOPN
+          value: "3"
+
+        # ── 성능 ──
+        #   후보 실행 경로에는 analyzer가 없다(round0 1회만) → 병목은 ES/HTTP.
+        - name: ORACLE_CONCURRENCY
+          value: "8"
+        - name: ORACLE_MAX_RETRY
+          value: "3"
+        - name: TIMEOUT
+          value: "600"        # /rollout 개별 호출 상한(초)
+
+        # ── 재발 방지 ──
+        - name: STATE_TIMEOUT
+          value: "6000"        # state 1개 상한(초). 초과 시 그 건만 실패 처리
+        - name: CKPT_EVERY
+          value: "100"        # 100 state마다 증분 저장
+        - name: CKPT_TO_GCS
+          value: "true"       # emptyDir은 파드와 함께 사라지므로 GCS가 실질 보험
+        - name: RESUME
+          value: "false"      # 중단 후 재실행 시 "true" + DATE_TAG 고정
+        - name: DATE_TAG
+          value: ""           # 빈 값이면 오늘(MMDD). resume 시 이전 값과 같게
+
+        # ── 인덱스 가드 ──
+        - name: REQUIRE_INDEX_SUBSTRING
+          value: "percentage_100_cluster_tree"
+        - name: FORBID_INDEX_SUBSTRING
+          value: "aug_"
+
+        - name: GCS_BUCKET_NAME
+          value: "fraud_ecommm"
+
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "================================================"
+          echo " Oracle Rollout v3 (2-step, ckpt/resume)"
+          echo "  experiment_case     : ${EXPERIMENT_CASE}"
+          echo "  percolate_version   : ${PERCOLATE_QUERY_VERSION}"
+          echo "  coreset_percentage  : ${CORESET_PERCENTAGE}"
+          echo "  split / n_samples   : ${SPLIT} / ${N_SAMPLES}"
+          echo "  max_steps/step2_topn: ${MAX_STEPS} / ${STEP2_TOPN}"
+          echo "  concurrency         : ${ORACLE_CONCURRENCY}"
+          echo "  state_timeout       : ${STATE_TIMEOUT}s   ckpt_every=${CKPT_EVERY}"
+          echo "  resume / date_tag   : ${RESUME} / ${DATE_TAG:-<today>}"
+          echo "  index guard         : require='${REQUIRE_INDEX_SUBSTRING}' forbid='${FORBID_INDEX_SUBSTRING}'"
+          echo "================================================"
+
+          pip install --no-cache-dir \
+            numpy pandas pyarrow httpx structlog google-cloud-storage
+
+          cd /app
+          mkdir -p /results/oracle
+
+          EXTRA_ARGS=""
+          if [ "${N_SAMPLES}" != "0" ]; then
+            EXTRA_ARGS="${EXTRA_ARGS} --n-samples ${N_SAMPLES}"
+          fi
+          if [ "${RESUME}" = "true" ]; then
+            EXTRA_ARGS="${EXTRA_ARGS} --resume"
+          fi
+          if [ -n "${DATE_TAG}" ]; then
+            EXTRA_ARGS="${EXTRA_ARGS} --date-tag ${DATE_TAG}"
+          fi
+
+          python oracle_rollout_batch.py \
+            --experiment-case         ${EXPERIMENT_CASE} \
+            --percolate-version       ${PERCOLATE_QUERY_VERSION} \
+            --coreset-percentage      ${CORESET_PERCENTAGE} \
+            --split                   ${SPLIT} \
+            --start-index             ${START_INDEX} \
+            --max-steps               ${MAX_STEPS} \
+            --step2-topn              ${STEP2_TOPN} \
+            --timeout                 ${TIMEOUT} \
+            --require-index-substring "${REQUIRE_INDEX_SUBSTRING}" \
+            --forbid-index-substring  "${FORBID_INDEX_SUBSTRING}" \
+            --output-dir              /results/oracle \
+            ${EXTRA_ARGS}
+
+          echo "================================================"
+          echo " Rollout 완료 — parquet 업로드됨 (backfill Job 불필요)"
+          echo "================================================"
+
+        resources:
+          requests:
+            cpu: 300m
+            memory: 2Gi
+          limits:
+            cpu: 1500m
+            memory: 4Gi
+
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        - name: code-volume
+          mountPath: /app/gt_loader.py
+          subPath: gt_loader.py
+        - name: oracle-code-volume
+          mountPath: /app/oracle_rollout_batch.py
+          subPath: oracle_rollout_batch.py
+
+      volumes:
+      - name: results
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: evaluation-code
+      - name: oracle-code-volume
+        configMap:
+          name: evaluation-oracle-code
+
+# ===========================================================================
+# 중단 후 이어받기
+#   kubectl delete job oracle-rollout2-pca64-k100-v1-pct100-head-full -n elastic
+#   위 yaml에서 RESUME="true", DATE_TAG="<이전 실행과 동일한 MMDD>" 로 바꾸고
+#   metadata.name 에 -r2 등 접미를 붙여 재적용.
+#   → GCS의 _ckpt/..._partial.pkl 을 로컬로 내려받는 로직은 배치에 없으므로,
+#     emptyDir이 날아간 경우 아래로 먼저 복원한다:
+#       gsutil cp gs://fraud_ecommm/oracle/pca_64_k100/query_v1_pct_100/_ckpt/*.pkl ...
+#
+# tail split
+#   SPLIT="tail", N_SAMPLES="200", metadata.name 만 변경 (head 완료 후 실행)
+# ===========================================================================

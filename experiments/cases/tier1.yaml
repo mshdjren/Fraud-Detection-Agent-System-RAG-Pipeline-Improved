@@ -22,10 +22,10 @@
 version: 1
 experiment_case: pca_64_k100
 namespace: elastic
-gcs_root: "gs://fraud_ecomm/experiments"
+gcs_root: "gs://fraud_ecommm/experiments"
 # agent-eval-batch.yaml 의 GCS_OUTPUT_BUCKET 과 동일해야 한다.
 # Job 이 스스로 여기에 업로드하고, run_case.sh 가 여기서 산출물을 회수한다.
-eval_gcs_base: "gs://fraud_ecomm/evaluation/agent-eval"
+eval_gcs_base: "gs://fraud_ecommm/evaluation/agent-eval"
 
 # 코드 ConfigMap 이름 (run 전 갱신 확인용)
 code_configmaps:

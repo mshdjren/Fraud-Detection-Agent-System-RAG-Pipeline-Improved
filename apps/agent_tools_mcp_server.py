@@ -70,7 +70,24 @@ from agent_tools import (
 try:
     from agent_tools import EXTRA_TOOLS, EXTRA_TOOL_NAMES, RESEARCH_MODE
 except ImportError:                       # legacy agent_tools.py 배포 시
-    EXTRA_TOOLS, EXTRA_TOOL_NAMES, RESEARCH_MODE = [], (), "legacy" 
+    EXTRA_TOOLS, EXTRA_TOOL_NAMES, RESEARCH_MODE = [], (), "legacy"
+
+# ★ [stage registry] planner action의 단일 출처. tool 이름/feature 상한을
+#   여기서 받아 하드코딩을 없앤다(기존 contextual_knn의 `[:2]`가 registry의
+#   MAX_CONTEXTUAL_FEATURES와 따로 놀던 문제).
+try:
+    from agent_tools import (
+        PLANNER_STAGE, planner_stage_actions, planner_action_names,
+        MAX_CONTEXTUAL_FEATURES, CONTEXTUAL_CANDIDATE_FIELDS,
+    )
+    _REGISTRY_OK = True
+except ImportError:
+    PLANNER_STAGE = "stage1"
+    MAX_CONTEXTUAL_FEATURES = int(os.getenv("MAX_CONTEXTUAL_FEATURES", "2"))
+    CONTEXTUAL_CANDIDATE_FIELDS = ()
+    def planner_stage_actions(stage=None): return ("stop", "global_knn", "contextual_knn")
+    def planner_action_names(stage=None): return ("stop", "global_knn", "contextual_knn")
+    _REGISTRY_OK = False
 
 logger = structlog.get_logger()
 
@@ -80,6 +97,26 @@ logger = structlog.get_logger()
 RETRIEVER_URL = os.getenv("RETRIEVER_URL", "http://anomaly-retriever:80")
 ROUTER_URL    = os.getenv("ROUTER_URL", "http://anomaly-router:80")
 HTTP_TIMEOUT  = float(os.getenv("MCP_TOOL_HTTP_TIMEOUT", "8.0"))
+
+# ============================================================
+# [attribute_knn] sparse 축 검색 — dense ANN을 경유하지 않는다.
+#
+#   contextual_knn과의 결정적 차이:
+#     contextual = dense 전역 pool 수신 → Python soft rerank
+#                  → recall이 dense top-N에 갇힘. nd_ctx >= nd_global 항상 성립.
+#     attribute  = exact term filter로 부분집합 선택 → 그 안에서 거리 계산
+#                  → dense가 버린 후보를 직접 복구. 부분집합/상위집합 관계가 깨진다.
+#
+#   진단 대응: cluster_mismatch(라우팅 오류)는 원본 feature 축의 문제이므로
+#   같은 축에서 검색하는 attribute가 정합. neighbor_insufficient(이웃 부실)는
+#   pool을 넓혀야 하므로 contextual이 정합.
+# ============================================================
+ATTR_TOP_K       = int(os.getenv("ATTR_TOP_K", "5"))
+ATTR_MIN_SUPPORT = int(os.getenv("ATTR_MIN_SUPPORT", "3"))   # 이보다 적으면 degraded
+
+# aug 인덱스는 공백 컬럼명이 text로 잡혀 있고 .keyword 서브필드만 term 가능.
+# _update_by_query 정규화 완료 후에는 ATTR_FIELD_MODE=normalized로 전환.
+ATTR_FIELD_MODE = os.getenv("ATTR_FIELD_MODE", "auto")   # auto | normalized | legacy
 
 _TOOL_META = {t["name"]: t for t in FOLLOWUP_TOOLS}
 
@@ -275,6 +312,264 @@ async def verify_global(
                 "_degraded": True, "_error": str(e)}
 
 
+# ── Tool GRPO-1: global_knn — 전역(무필터) HNSW (GRPO planner action) ──
+# verify_global과 검색 로직은 동일(cluster_ids=[])하지만, 별도 이름/스키마로
+# 둔다: verify_global은 legacy/v3 재검색 노드 전용 계약(controller.py의
+# _call_tool_direct/_call_tool_mcp*)에 묶여 있어 그 경로를 건드리지 않고
+# GRPO planner action(오라클 rollout, controller.py /rollout)을 위한 독립
+# 진입점을 만드는 편이 두 planner의 실행 경로를 섞지 않는다.
+@mcp.tool(
+    name="global_knn",
+    description="GRPO planner action. 전역(무필터) HNSW top-k — 현재 cluster/"
+                "feature context를 무시하고 전체 정상 memory bank에서 검색한다. "
+                "'클러스터를 무시하면 전역적으로 더 적합한 정상 이웃이 있는가?'",
+)
+async def global_knn(
+    top_k: int = 5,
+    embedding: Optional[List[float]] = None,
+    vec_index: Optional[str] = None,
+    # ★ [FIX] registry의 planner_tool_payload가 모든 action에 scope를 실어
+    #   보낸다. 파라미터가 없으면 FastMCP 스키마 검증에서 ValidationError →
+    #   REST shim 400이 난다. global_knn은 정의상 global 고정이므로 받되 무시.
+    scope: str = "global",
+    cluster_id: int = -1,
+) -> Dict[str, Any]:
+    """cluster_ids=[] → retriever 전역 검색 경로. verify_global과 동일 쿼리,
+    GRPO action 계약(이름만) 분리."""
+    _k = max(1, min(20, int(top_k)))
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            resp = await client.post(
+                f"{RETRIEVER_URL}/retrieve",
+                json={"embedding": embedding, "cluster_ids": [],
+                      "vec_index": vec_index, "top_k": _k},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        res = data.get("results", data.get("neighbors", []))
+        _zero = bool(data.get("zero_hit")) or not res
+        return {"top_k": _k, "view": "global", "scope": "global",
+                "features_used": [],
+                "cluster_id": (res[0].get("cluster_id") if res else None),
+                "top1_distance": data.get("top1_distance"),
+                "support": data.get("support"),
+                "neighbors": res,
+                "zero_hit": _zero,
+                "_degraded": _zero,
+                "_error": ("zero_hit" if _zero else None)}
+    except Exception as e:
+        logger.warning("global_knn_retriever_failed", error=str(e))
+        return {"top_k": _k, "view": "global", "cluster_id": None,
+                "top1_distance": None, "neighbors": [],
+                "_degraded": True, "_error": str(e)}
+
+
+# ── Tool GRPO-2: contextual_knn — global scope + soft feature should-boost ──
+@mcp.tool(
+    name="contextual_knn",
+    description="GRPO planner action. Dense embedding similarity는 유지한 "
+                "채(hard filter 아님), 지정한 원본 categorical feature가 "
+                "일치하는 후보를 soft should-boost로 우선시하는 hybrid "
+                "retrieval. features는 evaluator의 agrees/persona_match "
+                "후보 중 최대 2개. scope는 V1에서 global로 고정한다(비판적 "
+                "검토 §1 — cluster-scoped contextual은 Stage 2 대상).",
+)
+async def contextual_knn(
+    features: Optional[List[str]] = None,
+    transaction: Optional[Dict[str, Any]] = None,
+    top_k: int = 5,
+    embedding: Optional[List[float]] = None,
+    vec_index: Optional[str] = None,
+    # ★ [stage3] scope="cluster"면 cluster 제한을 건 hybrid 검색.
+    #   stage1/2 기본값 global에서는 cluster_ids=[]로 기존 동작과 완전히 동일.
+    scope: str = "global",
+    cluster_id: int = -1,
+) -> Dict[str, Any]:
+    """
+    features 목록을 transaction 값으로 채워 retriever의 should_boost로
+    전달한다. transaction에 값이 없는 feature는 조용히 제외한다(빈
+    should_boost가 되면 global_knn과 동일해짐 — degraded 플래그로 표시).
+
+    Returns:
+        {"top_k", "view":"contextual", "features_used":[...], "cluster_id",
+         "top1_distance", "neighbors"}
+    """
+    _k = max(1, min(20, int(top_k)))
+    _txn = transaction or {}
+    _should: Dict[str, str] = {}
+    # ★ [FIX] 상한을 하드코딩(2)하지 않고 registry의 MAX_CONTEXTUAL_FEATURES를
+    #   따른다 — 값이 어긋나면 attribute_knn과 후보 집합이 달라져 비교가 깨진다.
+    for f in (features or [])[:MAX_CONTEXTUAL_FEATURES]:
+        v = _txn.get(f)
+        if v is not None:
+            _should[f] = str(v)
+    # ★ [stage3] scope 반영. stage1/2에서는 항상 [] (= 전역).
+    _cids = [int(cluster_id)] if (scope == "cluster" and int(cluster_id) >= 0) else []
+    if not _should:
+        logger.warning("contextual_knn_empty_should_boost",
+                       features_requested=features, txn_keys=list(_txn)[:12])
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            resp = await client.post(
+                f"{RETRIEVER_URL}/retrieve",
+                json={"embedding": embedding, "cluster_ids": _cids,
+                      "vec_index": vec_index, "top_k": _k,
+                      "should_boost": _should or None,
+                      "return_support": True},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        res = data.get("results", data.get("neighbors", []))
+        _zero = bool(data.get("zero_hit")) or not res
+        return {"top_k": _k, "view": "contextual", "scope": scope,
+                "features_used": data.get("features_used") or list(_should.keys()),
+                "cluster_id": (res[0].get("cluster_id") if res else None),
+                "top1_distance": data.get("top1_distance"),
+                # ★ [관측] soft rerank 전 top1 — Δnd 부호 구조 판정용
+                "top1_distance_pre_boost": data.get("top1_distance_pre_boost"),
+                "support": data.get("support"),
+                "neighbors": res,
+                "zero_hit": _zero,
+                "_degraded": (not bool(_should)) or _zero,
+                "_error": ("empty_should_boost" if not _should
+                           else ("zero_hit" if _zero else None))}
+    except Exception as e:
+        logger.warning("contextual_knn_retriever_failed", error=str(e))
+        return {"top_k": _k, "view": "contextual", "features_used": [],
+                "cluster_id": None, "top1_distance": None, "neighbors": [],
+                "_degraded": True, "_error": str(e)}
+
+
+def _attr_filters(features: Optional[List[str]],
+                  transaction: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """★ [FIX — 계약 통일] feature '이름' 리스트 + transaction dict를 받아
+    {name: value} term filter를 만든다.
+
+    기존 시그니처는 `features: Dict[name, value]`였는데, 호출자(controller
+    _execute_candidate / planner_tool_payload)는 contextual_knn과 동일하게
+    `features: List[str]` + `transaction`을 보낸다. 그대로 두면 list에
+    .items()를 호출해 AttributeError가 나거나, FastMCP 스키마 검증에서
+    422가 난다 — attribute_knn이 오라클에서 통째로 실패했을 경로다.
+
+    두 tool이 같은 payload를 받아야 planner가 soft(contextual) vs
+    hard(attribute)를 대칭적으로 다룰 수 있다. 값 해석은 tool 안에서 한다.
+
+    하위호환: features가 dict로 오면(구버전 호출자) 그대로 사용한다.
+    """
+    if isinstance(features, dict):                       # legacy 호출자
+        return {str(k): str(v) for k, v in features.items() if v is not None}
+    _txn = transaction or {}
+    out: Dict[str, str] = {}
+    for f in (features or [])[:MAX_CONTEXTUAL_FEATURES]:
+        v = _txn.get(f)
+        if v is not None:
+            out[str(f)] = str(v)
+    return out
+
+
+@mcp.tool(
+    name="attribute_knn",
+    description="Planner action. 지정한 원본 categorical feature 값이 정확히 "
+                "일치하는 정상 샘플만 hard term filter로 좁힌 뒤, 그 부분집합에서 "
+                "embedding 거리 top-k를 반환한다. contextual_knn이 dense 전역 "
+                "pool을 재정렬하는 것과 달리 dense 순위 밖의 문서를 직접 복구하므로, "
+                "dense 축에서 보이지 않던 증거를 가져온다 — 클러스터 라우팅이 "
+                "틀린 경우(wm=cluster_mismatch)의 정합 처방.",
+)
+async def attribute_knn(
+    features: Optional[List[str]] = None,
+    transaction: Optional[Dict[str, Any]] = None,
+    top_k: int = 5,
+    embedding: Optional[List[float]] = None,
+    vec_index: Optional[str] = None,
+    scope: str = "global",
+    cluster_id: int = -1,
+    request_id: str = "",
+) -> Dict[str, Any]:
+    """
+    Args:
+        features:    feature 이름 목록 (최대 MAX_CONTEXTUAL_FEATURES).
+                     contextual_knn과 동일 계약 — 값은 transaction에서 조회.
+        transaction: 원본 거래 dict (feature 값 조회용)
+        top_k:       반환 이웃 수
+        embedding:   AnoLLM 임베딩
+        vec_index:   router가 결정한 인덱스명
+
+    Returns:
+        {"top_k","view":"attribute","scope","features_used","cluster_id",
+         "top1_distance","support","neighbors","zero_hit","_degraded","_error"}
+    """
+    _k = max(1, min(20, int(top_k or ATTR_TOP_K)))
+    ff = _attr_filters(features, transaction)
+    if not ff:
+        logger.warning("attribute_knn_no_features", request_id=request_id,
+                       features_requested=features,
+                       txn_keys=list((transaction or {}))[:12])
+        return {"top_k": _k, "view": "attribute", "scope": scope,
+                "features_used": [], "cluster_id": None, "top1_distance": None,
+                "support": 0, "neighbors": [], "zero_hit": True,
+                "_degraded": True, "_error": "no_features"}
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            r = await client.post(
+                f"{RETRIEVER_URL}/retrieve",
+                json={"embedding": embedding,
+                      "cluster_ids": ([int(cluster_id)]
+                                      if (scope == "cluster" and int(cluster_id) >= 0)
+                                      else []),
+                      "vec_index": vec_index, "top_k": _k,
+                      "field_filters": ff,        # ★ hard term filter
+                      "attribute_mode": True,     # ★ SEARCH_MODE 무관하게 필터 강제
+                      "return_support": True},    # ★ 진짜 support(필터 통과 문서 수)
+            )
+            r.raise_for_status()
+            data = r.json()
+        res = data.get("results", data.get("neighbors", []))
+        _sup = data.get("support")
+        _sup = int(_sup) if _sup is not None else len(res)
+        _zero = bool(data.get("zero_hit")) or not res
+        # support가 희박하면 "새 증거"가 아니라 노이즈일 수 있다 — 판정은
+        # 하지 않고 degraded 플래그로만 표시해 오라클이 사후 분석하게 한다.
+        _low = _sup < ATTR_MIN_SUPPORT
+        return {"top_k": _k, "view": "attribute", "scope": scope,
+                "features_used": list(ff.keys()),
+                "cluster_id": (res[0].get("cluster_id") if res else None),
+                "top1_distance": data.get("top1_distance"),
+                "support": _sup,
+                "neighbors": res,
+                "zero_hit": _zero,
+                "_degraded": _low or _zero,
+                "_error": ("zero_hit" if _zero
+                           else (f"low_support({_sup})" if _low else None))}
+    except Exception as e:
+        logger.warning("attribute_knn_retriever_failed", error=str(e),
+                       features_used=list(ff.keys()))
+        return {"top_k": _k, "view": "attribute", "scope": scope,
+                "features_used": list(ff.keys()), "cluster_id": None,
+                "top1_distance": None, "support": 0, "neighbors": [],
+                "zero_hit": True, "_degraded": True, "_error": str(e)}
+
+
+async def attribute_support(
+    features: Any, vec_index: str,
+    transaction: Optional[Dict[str, Any]] = None,
+    cluster_ids: Optional[List[int]] = None, request_id: str = "",
+) -> int:
+    """term filter만 적용했을 때 남는 문서 수. _count는 매우 싸므로(<10ms)
+    planner 프롬프트에 조합별 support를 미리 노출해 희박한 조합을 피하게 한다.
+    ★ MCP tool이 아니라 controller가 프롬프트 조립 시 직접 부르는 헬퍼."""
+    ff = _attr_filters(features, transaction)
+    if not ff:
+        return 0
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{RETRIEVER_URL}/count",
+            json={"vec_index": vec_index, "field_filters": ff,
+                  "cluster_ids": cluster_ids or []},
+            timeout=15.0)
+        r.raise_for_status()
+        return int(r.json().get("count", 0))
+
 # ── Tool V3-2: fetch_contrast — 축 고정 대조 증거 1건 ─────────────────
 @mcp.tool(
     name="fetch_contrast",
@@ -354,7 +649,13 @@ if ENABLE_COMPARE_FEATURES:
 @mcp.custom_route("/tools/{tool_name}/call", methods=["POST"])
 async def call_tool_rest(request: Request) -> JSONResponse:
     tool_name = request.path_params["tool_name"]
-    _callable = set(FOLLOWUP_ACTIONS) | set(EXTRA_TOOL_NAMES) | {"verify_global", "fetch_contrast"}
+    # ★ [FIX] attribute_knn이 빠져 있어 REST shim(TOOL_EXECUTION_MODE=mcp)
+    #   경로에서만 404가 나던 버그. planner action은 registry에서 받아
+    #   stage가 늘어나도 여기 목록을 다시 손대지 않게 한다.
+    _callable = (set(FOLLOWUP_ACTIONS) | set(EXTRA_TOOL_NAMES)
+                | set(planner_action_names()) - {"stop"}
+                | {"verify_global", "fetch_contrast",
+                   "global_knn", "contextual_knn", "attribute_knn"})
     if tool_name not in _callable or tool_name == "accept_verdict":
         return JSONResponse({"error": f"unknown or non-callable tool: {tool_name}"},
                              status_code=404)
@@ -417,13 +718,23 @@ def _unwrap_tool_result(result: Any) -> Dict[str, Any]:
 @mcp.custom_route("/tools", methods=["GET"])
 async def list_tools_rest(request: Request) -> JSONResponse:
     """REST 소비자를 위한 카탈로그 조회 — agent_tools.build_followup_tool_catalog와 동기화."""
-    return JSONResponse({"tools": list(FOLLOWUP_ACTIONS)})
+    return JSONResponse({
+        "tools": list(FOLLOWUP_ACTIONS),
+        "planner_stage": PLANNER_STAGE,
+        "planner_actions": [a for a in planner_action_names() if a != "stop"],
+        "max_contextual_features": MAX_CONTEXTUAL_FEATURES,
+        "registry_ok": _REGISTRY_OK,
+    })
 
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health_rest(request: Request) -> JSONResponse:
     return JSONResponse({"status": "healthy", "service": "agent-tools-mcp",
-                         "tools": list(FOLLOWUP_ACTIONS)})
+                         "tools": list(FOLLOWUP_ACTIONS),
+                         "planner_stage": PLANNER_STAGE,
+                         "planner_actions": [a for a in planner_action_names()
+                                             if a != "stop"],
+                         "registry_ok": _REGISTRY_OK})
 
 
 # ============================================================

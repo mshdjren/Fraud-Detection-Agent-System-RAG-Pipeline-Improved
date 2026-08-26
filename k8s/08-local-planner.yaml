@@ -1,0 +1,429 @@
+# ===========================
+# Local Planner (GRPO_ONLY + 제약 디코딩) — ConfigMap
+# ===========================
+# 역할:
+#   02b_planner_grpo_only 노트북 산출 adapter를 서빙한다.
+#   controller(node_plan, PLANNER_BACKEND=local)가 /plan-action을 호출해
+#   retrieval action(stop / contextual_knn / attribute_knn)을 받는다.
+#
+# ★ 이미지는 local-analyzer와 동일한 것을 재사용한다 — 같은 base model
+#   (Qwen2.5-0.5B), 같은 의존성(transformers/peft/llama-cpp), 같은 prompts.py.
+#   command만 uvicorn local_planner:app 으로 바꾼다.
+#
+# ★ agent_tools.py를 함께 mount한다. action space / cost / feature 후보 규칙 /
+#   tool payload가 전부 거기서 오고, controller / agent-tools-mcp도 같은
+#   파일을 mount하므로 세 서비스의 정의가 구조적으로 일치한다.
+#   local_planner.py는 그 정의를 재선언하지 않는다.
+# ===========================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-planner-config
+  namespace: elastic
+  labels:
+    app: local-planner
+    tier: inference
+data:
+  # ── 실험 설정 ──────────────────────────────────────────────────
+  EXPERIMENT_CASE: "pca_64_k100"
+
+  # ── GCS / 어댑터 ───────────────────────────────────────────────
+  GCS_BUCKET:  "fraud_ecommm"
+  GCS_FT_BASE: "tree-search/analyzer_ft"
+  # ★ [변경] 02b 노트북의 PLANNER_RUN_TAG 체계로 전환.
+  #   노트북이 실험 설정을 전부 경로에 인코딩하므로(커널/λ/tie-break/action수/
+  #   τ/eval비율/stage), 서빙도 같은 경로를 가리켜야 "어떤 모델이 떠 있는가"가
+  #   모호해지지 않는다. 노트북 [경로] 로그의 run_tag를 그대로 붙여넣을 것.
+  #   gs://{BUCKET}/{FT_BASE}/{CASE}/planner/{RUN_TAG}/planner_adapter_{TYPE}
+  PLANNER_RUN_TAG: "R_flip_lam0.0784_tbnone_act3_tau0.42_ev0.25s_grpo_only"
+  PLANNER_ADAPTER_TYPE: "planner_adapter_grpo/"         # grpo | sft   (GRPO_ONLY 산출물은 grpo)
+  ADAPTER_LOCAL_DIR:    "/data/adapter"
+
+  BASE_MODEL_ID: "Qwen/Qwen2.5-0.5B-Instruct"
+
+  # ── 서빙 백엔드 ────────────────────────────────────────────────
+  #   hf   : PeftModel merge. 제약은 prefix_allowed_tokens_fn(trie)
+  #          → 노트북 학습/평가와 **완전히 같은 디코딩 경로**
+  #   gguf : llama-cpp-python. 제약은 GBNF grammar
+  #          → 같은 유효 출력 집합에서 문법을 생성하지만, GBNF는 문자열 단위라
+  #            trie(토큰 단위)보다 느슨하다(같은 문자열의 다른 토큰화도 허용).
+  #            먼저 hf로 지표를 확정한 뒤 gguf로 전환하고 action 일치율을 잴 것.
+  #   ★ q4_k_m 금지 — evaluator에서 parse rate 0.00(format collapse) 실측.
+  PLANNER_MODEL_BACKEND: "hf"          # hf | gguf
+  GGUF_FILENAME: "model.gguf"
+  GGUF_QUANT:    "q8_0"
+  N_CTX:         "2048"
+
+  DEVICE:          "cpu"
+  TORCH_DTYPE:     "float32"
+  OMP_NUM_THREADS: "2"
+  LLAMA_N_BATCH:   "512"
+  LLAMA_N_UBATCH:  "512"
+  LLAMA_MLOCK:     "true"
+  ENABLE_TTFT_PROBE: "true"
+
+  # 학습(02b GRPO_MAX_NEW=24)과 동일해야 한다.
+  PLANNER_MAX_NEW_TOKENS: "24"
+
+  # ── ★ [변경] 프롬프트 버전 ─────────────────────────────────────
+  #   v1: DECISION RULE 휴리스틱 포함
+  #   v2: evidence-only
+  #   v3: 제약 디코딩 전용 (ACTIONS/cost/max_features를 registry에서 주입)
+  #       — GRPO_ONLY 학습본은 v3다.
+  PLANNER_PROMPT_VERSION: "v3"
+
+  # ── ★ [변경] 제약 디코딩 ───────────────────────────────────────
+  # SFT 없이 GRPO_ONLY가 성립한 전제. 끄면 포맷 붕괴 + train-serve mismatch가
+  # 동시에 발생한다(base 무제약 parse rate 90.7% 실측). 진단 외 끄지 말 것.
+  PLANNER_CONSTRAINED_DECODE: "true"
+
+  # ── ★ [변경] Stage & 활성 action ───────────────────────────────
+  #   stage1: stop / global_knn / contextual_knn
+  #   stage2: + attribute_knn          ← attribute_knn을 쓰려면 stage2 필요
+  #   stage3: + contextual_knn@cluster (scope 재도입)
+  #   ※ controller / agent-tools-mcp / oracle_extractor와 반드시 동일 값.
+  PLANNER_STAGE: "stage2"
+  # stage가 정의한 action 중 실제로 쓸 것만 고른다(정의를 새로 만드는 게 아니라
+  # 부분집합 선택). 노트북 TRAIN_ACTIONS와 같은 값이어야 train-serve가 맞는다.
+  #   기본에서 global_knn 제외 이유: round0의 superset이라 nd_after<=nd_before가
+  #   구조적으로 성립하고(실측 99.7%), Δmargin 부호가 state가 아니라 y로
+  #   결정된다 — 실행 전 알 수 없는 정보라 학습 대상이 아니다(오라클 채택 0.0%).
+  #   4개 tool 전부 쓰려면: "stop,global_knn,contextual_knn,attribute_knn"
+  PLANNER_ENABLED_ACTIONS: "stop,contextual_knn,attribute_knn"
+
+  # registry가 읽는 값 — controller / agent-tools-mcp와 동일해야 한다
+  MAX_CONTEXTUAL_FEATURES: "2"
+  # ★ [변경] binary cost — 재검색=1, 종료=0. λ가 곧 "재검색 1회의 가격"이 되어
+  #   λ×balancing 상호작용이 해소되고, global vs contextual의 차이가 cost가
+  #   아니라 순수 Δmargin으로 분리된다. (기존 1.2/1.5는 실측 근거 없는 값)
+  COST_RESEARCH:               "1.0"
+  # COST_CONTEXTUAL_KNN_CLUSTER: "1.0"
+
+  # ── nd 척도 — 실제 보정은 controller가 수행, 여기선 선언/echo ──
+  #   raw_top1  : 재검색 후 nd = sigmoid(raw top-1). 오라클 reward와 동일 척도
+  #   patchcore : PatchCore reweighting (legacy 재검색과 동일)
+  #   ※ controller의 PLANNER_ND_MODE와 다르면 controller가 경고를 남긴다.
+  PLANNER_ND_MODE: "raw_top1"
+
+  # ── 정책 게이트 ────────────────────────────────────────────────
+  # 학습 모집단이 ambiguous-only(wm_type.notna())였으므로 동일 조건에서만 호출.
+  PLANNER_AMBIGUOUS_ONLY:  "true"
+  PLANNER_FALLBACK_ACTION: "stop"
+
+  # ── Distance 분포 (analyzer와 동일 실측값) ─────────────────────
+  DIST_P25: "1.264"
+  DIST_P50: "1.448"
+  DIST_P75: "1.651"
+  DIST_IQR: "0.387"
+
+  # ── [S5] GT 임계 — planner 프롬프트의 z/[RARE] 태그가 학습과 같아야 함 ──
+  Z_TAU:         "1.5"
+  NI_SPREAD_TAU: "0.05"
+  W_CAT:         "0.50"
+  P_MISS:        "0.10"
+
+---
+# ===========================
+# ServiceAccount — analyzer와 동일 GCP SA 재사용
+# ===========================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: local-planner
+  namespace: elastic
+  labels:
+    app: local-planner
+  annotations:
+    iam.gke.io/gcp-service-account: anomaly-analyzer@kakao-504812.iam.gserviceaccount.com
+
+---
+# ===========================
+# Deployment
+# ===========================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-planner
+  namespace: elastic
+  labels:
+    app: local-planner
+    tier: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: local-planner
+  template:
+    metadata:
+      labels:
+        app: local-planner
+        tier: inference
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: local-planner
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role
+                operator: In
+                # ★ analyzer와 같은 노드. 한 요청 안에서 analyzer 호출과 planner
+                #   호출은 동시에 일어나지 않으므로(analyze → plan 순차) CPU
+                #   경합이 아니라 시분할이다. 다만 float32 hf 두 개가 상주하면
+                #   메모리가 빠듯하니, 좁으면 gguf(q8_0)로 전환하거나
+                #   values를 ["app-node"]로 바꿔 분리할 것.
+                values: ["analyzer-node"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: local-planner
+              topologyKey: kubernetes.io/hostname
+
+      # ── Init Container: planner adapter 다운로드 ──────────────
+      initContainers:
+      - name: download-planner-adapter
+        image: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+        command: ["bash", "-lc"]
+        args:
+          - |
+            set -euo pipefail
+            echo "[init] EXPERIMENT_CASE      : ${EXPERIMENT_CASE}"
+            echo "[init] PLANNER_RUN_TAG      : ${PLANNER_RUN_TAG}"
+            # echo "[init] PLANNER_ADAPTER_TYPE : ${PLANNER_ADAPTER_TYPE}"
+            echo "[init] PLANNER_MODEL_BACKEND: ${PLANNER_MODEL_BACKEND}"
+            echo "[init] PLANNER_STAGE        : ${PLANNER_STAGE}"
+            echo "[init] ENABLED_ACTIONS      : ${PLANNER_ENABLED_ACTIONS}"
+
+            # ★ 노트북 PLANNER_BASE_DIR/PLANNER_ADAPTER_* 와 동일 경로 관례
+            BASE="gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/planner/${PLANNER_RUN_TAG}"
+            METHOD_PATH="${BASE}/${PLANNER_ADAPTER_TYPE}"
+            DEST="${ADAPTER_LOCAL_DIR}"
+            echo "[init] GCS path  : ${METHOD_PATH}"
+            mkdir -p "${DEST}"
+
+            # run_tag 오타는 가장 흔한 사고이므로 존재 확인 후 진행한다
+            if ! gsutil -q stat "${METHOD_PATH}/**" 2>/dev/null && \
+               ! gsutil ls "${METHOD_PATH}/" >/dev/null 2>&1; then
+              echo "[init] ❌ 경로 없음: ${METHOD_PATH}"
+              echo "[init]    사용 가능한 run_tag 목록:"
+              gsutil ls "gs://${GCS_BUCKET}/${GCS_FT_BASE}/${EXPERIMENT_CASE}/planner/" || true
+              exit 1
+            fi
+
+            if [ "${PLANNER_MODEL_BACKEND}" = "gguf" ]; then
+              GGUF_QUANT="${GGUF_QUANT:-q8_0}"
+              GCS_GGUF_DIR="${BASE}/gguf_${GGUF_QUANT}"
+              echo "[init] Downloading GGUF(${GGUF_QUANT}): ${GCS_GGUF_DIR}/${GGUF_FILENAME}"
+              gsutil cp "${GCS_GGUF_DIR}/${GGUF_FILENAME}" "${DEST}/"
+              gsutil cp "${GCS_GGUF_DIR}/gguf_meta.json"   "${DEST}/" || true
+              # 노트북이 만든 GBNF 샘플 — 서빙 문법과 대조용(진단 전용)
+              gsutil cp "${GCS_GGUF_DIR}/planner_sample.gbnf" "${DEST}/" || true
+            else
+              echo "[init] Downloading HF adapter (excluding gguf*/)"
+              gsutil -m rsync -r -x '^gguf' "${METHOD_PATH}" "${DEST}"
+            fi
+
+            echo "[init] Download complete."
+            ls -lh "${DEST}/"
+            echo "[init] Total: $(du -sh ${DEST} | cut -f1)"
+
+        envFrom:
+        - configMapRef:
+            name: local-planner-config
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+
+      # ── Main Container ────────────────────────────────────────
+      containers:
+      - name: local-planner
+        # ★ analyzer 이미지 그대로 재사용 (의존성 동일)
+        image: us-west1-docker.pkg.dev/kakao-504812/elasticsearch-images/local-analyzer:3.0
+        imagePullPolicy: Always
+        command: ["python", "-m", "uvicorn", "local_planner:app",
+                  "--host", "0.0.0.0", "--port", "8080"]
+
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+
+        envFrom:
+        - configMapRef:
+            name: local-planner-config
+
+        env:
+        - name: GOOGLE_CLOUD_PROJECT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: GOOGLE_CLOUD_PROJECT
+        # ★ RESEARCH_MODE는 agent_tools import 시점에 읽힌다 — controller /
+        #   agent-tools-mcp와 같은 값이어야 tool 카탈로그가 어긋나지 않는다.
+        - name: RESEARCH_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: RESEARCH_MODE
+              optional: true
+
+        volumeMounts:
+        - name: data-volume
+          mountPath: /data
+        - name: code-volume
+          mountPath: /app/local_planner.py
+          subPath: local_planner.py
+        - name: code-volume
+          mountPath: /app/prompts.py
+          subPath: prompts.py
+        # ★ action space / cost / payload의 단일 출처.
+        #   controller-code / agent-tools-mcp-code와 **같은 파일**이어야 한다.
+        - name: code-volume
+          mountPath: /app/agent_tools.py
+          subPath: agent_tools.py
+
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]
+
+        livenessProbe:
+          httpGet: { path: /health, port: 8080 }
+          initialDelaySeconds: 240
+          periodSeconds: 60
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        # ★ /ready는 (1) 모델 로드 (2) prompts.py의 해당 버전 빌더 존재
+        #   (3) 활성 action이 하나라도 있는지 를 함께 본다. 하나라도 어긋나면
+        #   503을 유지해 "학습과 다른 설정으로 조용히 서빙"되는 사고를 막는다.
+        readinessProbe:
+          httpGet: { path: /ready, port: 8080 }
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 18
+
+        resources:
+          requests:
+            cpu:    "500m"
+            memory: "1Gi"
+          limits:
+            cpu:    "1500m"
+            memory: "4Gi"
+
+      volumes:
+      - name: data-volume
+        emptyDir: {}
+      - name: code-volume
+        configMap:
+          name: local-planner-code
+
+---
+# ===========================
+# Service (ClusterIP)
+# ===========================
+apiVersion: v1
+kind: Service
+metadata:
+  name: local-planner
+  namespace: elastic
+  labels:
+    app: local-planner
+    tier: inference
+spec:
+  type: ClusterIP
+  selector:
+    app: local-planner
+    tier: inference
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+
+# ===========================
+# 배포 절차
+# ===========================
+#
+# 0. ★ agent_tools.py를 세 ConfigMap에 **같은 파일로** 넣는다.
+#    한쪽만 갱신하면 action space가 갈라져 조용히 틀린다.
+#
+# kubectl create configmap local-planner-code \
+#   --from-file=local_planner.py=apps/local_planner.py \
+#   --from-file=prompts.py=apps/prompts.py \
+#   --from-file=agent_tools.py=apps/agent_tools.py \
+#   -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+#    kubectl create configmap controller-code \
+#      --from-file=controller.py=apps/controller.py \
+#      --from-file=agent_tools.py=apps/agent_tools.py \
+#      --from-file=analyzer_schema.py=apps/analyzer_schema.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+#    kubectl create configmap agent-tools-mcp-code \
+#      --from-file=agent_tools.py=apps/agent_tools.py \
+#      --from-file=agent_tools_mcp_server.py=apps/agent_tools_mcp_server.py \
+#      -n elastic --dry-run=client -o yaml | kubectl apply -f -
+#
+# 1. stage/cost/actions를 controller·mcp와 맞춘다:
+#    for cm in anomaly-controller-config agent-tools-mcp-config; do
+#      kubectl patch configmap $cm -n elastic --type merge -p '{"data":{
+#        "PLANNER_STAGE":"stage2","MAX_CONTEXTUAL_FEATURES":"2","COST_RESEARCH":"1.0"}}'
+#    done
+#    # 기존 COST_CONTEXTUAL_KNN=1.2 / COST_GLOBAL_KNN=1.5 가 남아 있으면 그게 이긴다:
+#    kubectl patch configmap anomaly-controller-config -n elastic --type json \
+#      -p '[{"op":"remove","path":"/data/COST_CONTEXTUAL_KNN"},
+#           {"op":"remove","path":"/data/COST_GLOBAL_KNN"}]' || true
+#
+# 2. kubectl apply -f 08-local-planner.yaml
+#
+# 3. 로딩/준비 확인:
+#    kubectl logs -n elastic -l app=local-planner -c download-planner-adapter --follow
+#    kubectl rollout status deployment/local-planner -n elastic
+#    kubectl exec -n elastic deploy/local-planner -- curl -s localhost:8080/config
+#
+# 4. ★ train-serve action space 대조 (가장 중요한 검증):
+#    kubectl exec -n elastic deploy/local-planner -- curl -s \
+#      -X POST localhost:8080/debug/valid-outputs \
+#      -H 'Content-Type: application/json' \
+#      -d '{"agrees":["sex","source","browser"],"persona_match":[]}'
+#    # → n_valid=13 이어야 한다(노트북 "state별 유효 출력 수: 중앙값 13"과 일치).
+#    #   숫자가 다르면 MAX_CONTEXTUAL_FEATURES / PLANNER_ENABLED_ACTIONS /
+#    #   PLANNER_STAGE 중 하나가 노트북과 어긋난 것이다.
+#
+# 5. controller를 local planner로 전환:
+#    kubectl patch configmap anomaly-controller-config -n elastic \
+#      --type merge -p '{"data":{"PLANNER_BACKEND":"local",
+#                                "PLANNER_URL":"http://local-planner:80",
+#                                "PLANNER_ND_MODE":"raw_top1"}}'
+#    kubectl rollout restart deployment/anomaly-controller -n elastic
+#
+#    ※ controller.py에 PLANNER_BACKEND / node_research / _node_plan_local
+#      패치가 적용돼 있어야 한다(PATCHES.md). 미적용이면 planner action이
+#      route_after_plan에서 unknown_action으로 떨어져 finalize된다.
+#
+# ===========================
+# A/B 축 (전부 재빌드 없이 ConfigMap patch + restart)
+# ===========================
+#
+#  학습 산출물   : PLANNER_RUN_TAG          노트북 [경로] 로그의 run_tag
+#  SFT vs GRPO   : PLANNER_ADAPTER_TYPE     grpo | sft
+#  action 조합   : PLANNER_ENABLED_ACTIONS  기본 3개 | +global_knn
+#  프롬프트      : PLANNER_PROMPT_VERSION   v3 | v2 | v1
+#  백엔드        : PLANNER_MODEL_BACKEND    hf | gguf   (제약: trie | GBNF)
+#  제약 on/off   : PLANNER_CONSTRAINED_DECODE  true | false (진단 전용)
+#  nd 척도       : PLANNER_ND_MODE          raw_top1 | patchcore (controller도)
+#  stage         : PLANNER_STAGE            stage2 | stage1 | stage3 (mcp도)
+#
+#    예) kubectl patch configmap local-planner-config -n elastic \
+#          --type merge -p '{"data":{"PLANNER_MODEL_BACKEND":"gguf"}}'
+#        kubectl rollout restart deployment/local-planner -n elastic

@@ -63,6 +63,13 @@ data:
   MCP_PORT: "8080"
   # ★ [FIX] DNS rebinding 허용 목록 (쉼표 구분, 포트는 * 와일드카드)
   MCP_ALLOWED_HOSTS: "agent-tools-mcp,agent-tools-mcp:*,agent-tools-mcp.elastic.svc.cluster.local,agent-tools-mcp.elastic.svc.cluster.local:*,localhost,localhost:*,127.0.0.1,127.0.0.1:*,[::1],[::1]:*"
+
+  # ── ★ [Planner Serving] stage registry — controller/local-planner와 동일 값 ──
+  PLANNER_STAGE:               "stage2"
+  MAX_CONTEXTUAL_FEATURES:     "2"
+  # COST_CONTEXTUAL_KNN:         "1.2"
+  # COST_GLOBAL_KNN:             "1.5"
+  # COST_CONTEXTUAL_KNN_CLUSTER: "1.0"
 ---
 # ───────────────────────────
 # Deployment
@@ -117,7 +124,7 @@ spec:
         # Dockerfile.agent-tools-mcp + requirements-agent-tools-mcp.txt 로 빌드.
         # 의존성: fastapi / uvicorn / mcp / httpx / structlog / pydantic.
         # (langgraph / langchain 불필요 — tool 실행만 담당)
-        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/agent-tools-mcp:1.0
+        image: us-west1-docker.pkg.dev/kakao-504812/elasticsearch-images/agent-tools-mcp:1.0
         imagePullPolicy: Always
 
         # streamable-http transport:
@@ -145,6 +152,32 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: RESEARCH_MODE
+        - name: PLANNER_STAGE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PLANNER_STAGE
+        - name: MAX_CONTEXTUAL_FEATURES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: MAX_CONTEXTUAL_FEATURES
+        - name: COST_RESEARCH
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: COST_RESEARCH
+        - name: ATTR_TOP_K
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ATTR_TOP_K
+        - name: ATTR_MIN_SUPPORT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ATTR_MIN_SUPPORT
+
 
         livenessProbe:
           httpGet:

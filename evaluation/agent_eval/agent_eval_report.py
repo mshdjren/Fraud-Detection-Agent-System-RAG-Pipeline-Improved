@@ -182,6 +182,66 @@ def print_summary(report: Dict) -> None:
     print(f"  total     P50={total_s.get('p50')}ms  P95={total_s.get('p95')}ms")
     print(f"  base_ret  P50={base_s.get('p50')}ms   P95={base_s.get('p95')}ms")
     print(f"  tool_Δ    P50={tool_s.get('p50')}ms   P95={tool_s.get('p95')}ms")
+
+    # ── ★ [7] Planner Policy — 학습 planner가 무엇을 골랐는가 ────────
+    pp = report.get("planner_policy") or {}
+    if pp.get("n_with_planner_trace"):
+        print("\n[7] Planner Policy (local_planner)")
+        print(f"  trace 있는 샘플         : {pp.get('n_with_planner_trace')}/{pp.get('n')}")
+        print(f"  search rate             : {pp.get('search_rate')}  "
+              f"(stop {pp.get('stop_rate')})")
+        print(f"  action 분포             : {pp.get('action_distribution')}")
+        print(f"  fallback rate           : {pp.get('fallback_rate')}")
+        if pp.get("invalid_reasons"):
+            print(f"  invalid 사유            : {pp.get('invalid_reasons')}")
+        _pl = pp.get("planner_latency_ms", {})
+        print(f"  planner latency         : P50={_pl.get('p50')}ms P95={_pl.get('p95')}ms")
+        print(f"  stage / backend         : {pp.get('stages_seen')} / {pp.get('backends_seen')}")
+        for _k in ("_warning", "_warning_fallback"):
+            if pp.get(_k):
+                print(f"  ⚠ {pp[_k]}")
+    elif "planner_policy" in report:
+        print("\n[7] Planner Policy — planner trace 없음 "
+              "(PLANNER_BACKEND=gemini/deterministic이거나 controller 패치 미적용)")
+
+    # ── ★ [8] Evidence Novelty — 정말 다른 증거를 가져왔는가 ─────────
+    en = report.get("evidence_novelty") or {}
+    if en.get("n_researched"):
+        print("\n[8] Evidence Novelty (재검색 이웃 교체)")
+        print(f"  재검색 샘플             : {en.get('n_researched')} "
+              f"(이웃 트레이스 {en.get('n_with_neighbor_trace')})")
+        print(f"  Jaccard(round0, final)  : {en.get('mean_jaccard_round0_final')}  "
+              f"→ novelty {en.get('mean_novelty')}")
+        print(f"  교체된 이웃 수 평균     : {en.get('mean_neighbors_replaced')}")
+        print(f"  cross-cluster escape    : {en.get('cross_cluster_escape_rate')}")
+        print(f"  mean support            : {en.get('mean_support')}")
+        if en.get("jaccard_by_action"):
+            print(f"  action별 Jaccard        : {en.get('jaccard_by_action')}  "
+                  f"(n={en.get('n_by_action')})")
+        if en.get("jaccard_spread_across_actions") is not None:
+            print(f"  action 간 Jaccard 격차  : {en['jaccard_spread_across_actions']}")
+        for _k in ("_interpretation", "_warning"):
+            if en.get(_k):
+                print(f"  · {en[_k]}")
+    elif "evidence_novelty" in report:
+        print("\n[8] Evidence Novelty — 재검색된 샘플 없음")
+
+    # ── ★ [9] Budget Curve — 그 비용이 값어치를 했는가 ───────────────
+    bc = report.get("budget_curve") or {}
+    if bc.get("curve"):
+        print("\n[9] Budget Curve (Δnd 상위 B%만 재검색했다고 가정)")
+        print(f"  검색 없음 정확도        : {bc.get('accuracy_no_search')}")
+        print(f"  {'B':>6} {'n':>5} {'accuracy':>9} {'Δ':>9} {'+latency(ms)':>13}")
+        for c in bc["curve"]:
+            print(f"  {c['budget']:>6.0%} {c['n_search']:>5} {c['accuracy']:>9.4f} "
+                  f"{c['delta_vs_no_search']:>+9.4f} {c['added_latency_ms_total']:>13.0f}")
+        print(f"  최적 B                  : {bc.get('best_budget'):.0%}  "
+              f"(정확도 {bc.get('best_accuracy')}, {bc.get('gain_at_best'):+.4f})")
+        if bc.get("_interpretation"):
+            print(f"  · {bc['_interpretation']}")
+    elif "budget_curve" in report:
+        print("\n[9] Budget Curve — nd_round0 트레이스 없음")
+
     print("=" * 65)
 
 

@@ -65,6 +65,28 @@ data:
   PATCHCORE_REWEIGHT_MODE : "isolation"   #isolation
   PATCHCORE_TAU : "0.142"
   EVALUATOR_ONCE : "true"
+
+  SKIP_ANALYZER_IN_ROLLOUT : "true"
+
+  # ── ★ [Planner Serving] 학습된 planner(0.5B) 서빙 스위치 ──────────
+  #   gemini        : 기존 Vertex AI planner (accept/expand/reroute)
+  #   deterministic : LLM 없이 wm_type -> tool 규칙만
+  #   local         : local-planner(0.5B SFT/GRPO) — stop/global_knn/contextual_knn
+  PLANNER_BACKEND: "local"
+  PLANNER_URL:     "http://local-planner:80"
+  PLANNER_TIMEOUT: "120"
+
+  # stage / nd 척도 / transport — local-planner-config와 동일 값이어야 한다.
+  # (다르면 controller가 planner_stage_mismatch / planner_nd_mode_mismatch 경고)
+  PLANNER_STAGE:   "stage2"
+  PLANNER_ND_MODE: "raw_top1"      # raw_top1(오라클과 동일) | patchcore(legacy와 동일)
+  PLANNER_TOOL_MODE: "direct"      # direct | mcp | mcp_native (빈 값이면 TOOL_EXECUTION_MODE 승계)
+
+  # registry가 cost/feature 상한을 읽는다 — oracle/mcp와 동일 값 유지
+  MAX_CONTEXTUAL_FEATURES:     "2"
+  # COST_CONTEXTUAL_KNN:         "1.2"
+  # COST_GLOBAL_KNN:             "1.5"
+  # COST_CONTEXTUAL_KNN_CLUSTER: "1.0"
 ---
 # ===========================
 # ServiceAccount (Workload Identity)
@@ -79,7 +101,7 @@ metadata:
     app: anomaly-controller
   annotations:
     # analyzer와 동일한 GCP SA 재사용 (Vertex AI 권한 공유)
-    iam.gke.io/gcp-service-account: anomaly-analyzer@kakao-501107.iam.gserviceaccount.com
+    iam.gke.io/gcp-service-account: anomaly-analyzer@kakao-504812.iam.gserviceaccount.com
 
 ---
 # ===========================
@@ -134,7 +156,7 @@ spec:
         # 의존성이 추가로 필요해졌고, analyzer 이미지에는 이게 없어 import
         # 단계에서 깨진다(/detect가 "langgraph_not_available"만 반환).
         # Dockerfile.controller + requirements-controller.txt로 별도 빌드.
-        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/anomaly-controller:1.0
+        image: us-west1-docker.pkg.dev/kakao-504812/elasticsearch-images/anomaly-controller:1.0
         imagePullPolicy: Always
 
         command: ["python", "-m", "uvicorn", "controller:app", "--host", "0.0.0.0", "--port", "8080"]
@@ -180,6 +202,31 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: TOOL_EXECUTION_MODE
+        - name: PLANNER_STAGE
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: PLANNER_STAGE
+        - name: MAX_CONTEXTUAL_FEATURES
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: MAX_CONTEXTUAL_FEATURES
+        - name: COST_RESEARCH
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: COST_RESEARCH
+        - name: ATTR_TOP_K
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ATTR_TOP_K
+        - name: ATTR_MIN_SUPPORT
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: ATTR_MIN_SUPPORT
         livenessProbe:
           httpGet:
             path: /health
@@ -216,6 +263,9 @@ spec:
         - name: code-volume
           mountPath: /app/analyzer_schema.py
           subPath: analyzer_schema.py
+        - name: code-volume
+          mountPath: /app/prompts.py
+          subPath: prompts.py
 
       volumes:
       - name: code-volume

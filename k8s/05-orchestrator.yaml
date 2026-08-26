@@ -83,7 +83,7 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
       - name: orchestrator
-        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/anomaly-orchestrator:1.0
+        image: us-west1-docker.pkg.dev/kakao-504812/elasticsearch-images/anomaly-orchestrator:1.0
         imagePullPolicy: Always
 
         #for agentic_loop

@@ -727,6 +727,83 @@ def format_retrieval_digest(distances, test_features, topk_feats=None, spread_ta
         lines.append("agrees: (unavailable) | differs: (unavailable)")
     return "\n".join(lines)
 
+
+def compute_evidence_axes(test_features: Dict, persona: Optional[Dict],
+                          distances: Optional[List[float]] = None,
+                          topk_feats: Optional[List[Dict]] = None,
+                          z_tau: float = None, spread_tau: float = None) -> Dict:
+    """
+    ★ [신규, 추가 전용] format_retrieval_digest/format_cluster_fit/format_
+    persona_dominance_compact가 "프롬프트 텍스트"로만 만들던 agrees/differs/
+    deviant/rare/spread_tag를 구조화된 dict로 반환한다.
+
+    기존 포맷터 함수는 단 한 줄도 수정하지 않았다 — 이 함수는 동일한 수식을
+    독립적으로 한 번 더 계산하는 새 함수이므로, 프롬프트 출력(따라서 SFT된
+    모델의 train-serve 정합성)에는 어떤 영향도 없다. local_analyzer.py가
+    AnalyzeResponse에 이 결과를 실어 controller.py로 넘기기 위해 만들었다
+    (analyzer_finetune 노트북들이 참조하는 기존 5개 함수는 그대로 둔 채,
+    소비자만 하나 늘리는 방식).
+
+    Returns:
+        {"agrees": [...], "differs": [...], "deviant": [...], "rare": [...],
+         "persona_match": [...], "spread_tag": "spread"|"dense"|None}
+    """
+    z_tau = Z_TAU if z_tau is None else z_tau
+    spread_tau = NI_SPREAD_TAU if spread_tau is None else spread_tau
+    persona = persona or {}
+    feats = [f for f in (topk_feats or []) if f]
+
+    # agrees/differs — format_retrieval_digest의 categorical 다수결과 동일 수식
+    agrees, differs = [], []
+    for c in CATEGORICAL_COLS:
+        tv = test_features.get(c)
+        if tv is None:
+            continue
+        votes = [f.get(c) for f in feats if f.get(c) is not None]
+        if not votes:
+            continue
+        nm = sum(str(tv) == str(v) for v in votes)
+        (agrees if nm * 2 >= len(votes) else differs).append(c)
+
+    # deviant — format_cluster_fit의 numeric z-score와 동일 수식
+    nst = persona.get("numeric_stats") or {}
+    deviant = []
+    for c in NUMERIC_COLS:
+        s, v = nst.get(c), test_features.get(c)
+        if not s or v is None:
+            continue
+        sd = float(s.get("std", 0.0)) or 1e-6
+        z = (float(v) - float(s.get("mean", 0.0))) / sd
+        if abs(z) >= z_tau:
+            deviant.append(c)
+
+    # rare / persona_match — format_persona_dominance_compact의 dominant/RARE와 동일 수식
+    node = persona.get("categorical_distribution") or {}
+    rare, persona_match = [], []
+    for c in CATEGORICAL_COLS:
+        nd_ = node.get(c)
+        if not nd_:
+            continue
+        fr = float(nd_.get("frequency", 0.0))
+        dist = nd_.get("distribution") or {}
+        tot = sum(float(v) for v in dist.values()) or 1.0
+        tv = test_features.get(c)
+        p = float(dist.get(str(tv), 0)) / tot
+        if fr >= W_CAT and p < P_MISS:
+            rare.append(c)
+        if str(tv) == str(nd_.get("dominant")):
+            persona_match.append(c)
+
+    # spread_tag — format_retrieval_digest의 neighbor_spread와 동일 수식
+    spread_tag = None
+    ds = sorted(float(x) for x in (distances or []) if x != float("inf"))
+    if len(ds) >= 3 and ds[0] > 0:
+        sp = float(np.std(ds[:3]))
+        spread_tag = "spread" if sp >= spread_tau else "dense"
+
+    return {"agrees": agrees, "differs": differs, "deviant": deviant,
+            "rare": rare, "persona_match": persona_match, "spread_tag": spread_tag}
+
 def format_persona_dominance(test_features: Dict, persona: Optional[Dict]) -> str:
     """GT의 categorical 게이트/순위 키를 프롬프트에 노출.
        cm(cat) : frequency >= W_CAT AND p(value) < P_MISS
@@ -828,3 +905,501 @@ def build_analyzer_user_prompt_forward_v2(test_features: Dict, cluster_id,
             topk_feats = None
     return _build_v2(FORWARD_INSTRUCTION_V2, test_features, cluster_id,
                      distances, persona, topk_feats)
+
+
+# ============================================================
+# ── Planner (GRPO) User Prompt — evaluator와 별개 네임스페이스 ──
+# ============================================================
+# ★ [신규] evaluator(build_analyzer_user_prompt*/EVALUATOR_INSTRUCTION_*)와
+# 같은 서빙 파이프라인(controller.py)에 붙지만 역할이 다르다 — evaluator는
+# state 해석(SFT 전용, §12 evidence interpreter), planner는 action 선택
+# (GRPO, §12 counterfactual decision). 그래서 별도 SYSTEM/INSTRUCTION/build_*
+# 세트로 완전히 분리해 evaluator 쪽 prompt/SFT에는 한 글자도 영향을 주지
+# 않는다.
+#
+# ★ PROMPT_COMPACT을 참조하지 않는다(의도적) — 직전 turn에서 확인된
+# evaluator 버그(neighbor_insufficient 실종)의 원인 중 하나가 compact
+# 프롬프트 전환 과정에 있었다. planner는 먼저 이 non-compact 버전으로
+# SFT/GRPO의 최고 성능선을 확인한 뒤, 필요하면 별도 compact 버전을
+# 만들어 A/B한다 — evaluator처럼 "나중에 compact화했다가 회귀 원인을
+# 못 찾는" 순서를 반복하지 않기 위함.
+
+PLANNER_SYSTEM_PROMPT = (
+    "You are a retrieval planner for a fraud-detection agent. Given a "
+    "transaction's evidence (already retrieved from its assigned cluster), "
+    "decide whether additional retrieval is worth its cost, and if so, which "
+    "kind. Re-search is not free — most transactions need no further action."
+)
+
+PLANNER_INSTRUCTION_V1 = """Decide the retrieval action for this transaction.
+
+## AVAILABLE ACTIONS (choose exactly one)
+  stop            - current evidence is enough; do not search again. cost=0.
+  global_knn      - search the ENTIRE normal memory bank (ignore cluster/features)
+                    for a possibly closer normal neighbor. Use when the CLUSTER FIT
+                    table shows a [DEVIANT] feature (assigned cluster may be wrong)
+                    AND no PERSONA DOMINANCE feature is [RARE] (a rare value would
+                    make a feature-targeted search more precise than a blind one).
+                    cost=1.5.
+  contextual_knn  - search using the SAME embedding but softly bias toward
+                    neighbors that match up to 2 of the CANDIDATE FEATURES below
+                    (a soft boost, not a hard filter - embedding similarity is
+                    never discarded). Use when RETRIEVAL shows [spread] or a
+                    candidate feature is tagged [RARE]/[match] - i.e. the original
+                    feature context can narrow the search better than embedding
+                    distance alone. cost=1.2.
+
+## CANDIDATE FEATURES (for contextual_knn only - pick at most 2, ONLY from this list)
+{candidate_features_line}
+
+## DECISION RULE
+Prefer stop unless the evidence above concretely points to a retrieval defect
+(cluster mismatch or neighbor insufficiency) that one of the other two actions is
+specifically suited to fix. Being merely uncertain is not sufficient grounds to
+search again - name the concrete evidence (a [DEVIANT]/[RARE]/[spread] tag) that
+justifies the extra cost.
+
+Output ONLY compact JSON, no markdown:
+{{"action":"stop"}}
+{{"action":"global_knn"}}
+{{"action":"contextual_knn","features":["<field1>","<field2 optional>"]}}"""
+
+# ============================================================
+# ── Planner Prompt v2 — evidence-only (DECISION RULE 휴리스틱 제거) ──
+# ============================================================
+# ★ [실험] PLANNER_INSTRUCTION_V1의 "Use when [DEVIANT]이고 [RARE]가 아니면
+# global_knn을 써라" 같은 서술은 제가 상식적으로 쓴 휴리스틱이지, 실제 정답
+# 라벨(oracle_best의 argmax reward)이 이 규칙을 따라 계산된 게 아니다 —
+# 정답은 순수하게 Δmargin과 λ·cost의 숫자 비교로만 정해진다. 프롬프트가
+# "이렇게 판단하라"고 말하는 서술과, 실제로 맞혀야 하는 정답의 계산 방식이
+# 다른 스토리를 말하고 있어서 오히려 학습을 헷갈리게 할 수 있다는 가설을
+# 검증하기 위한 버전. TEST/CLUSTER FIT/PERSONA DOMINANCE/RETRIEVAL(evidence
+# 블록)은 그대로 유지 — 이건 "서술적 지시"가 아니라 "관찰 가능한 사실"이라
+# 그대로 둔다.
+
+PLANNER_INSTRUCTION_V2 = """Choose exactly one retrieval action for this transaction, based on the evidence below.
+
+## ACTIONS
+  stop            - cost=0
+  global_knn      - cost=1.5
+  contextual_knn  - cost=1.2, requires "features": up to 2 values from CANDIDATE FEATURES
+
+## CANDIDATE FEATURES (for contextual_knn only)
+{candidate_features_line}
+
+Output ONLY compact JSON, no markdown, no explanation:
+{{"action":"stop"}}
+{{"action":"global_knn"}}
+{{"action":"contextual_knn","features":["<field1>","<field2 optional>"]}}"""
+
+# ============================================================
+# ── Planner Prompt v3 — 제약 디코딩(Constrained Decoding) 전용 ──
+# ============================================================
+# ★ V2와의 차이는 "무엇을 뺐는가"가 아니라 "무엇을 왜 남겼는가"다.
+#
+# 뺀 것 (action 선택을 편향시키는 서술):
+#   - DECISION RULE 블록 (V1) — 정답은 Δmargin과 λ·cost의 숫자 비교로만
+#     정해지는데, 프롬프트가 다른 판단 기준을 말하면 학습 신호와 충돌한다.
+#   - "Use when [DEVIANT]..." 류 휴리스틱 (V1)
+#   - "Output ONLY compact JSON, no markdown, no explanation" (V1/V2)
+#     — 제약 디코딩이 이미 구조적으로 보장하므로 훈계가 무의미하다.
+#
+# 남긴 것 (출력 '모양'의 서술):
+#   - JSON 스키마 예시. 제약 디코딩은 허용 토큰 위에서 확률을 재정규화하는데,
+#     base가 유효 포맷에 거의 확률을 주지 않으면 재정규화 결과가 사실상
+#     임의값이 되어 policy gradient가 노이즈가 된다. 포맷 설명을 남겨두면
+#     확률질량이 유효 집합 근처에 머물러 제약이 '폭력적 사영'이 아니라
+#     '가벼운 손질'이 된다. → 포맷 정의는 손해가 아니라 필요조건이다.
+#   - evidence 블록 4개 (관찰 가능한 사실이지 지시가 아님)
+#
+# cost/최대 feature 수를 하드코딩하지 않는다 — agent_tools의 registry가
+# 단일 출처이고(binary cost로 변경됨), 프롬프트가 옛 값(1.2/1.5)을 말하면
+# reward와 프롬프트가 다른 이야기를 하게 된다.
+PLANNER_INSTRUCTION_V3 = """Choose exactly one retrieval action for this transaction, based on the evidence below.
+
+## ACTIONS
+{action_lines}
+
+## CANDIDATE FEATURES (pick at most {max_features}, ONLY from this list)
+{candidate_features_line}
+
+## OUTPUT SHAPE
+{{"action":"stop"}}
+{{"action":"contextual_knn","features":["source"]}}
+{{"action":"attribute_knn","features":["sex","source"]}}"""
+
+def build_planner_action_lines(
+    actions: Optional[List[str]] = None,
+    costs: Optional[Dict[str, float]] = None,
+) -> str:
+    """ACTIONS 블록을 호출자가 준 registry 정보로 만든다.
+    prompts.py가 agent_tools를 import하면 순환 의존이 되므로, 값은 항상
+    바깥(노트북/local_planner)에서 주입받는다."""
+    acts = actions or ["stop", "contextual_knn"]
+    cs = costs or {}
+    lines = []
+    for a in acts:
+        c = cs.get(a, 0.0 if a == "stop" else 1.0)
+        if a == "stop":
+            lines.append(f"  stop            - no further retrieval. cost={c:g}")
+        else:
+            lines.append(f'  {a:<15s} - requires "features". cost={c:g}')
+    return "\n".join(lines)
+
+def build_planner_user_prompt_v2(
+    test_features: Dict,
+    cluster_id,
+    distances: List[float],
+    persona: Optional[Dict] = None,
+    topk_feats: Optional[List[Dict]] = None,
+    candidate_features: Optional[List[str]] = None,
+) -> str:
+    """build_planner_user_prompt()와 evidence 블록(4개)은 완전히 동일 --
+    instruction만 PLANNER_INSTRUCTION_V2(action 설명/cost만, "언제 써라"
+    서술과 DECISION RULE 없음)로 교체."""
+    cf = candidate_features or []
+    cf_line = ", ".join(cf) if cf else "(none - contextual_knn is not selectable this turn)"
+    instr = PLANNER_INSTRUCTION_V2.format(candidate_features_line=cf_line)
+    fit_hdr = "## CLUSTER FIT (z vs persona)"
+    return (
+        f"{instr}\n\n"
+        f"## TEST\n{format_transaction(test_features)}\n\n"
+        f"{fit_hdr}\n{format_cluster_fit(test_features, persona)}\n\n"
+        f"## PERSONA DOMINANCE (categorical)\n"
+        f"{format_persona_dominance(test_features, persona)}\n\n"
+        f"## RETRIEVAL\n"
+        f"{format_retrieval_digest(distances, test_features, topk_feats)}"
+    )
+
+def build_planner_user_prompt_v3(
+    test_features: Dict,
+    cluster_id,
+    distances: List[float],
+    persona: Optional[Dict] = None,
+    topk_feats: Optional[List[Dict]] = None,
+    candidate_features: Optional[List[str]] = None,
+    actions: Optional[List[str]] = None,
+    action_costs: Optional[Dict[str, float]] = None,
+    max_features: int = 2,
+) -> str:
+    """제약 디코딩 전용. evidence 블록 4개는 V1/V2와 완전히 동일하고
+    instruction만 교체된다 — 프롬프트 버전 간 비교에서 evidence가 교란변수가
+    되지 않도록 하기 위함.
+
+    actions / action_costs / max_features는 agent_tools registry에서 받아
+    넘긴다. 넘기지 않으면 stop/contextual_knn + binary cost로 degrade한다.
+    """
+    cf = candidate_features or []
+    cf_line = ", ".join(cf) if cf else "(none - only stop is selectable this turn)"
+    instr = PLANNER_INSTRUCTION_V3.format(
+        action_lines=build_planner_action_lines(actions, action_costs),
+        candidate_features_line=cf_line,
+        max_features=max_features,
+    )
+    fit_hdr = "## CLUSTER FIT (z vs persona)"
+    return (
+        f"{instr}\n\n"
+        f"## TEST\n{format_transaction(test_features)}\n\n"
+        f"{fit_hdr}\n{format_cluster_fit(test_features, persona)}\n\n"
+        f"## PERSONA DOMINANCE (categorical)\n"
+        f"{format_persona_dominance(test_features, persona)}\n\n"
+        f"## RETRIEVAL\n"
+        f"{format_retrieval_digest(distances, test_features, topk_feats)}"
+    )
+
+def build_planner_user_prompt(
+    test_features: Dict,
+    cluster_id,
+    distances: List[float],
+    persona: Optional[Dict] = None,
+    topk_feats: Optional[List[Dict]] = None,
+    candidate_features: Optional[List[str]] = None,
+) -> str:
+    """
+    planner(GRPO) 전용 user prompt. evaluator의 _build_v2와 형태(TEST/CLUSTER
+    FIT/PERSONA DOMINANCE/RETRIEVAL 4블록)는 동일하게 재사용하지만 —
+      1) 항상 non-compact(전체) 버전만 만든다. PROMPT_COMPACT 분기 자체가
+         없다(위 모듈 docstring 참고).
+      2) instruction 뒤에 CANDIDATE FEATURES(= agrees∪persona_match, 오라클
+         rollout의 build_grpo_action_space와 동일 pool)를 동적으로 삽입한다.
+
+    candidate_features: controller.py의 _evidence_from_analyzer()가 계산하는
+    agrees∪persona_match와 정확히 같은 리스트를 넘겨야 한다 — 서빙(planner
+    inference)과 학습(이 함수로 만든 오프라인 프롬프트)이 같은 후보 집합을
+    보도록 하기 위함(다르면 학습 때 못 보던 feature가 서빙에서 후보로
+    나오거나, 그 반대가 되어 train-serve mismatch가 생긴다). 비어 있으면
+    모델이 존재하지 않는 feature를 환각하지 않도록 명시적으로 "없음"을
+    적는다.
+    """
+    cf = candidate_features or []
+    cf_line = ", ".join(cf) if cf else "(none - contextual_knn is not selectable this turn)"
+    instr = PLANNER_INSTRUCTION_V1.format(candidate_features_line=cf_line)
+    fit_hdr = "## CLUSTER FIT (z vs persona)"
+    return (
+        f"{instr}\n\n"
+        f"## TEST\n{format_transaction(test_features)}\n\n"
+        f"{fit_hdr}\n{format_cluster_fit(test_features, persona)}\n\n"
+        f"## PERSONA DOMINANCE (categorical)\n"
+        f"{format_persona_dominance(test_features, persona)}\n\n"
+        f"## RETRIEVAL\n"
+        f"{format_retrieval_digest(distances, test_features, topk_feats)}"
+    )
+
+# ============================================================
+# ── Planner Prompt v5 — think + 압축 evidence + 진단/처방 ──
+# ============================================================
+# prompts.py 맨 끝에 그대로 붙여넣는다. v1~v4는 손대지 않는다
+# (프롬프트 버전 간 A/B에서 evidence가 교란변수가 되지 않도록).
+#
+# ★ v3 → v5 변경 3가지와 각각의 실측 근거
+#
+# 1) think 출력 추가
+#    현재 출력은 {tool 2종} × {feature 조합 21} = 43-way 선택이라, 원리적으로
+#    43-way 분류기로 완전히 환원된다. 그러면 0.5B LLM을 쓸 이유가 GBDT 대비
+#    없다. think를 붙이면 (a) 분류기가 만들 수 없는 산출물이 생기고,
+#    (b) "모델이 evidence를 읽었는가"를 grounded rate로 직접 측정할 수 있다.
+#    ★ think는 reward에 넣지 않는다 — outcome에 접지되지 않은 process reward는
+#      hacking되고(R1-Searcher가 2단계에서 retrieve-reward를 제거한 이유),
+#      품질을 자동 채점할 방법도 없다. 측정 지표로만 쓴다.
+#
+# 2) DIAGNOSIS 블록 (wm_type)
+#    evaluator가 진단한 결함(cluster_mismatch / neighbor_insufficient)이 tool
+#    선택과 무상관이었다(실측: 세 진단의 tool 분포가 0.19~0.24로 거의 동일).
+#    설계 의도가 데이터로 확인되지 않은 상태이고, 원인 후보 중 하나가
+#    "프롬프트가 진단과 처방을 연결해주지 않는다"이다.
+#    ※ V1의 "Use when [DEVIANT]..." 휴리스틱과 다르다. 그건 상식으로 만든
+#      규칙이었지만, 여기 적는 건 tool의 구현상 성질이다 —
+#      contextual = dense pool 재정렬(이웃 부족 보강),
+#      attribute  = exact term filter(라우팅 교정).
+#
+# 3) evidence 압축 + support 노출, TEST 블록 제거
+#    · TEST(8개 feature 값) 제거: planner가 정하는 것은 "어느 축으로 좁힐까"이지
+#      "값이 무엇인가"가 아니다. eq 필터는 서버가 이 거래의 값으로 자동 채우고,
+#      값의 특이성은 [RARE]/[DEVIANT] 태그가 이미 요약한다. 정보 손실이 없다.
+#    · support 노출: attribute vs global 이웃 Jaccard가 support 구간에 따라
+#      0.29(<1k) ~ 0.68(>25k)로 갈렸다. 선택도가 높으면 두 tool이 사실상 같은
+#      검색이 되므로, planner가 이를 보고 골라야 한다.
+#    · 0.5B는 프롬프트 길이에 민감하다(evaluator 경험). v3 ~380토큰 → v5 ~200토큰.
+#
+# ★ stop이 ACTIONS에 없는 이유
+#   게이트(검색할지 말지)를 LLM에 맡기는 실험을 3회 했고 전부 실패했다:
+#     AUC(p_nonstop) = 0.481 / 0.463 / 0.443  (전부 무정보 이하)
+#     같은 입력으로 RandomForest 0.747, |nd-τ| 스칼라 단독 0.68~0.82
+#   구조적 원인은 GRPO loss에 있다 — 그룹 6개가 전부 검색이면 reward std=0이라
+#   advantage가 0이고 stop을 강화할 gradient가 아예 발생하지 않는다
+#   (관측: pred_contextual 85%, silent_group_rate 0.2~0.5).
+#   → 게이트는 결정론 임계값(Stage A)으로 빼고 LLM은 tool 선택만 맡는다.
+# ============================================================
+
+PLANNER_SYSTEM_PROMPT_V5 = (
+    "You are a retrieval planner for a fraud-detection agent. A first retrieval "
+    "already ran and an evaluator diagnosed what is missing. Pick the one tool "
+    "that repairs that specific defect."
+)
+
+# tool의 구현상 성질 — 어떤 결함을 겨냥하는 도구인가
+PLANNER_TOOL_ROLE_V5 = {
+    # "contextual_knn": "widen to the whole bank, softly prefer matching values "
+    #                   "(fixes: neighbors too few or scattered)",
+    # "attribute_knn":  "keep only exact feature matches, then take the nearest "
+    #                   "(fixes: the assigned cluster looks wrong)",
+    "contextual_knn": "widen to the whole bank, softly prefer matching values",
+    "attribute_knn":  "keep only exact feature matches, then take the nearest",
+    "global_knn":     "search the whole bank with no feature bias",
+    "stop":           "no further retrieval",
+}
+
+# evaluator 진단 → 한 줄 설명
+PLANNER_DIAGNOSIS_HINT_V5 = {
+    "cluster_mismatch":      "the assigned cluster looks wrong "
+                             "(a feature is [DEVIANT] or [RARE])",
+    "neighbor_insufficient": "the retrieved neighbors are too few or too "
+                             "scattered to serve as evidence",
+    "accept":                "no specific defect was flagged",
+}
+
+# 진단 → 우선 처방. 정합률 측정(notebook)의 기준 매핑이다.
+# ★ 이건 "정답"이 아니라 "설계 가설"이다. 오라클 정합률이 낮게 나오면
+#   가설 자체가 데이터로 반증된 것이고, 프롬프트로는 고칠 수 없다.
+PLANNER_DIAGNOSIS_PRESCRIPTION_V5 = {
+    "cluster_mismatch":      "attribute_knn",
+    "neighbor_insufficient": "contextual_knn",
+    "accept":                None,      # 권장 없음 — 정합률 계산에서 제외
+}
+
+# think에서 인용할 수 있는 evidence 태그(= grounded 판정 대상)
+PLANNER_EVIDENCE_TAGS_V5 = ("DEVIANT", "RARE", "spread", "dense", "match")
+
+PLANNER_INSTRUCTION_V5 = """Pick one retrieval tool to repair the diagnosed defect.
+
+## DIAGNOSIS
+{diagnosis_line}
+
+## TOOLS
+{action_lines}
+
+## CANDIDATE FEATURES (pick at most {max_features}, ONLY from this list)
+{candidate_features_line}
+
+## OUTPUT
+Start with the evidence tag in brackets, then the field, then why. Under 20 words.
+Example shape (do not copy the words):
+{{"think":"[<one tag from EVIDENCE>] <one field from CANDIDATE FEATURES> - <reason>","action":"...","features":[...]}}"""
+
+def build_planner_action_lines_v5(actions: Optional[List[str]] = None) -> str:
+    """TOOLS 블록. cost를 쓰지 않는다 — Stage A가 검색 여부를 이미 정했으므로
+    이 시점의 비용은 tool 간 동일하고(둘 다 검색 1회), 옛 cost 값(1.2/1.5)을
+    노출하면 reward와 프롬프트가 다른 이야기를 하게 된다."""
+    acts = actions or ["contextual_knn", "attribute_knn"]
+    return "\n".join(f"  {a:<15s} - {PLANNER_TOOL_ROLE_V5.get(a, '')}" for a in acts)
+
+
+def build_planner_candidate_line_v5(
+    candidate_features: Optional[List[str]] = None,
+    supports: Optional[Dict[str, int]] = None,
+) -> str:
+    """★ support(= attribute_knn 시 남는 정상 샘플 수)를 함께 노출한다.
+    이론상 임계 s* = k/P (k=top_k, P=contextual pool 크기)를 넘으면 contextual의
+    dense pool이 이미 필터 조건을 만족해 두 tool이 같아진다. 실측 임계는
+    support ≈ 25,000이었고, 그 위 후보가 전체의 45%였다."""
+    cf = candidate_features or []
+    if not cf:
+        return "(none available)"
+    if not supports:
+        return ", ".join(cf)
+    out = []
+    for f in cf:
+        s = supports.get(f)
+        out.append(f"{f}({s:,})" if isinstance(s, (int, float)) else f)
+    return "  ".join(out)
+
+
+def format_evidence_compact_v5(
+    test_features: Dict,
+    distances: Optional[List[float]],
+    persona: Optional[Dict] = None,
+    topk_feats: Optional[List[Dict]] = None,
+    z_tau: float = None,
+    spread_tau: float = None,
+) -> str:
+    """v3의 CLUSTER FIT / PERSONA DOMINANCE / RETRIEVAL 3블록(약 250토큰)을
+    태그가 붙은 축만 남겨 ~60토큰으로 압축한다.
+
+    ★ 계산식은 format_cluster_fit / format_persona_dominance /
+      format_retrieval_digest와 완전히 동일하다(compute_evidence_axes 재사용).
+      압축은 '무엇을 빼는가'이지 '어떻게 계산하는가'를 바꾸지 않는다 —
+      evaluator에서 compact 전환 후 회귀 원인을 못 찾았던 실수를 반복하지 않기 위함.
+    """
+    ax = compute_evidence_axes(
+        test_features=test_features, persona=persona,
+        distances=distances, topk_feats=topk_feats,
+        z_tau=z_tau, spread_tau=spread_tau) or {}
+
+    lines = []
+    # 1) nd + spread — 게이트/밴드 판정의 근거
+    if distances:
+        d = sorted(float(x) for x in distances if x != float("inf"))
+        if d:
+            _sp = float(np.std(d[:3])) if len(d) >= 2 else 0.0
+            _st = ax.get("spread_tag") or ""
+            lines.append(f"  nd={normalize_dist(d[0]):.2f}  "
+                         f"spread={_sp:.3f}" + (f" [{_st}]" if _st else ""))
+    # 2) 이웃 합의/불일치 — neighbor_insufficient의 직접 재료
+    _ag, _df = ax.get("agrees") or [], ax.get("differs") or []
+    lines.append(f"  agrees: {', '.join(_ag) or '(none)'}")
+    lines.append(f"  differs: {', '.join(_df) or '(none)'}")
+    # 3) 태그가 붙은 축만 — cluster_mismatch의 직접 재료
+    for _key, _tag in (("deviant", "DEVIANT"), ("rare", "RARE"),
+                       ("persona_match", "match")):
+        _v = ax.get(_key) or []
+        if _v:
+            lines.append(f"  {_tag.lower()}: {', '.join(_v)}")
+    return "\n".join(lines)
+
+
+def build_planner_user_prompt_v5(
+    test_features: Dict,
+    cluster_id=None,
+    distances: Optional[List[float]] = None,
+    persona: Optional[Dict] = None,
+    topk_feats: Optional[List[Dict]] = None,
+    candidate_features: Optional[List[str]] = None,
+    actions: Optional[List[str]] = None,
+    max_features: int = 2,
+    wm_type: Optional[str] = None,
+    supports: Optional[Dict[str, int]] = None,
+    z_tau: float = None,
+    spread_tau: float = None,
+) -> str:
+    """2-stage(Stage B) 전용 planner 프롬프트. 1-turn.
+
+    v3 대비: TEST 블록 제거, evidence 3블록 압축, DIAGNOSIS/support 추가,
+    출력에 think 포함. 약 380토큰 → 약 200토큰.
+
+    cluster_id는 시그니처 호환을 위해 받되 쓰지 않는다 — 프롬프트에 노출해도
+    planner가 쓸 정보가 아니고(어느 클러스터인지가 아니라 그 클러스터가
+    맞는지가 문제), 토큰만 소모한다.
+    """
+    _acts = actions or ["contextual_knn", "attribute_knn"]
+    _diag = (f"{wm_type}: {PLANNER_DIAGNOSIS_HINT_V5[wm_type]}"
+             if wm_type in PLANNER_DIAGNOSIS_HINT_V5 else "(not available)")
+    instr = PLANNER_INSTRUCTION_V5.format(
+        diagnosis_line=f"  {_diag}",
+        action_lines=build_planner_action_lines_v5(_acts),
+        candidate_features_line=build_planner_candidate_line_v5(
+            candidate_features, supports),
+        max_features=max_features,
+    )
+    ev = format_evidence_compact_v5(test_features, distances, persona,
+                                    topk_feats, z_tau, spread_tau)
+    return f"{instr}\n\n## EVIDENCE\n{ev}"
+
+
+# ============================================================
+# grounded 판정 — "모델이 evidence를 읽었는가"의 측정 도구
+#   think가 (a) 실제로 존재하는 evidence 태그를 인용하고
+#          (b) 자기가 고른 feature를 언급했을 때만 grounded로 본다.
+#   AND로 묶는 것이 핵심이다 — 태그만 인용하면 앵무새이고,
+#   feature만 언급하면 근거가 없다. 둘 다여야 "이 축이 이래서 이 도구"가 된다.
+#
+#   ★ 이 지표 자체가 목적이 아니다. grounded=True/False 그룹의 achieved 차이가
+#     LLM 정당성의 유일한 직접 증거다 — 분류기로는 만들 수 없는 주장.
+# ============================================================
+def evaluate_think_grounding(
+    think: Optional[str],
+    chosen_features: Optional[List[str]] = None,
+    evidence_axes: Optional[Dict] = None,
+) -> Dict:
+    """
+    Args:
+        think          : 모델이 생성한 think 문자열
+        chosen_features: 모델이 고른 feature 목록
+        evidence_axes  : compute_evidence_axes() 결과 (실제 존재하는 태그 확인용)
+
+    Returns:
+        cited_tags     : think가 인용한 태그 중 실제로 존재하는 것
+        hallucinated   : think가 인용했으나 실제로는 없는 태그
+        field_mentioned: 고른 feature를 think에서 언급했는가
+        grounded       : cited_tags가 있고 field_mentioned도 True
+    """
+    _th = (think or "").lower()
+    ax = evidence_axes or {}
+    _real = {
+        "deviant": bool(ax.get("deviant")),
+        "rare":    bool(ax.get("rare")),
+        "match":   bool(ax.get("persona_match")),
+        "spread":  (ax.get("spread_tag") == "spread"),
+        "dense":   (ax.get("spread_tag") == "dense"),
+    }
+    cited, halluc = [], []
+    for t in PLANNER_EVIDENCE_TAGS_V5:
+        if t.lower() in _th:
+            (cited if _real.get(t.lower(), False) else halluc).append(t)
+    _fields = [f for f in (chosen_features or []) if f and f.lower() in _th]
+    return {
+        "cited_tags": cited,
+        "hallucinated_tags": halluc,
+        "field_mentioned": bool(_fields),
+        "grounded": bool(cited) and bool(_fields),
+    }
+    

@@ -125,7 +125,7 @@ spec:
       # ===========================
       containers:
       - name: router
-        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/anomaly-router:2.0
+        image: us-west1-docker.pkg.dev/kakao-504812/elasticsearch-images/anomaly-router:2.0
         imagePullPolicy: Always
 
         ports:

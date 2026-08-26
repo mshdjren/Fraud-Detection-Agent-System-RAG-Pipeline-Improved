@@ -67,7 +67,7 @@ VALID_EXPERIMENT_CASES: List[str] = [
 ]
 
 # GCS 경로 상수
-GCS_BUCKET_NAME = "fraud_ecomm"
+GCS_BUCKET_NAME = "fraud_ecommm"
 
 # test_with_gt parquet (experiment_case별)
 TEST_PARQUET_PATH_TEMPLATE = "tree-search/tree_fraudecom/{experiment_case}/test_with_gt.parquet"
@@ -225,6 +225,15 @@ class GTLoader:
         """
         GCS에서 파일 다운로드.
 
+        ★ [수정, 추가 전용] 기존엔 local_path.exists()만 보고 캐시를
+        신뢰했다 — 이전 job이 다운로드 도중 죽어 잘린 파일이 남아있어도
+        그대로 재사용되는 사고가 가능했다(파일 존재 = 정상 캐시가 아님).
+        blob 메타데이터(size)만 조회하는 저렴한 호출(본문 다운로드 없음)로
+        로컬 파일 크기와 비교해, 불일치하면 재다운로드한다. 메타데이터
+        조회 자체가 실패하면(권한/네트워크 일시 문제) 기존 동작(캐시 신뢰)
+        으로 안전하게 fallback한다 — 이 함수의 신뢰성을 캐시 검증 때문에
+        낮추지 않기 위함.
+
         Parameters
         ----------
         gcs_path : str
@@ -239,8 +248,11 @@ class GTLoader:
         Path : 다운로드된 로컬 파일 경로
         """
         if use_cache and local_path.exists():
-            logger.info("using_cached_file", file=str(local_path))
-            return local_path
+            if self._cache_matches_remote(gcs_path, local_path):
+                logger.info("using_cached_file", file=str(local_path))
+                return local_path
+            logger.warning("cached_file_stale_or_corrupt", file=str(local_path),
+                           note="크기 불일치 — 재다운로드")
 
         full_path = f"gs://{self.bucket_name}/{gcs_path}"
         logger.info("downloading_from_gcs", path=full_path)
@@ -254,9 +266,31 @@ class GTLoader:
             logger.error("download_failed", path=full_path, error=str(e))
             raise FileNotFoundError(f"Failed to download {full_path}: {e}")
 
+    def _cache_matches_remote(self, gcs_path: str, local_path: Path) -> bool:
+        """local_path가 gcs_path의 최신 크기와 일치하는지 저렴하게 확인
+        (blob.reload()는 메타데이터만 조회 — 본문 다운로드 없음)."""
+        try:
+            blob = self.bucket.blob(gcs_path)
+            blob.reload()
+            return blob.size is None or blob.size == local_path.stat().st_size
+        except Exception as e:
+            logger.warning("cache_validation_skipped", gcs_path=gcs_path, error=str(e))
+            return True  # 검증 실패 시 기존 동작(캐시 신뢰)으로 fallback
+
     # ──────────────────────────────────────────────────────────
     # Private: 데이터 로드
     # ──────────────────────────────────────────────────────────
+
+    def _read_test_parquet_local(self, use_cache: bool = True) -> pd.DataFrame:
+        """
+        ★ [신규, 추가 전용] test_with_gt.parquet 다운로드+읽기만 담당하는
+        공통 조각. _load_test_data(엄격한 GT 컬럼 검증)와 load_minimal의
+        내부 로더(label만 필요) 양쪽이 이 함수를 공유한다 — 다운로드/캐시
+        경로 로직을 두 곳에 중복시키지 않기 위함. 컬럼 검증은 호출자가 한다.
+        """
+        local_path = self.local_cache_dir / f"test_with_gt_{self.experiment_case}.parquet"
+        self._download_from_gcs(self.test_parquet_path, local_path, use_cache)
+        return pd.read_parquet(local_path)
 
     def _load_test_data(self, use_cache: bool = True) -> pd.DataFrame:
         """
@@ -273,10 +307,7 @@ class GTLoader:
         -------
         pd.DataFrame
         """
-        local_path = self.local_cache_dir / f"test_with_gt_{self.experiment_case}.parquet"
-        self._download_from_gcs(self.test_parquet_path, local_path, use_cache)
-
-        df = pd.read_parquet(local_path)
+        df = self._read_test_parquet_local(use_cache)
 
         # label 필수 체크
         if "label" not in df.columns:
@@ -595,6 +626,58 @@ class GTLoader:
         return self._load_coreset_parquet(use_cache)
 
     # ──────────────────────────────────────────────────────────
+    # Public: load_minimal  ★ [신규, 추가 전용] — oracle_extractor.py 등
+    #   label + raw feature + embedding만 필요한 소비자용 경량 로더
+    # ──────────────────────────────────────────────────────────
+
+    def load_minimal(self, use_cache: bool = True) -> Tuple[pd.DataFrame, np.ndarray, Dict]:
+        """
+        load_all()의 경량 버전. oracle_extractor.py처럼 label과 raw
+        transaction feature + embedding만 필요하고 GT top5/coreset-adjusted
+        비교가 필요 없는 소비자를 위한 것이다.
+
+        load_all() 대비 생략하는 것:
+          - coreset parquet 다운로드 (coreset_percentage=100 기준 대용량 —
+            hard_negative_miner/agent_batch_inference처럼 retrieval recall을
+            계산할 때만 필요하고, oracle rollout은 retrieval을 controller.py
+            /rollout이 실시간으로 수행하므로 coreset GT가 전혀 쓰이지 않는다)
+          - gt_knn_indices_576d/gt_knn_dists_576d/gt_top5_cluster_ids/
+            gt_top5_cluster_dists_eval_space 컬럼 존재 검증 (label만 요구) —
+            이 컬럼들이 아직 채워지지 않은 실험 케이스에서도 오라클 rollout은
+            돌릴 수 있어야 한다(그 케이스들은 hard negative mining/router
+            recall 평가만 못 할 뿐, retrieval은 controller가 직접 하므로
+            영향이 없다).
+
+        Returns
+        -------
+        test_data : pd.DataFrame  (label + 원본 feature 컬럼만 보장)
+        test_emb  : np.ndarray    (N_test, D)
+        gt_data   : Dict          {"label": np.ndarray}  — load_all()과 키
+                    이름을 맞춰 두어(하위호환), gt_data["label"] 접근 코드가
+                    load_all()/load_minimal() 어느 쪽을 쓰든 그대로 동작한다.
+        """
+        df = self._read_test_parquet_local(use_cache)
+        if "label" not in df.columns:
+            raise ValueError(f"test parquet must have 'label' column. found: {list(df.columns)}")
+
+        test_emb = self._load_test_embeddings(use_cache)
+        if len(test_emb) != len(df):
+            raise ValueError(
+                f"test emb/data length mismatch: emb={len(test_emb)}, data={len(df)}"
+            )
+
+        labels = df["label"].values.astype(int)
+        logger.info(
+            "test_data_loaded_minimal",
+            experiment_case=self.experiment_case,
+            shape=df.shape,
+            n_fraud=int((labels == 1).sum()),
+            n_normal=int((labels == 0).sum()),
+            note="coreset parquet / GT top5 컬럼 검증 생략 (load_all() 대비 경량)",
+        )
+        return df, test_emb, {"label": labels}
+
+    # ──────────────────────────────────────────────────────────
     # Public: load_all
     # ──────────────────────────────────────────────────────────
 
@@ -787,8 +870,17 @@ class GTLoader:
         """
         row = test_data.iloc[idx]
 
+        # ★ 원본 parquet 컬럼명이 공백형('purchase value','IP country' 등)이라
+        #   _safe()의 `col in test_data.columns`가 전부 실패한다. 그 결과
+        #   purchase_value는 default 0.0으로 조용히 대체되고, IP_country/
+        #   month_purchase/weekday_purchase는 키 자체가 tc에서 누락되어
+        #   analyzer의 agrees/persona_match가 {sex,source,browser} 3개로
+        #   상한이 걸린다(오라클 candidate pool이 3개였던 실제 원인).
+        _colmap = {c.replace(" ", "_"): c for c in test_data.columns if " " in c}
+
         def _safe(col: str, default):
-            val = row.get(col) if col in test_data.columns else None
+            _c = col if col in test_data.columns else _colmap.get(col)
+            val = row.get(_c) if _c else None
             return default if (val is None or (isinstance(val, float) and np.isnan(val))) else val
 
         tc: Dict = {

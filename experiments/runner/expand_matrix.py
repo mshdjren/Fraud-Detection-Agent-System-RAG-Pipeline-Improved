@@ -327,7 +327,7 @@ def main() -> None:
             f"WATCH_DEPLOYMENTS=\"{' '.join(ser['watch_deployments'])}\"",
             f"NAMESPACE={spec['namespace']}",
             f"GCS_ROOT={spec['gcs_root']}",
-            f"EVAL_GCS_BASE={spec.get('eval_gcs_base', 'gs://fraud_ecomm/evaluation/agent-eval')}",
+            f"EVAL_GCS_BASE={spec.get('eval_gcs_base', 'gs://fraud_ecommm/evaluation/agent-eval')}",
             f"EXPERIMENT_CASE={spec['experiment_case']}",
             f"STAGE={args.stage}",
             f"RUN_DATE={run_date}",

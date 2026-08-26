@@ -96,6 +96,7 @@ def generate_embedding() -> list:
     return result
 
 
+
 def generate_router_request() -> dict:
     return {"embedding": generate_embedding()}
 

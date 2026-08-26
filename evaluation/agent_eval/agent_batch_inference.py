@@ -147,6 +147,59 @@ async def call_agent_detect(
                                     None)
         result["_candidate_mode"] = os.getenv("ROUTER_CANDIDATE_MODE", "static")
 
+        # ── ★ [Planner] 학습 planner(local_planner) 트레이스 승격 ────────
+        #   controller _node_plan_local이 round_entry에 남기는 planner_* 키를
+        #   per-sample 최상위 컬럼으로 올린다. gemini/deterministic planner
+        #   실행에서는 전부 None — 리포트 스키마 하위호환.
+        #   ★ 이 승격이 없으면 "재검색을 왜 했는가"가 지표에 전혀 안 남는다.
+        _planner_keys = (
+            "planner_stage", "planner_prompt_ver", "planner_features",
+            "planner_scope", "planner_cost", "planner_source",
+            "planner_is_fallback", "planner_invalid_reason",
+            "planner_latency_ms", "planner_ttft_ms", "planner_n_out_tokens",
+            "planner_nd_mode", "planner_backend",
+        )
+        for _k in _planner_keys:
+            result[f"_{_k}"] = next((r.get(_k) for r in reversed(_num_rounds)
+                                     if isinstance(r, dict) and r.get(_k) is not None),
+                                    None)
+        # planner가 고른 action = 재검색을 유발한 round의 action
+        result["_planner_action"] = next(
+            (r.get("action") for r in _num_rounds
+             if r.get("action") in ("stop", "global_knn", "contextual_knn",
+                                    "attribute_knn")), None)
+
+        # ── ★ [Evidence Novelty] round0 이웃 ↔ 최종 이웃 교체율 ──────────
+        #   재검색이 "nd를 낮췄는가"와 "다른 증거를 가져왔는가"는 다른 질문이다
+        #   (비판적 검토 §3). 전자는 research_effect가, 후자는 여기가 답한다.
+        #   attribute_knn 도입 논거(dense가 못 보는 축)의 유일한 실측 경로.
+        _r0_oidx = next((r.get("neighbor_oidx") for r in _num_rounds
+                         if r.get("round") == 0 and r.get("neighbor_oidx")), None)
+        _rl_oidx = next((r.get("neighbor_oidx") for r in reversed(_num_rounds)
+                         if int(r.get("round", 0)) >= 1 and r.get("neighbor_oidx")), None)
+        if _r0_oidx and _rl_oidx:
+            _a, _b = set(map(int, _r0_oidx)), set(map(int, _rl_oidx))
+            _u = _a | _b
+            result["_neighbor_jaccard"] = round(len(_a & _b) / len(_u), 4) if _u else None
+            result["_neighbor_novelty"] = (round(1.0 - len(_a & _b) / len(_u), 4)
+                                           if _u else None)
+            result["_n_neighbors_replaced"] = len(_b - _a)
+        else:
+            result["_neighbor_jaccard"] = None
+            result["_neighbor_novelty"] = None
+            result["_n_neighbors_replaced"] = None
+
+        # 재검색이 cluster 경계를 벗어났는가 (global/attribute의 기대 효과)
+        _r0_cid = next((r.get("cluster_id") for r in _num_rounds
+                        if r.get("round") == 0), None)
+        _gc = result.get("_global_cluster")
+        result["_cross_cluster_escape"] = (
+            None if (_r0_cid is None or _gc is None) else int(int(_gc) != int(_r0_cid)))
+        # attribute_knn hard filter 선택도 (support) — 낮으면 노이즈일 수 있다
+        result["_research_support"] = next(
+            (r.get("support") for r in reversed(_num_rounds)
+             if r.get("support") is not None), None)
+
         # ── ★ [batch_inference V5.1 포팅] router-retriever 상세 지표 소스 ──
         #   top_5_clusters(순위 보존)에서 두 dict를 만든다:
         #   cluster_distances      — 하위호환 키 (score fallback 포함, MRR fallback용)
@@ -196,7 +249,7 @@ EVAL_JSONL_GCS = os.getenv(
     "EVAL_JSONL_GCS",
     "tree-search/analyzer_ft/pca_64_k100/hf_0713/training_data_mined_eval.jsonl",
 )
-GCS_BUCKET = os.getenv("GCS_BUCKET_NAME", "fraud_ecomm")
+GCS_BUCKET = os.getenv("GCS_BUCKET_NAME", "fraud_ecommm")
 
 
 def _download_eval_jsonl(gcs_blob_path: str, local_dir: str = "/tmp/eval_set") -> str:
@@ -495,9 +548,24 @@ def calculate_path_conditioned_metrics(predictions: List[Dict], gt_sub: np.ndarr
         if p.get("error"):
             continue
         trace = p.get("agent_trace", [])
-        tool = ("expand" if any(h.startswith("expand_within_cluster") for h in trace)
-                else "reroute" if any(h.startswith("reroute_cross_cluster") for h in trace)
-                else "none")
+        # ★ [Planner] legacy tool(expand/reroute)과 학습 planner action
+        #   (contextual_knn/attribute_knn/global_knn)을 같은 축에서 집계한다.
+        #   PLANNER_BACKEND=local이면 trace에 planner action 이름이 실린다.
+        _pa = p.get("_planner_action")
+        if _pa in ("contextual_knn", "attribute_knn", "global_knn"):
+            tool = _pa
+        elif any(h.startswith("contextual_knn") for h in trace):
+            tool = "contextual_knn"
+        elif any(h.startswith("attribute_knn") for h in trace):
+            tool = "attribute_knn"
+        elif any(h.startswith("global_knn") for h in trace):
+            tool = "global_knn"
+        elif any(h.startswith("expand_within_cluster") for h in trace):
+            tool = "expand"
+        elif any(h.startswith("reroute_cross_cluster") for h in trace):
+            tool = "reroute"
+        else:
+            tool = "none"
         pred = 1 if p.get("classification") == "ABNORMAL" else 0
         groups[tool].append((pred, int(gt)))
 
@@ -743,6 +811,34 @@ def run_evaluation(
             logger.warning("research_effect_failed", error=str(_e))
             research_effect = {"_error": str(_e)}
 
+    # ── 10-c. ★ [Planner] 정책/신규성/예산 지표 ──────────────────────
+    #   research_effect가 "재검색이 nd를 어떻게 바꿨나"를 본다면, 아래 셋은
+    #   "planner가 어떤 정책을 폈고(policy), 실제로 다른 증거를 가져왔고
+    #   (novelty), 그 비용이 값어치를 했는가(budget)"를 본다.
+    #   오라클 M0 지표(EVPI/rescued/degraded)의 서빙 대응물이다.
+    planner_policy: Dict = {}
+    evidence_novelty: Dict = {}
+    budget_curve: Dict = {}
+    if pipeline_mode == "agent":
+        for _name, _fn, _tgt in (
+            ("planner_policy", "calculate_planner_policy_metrics", "planner_policy"),
+            ("evidence_novelty", "calculate_evidence_novelty", "evidence_novelty"),
+            ("budget_curve", "calculate_budget_curve", "budget_curve"),
+        ):
+            if not hasattr(calc, _fn):
+                continue
+            try:
+                _res = getattr(calc, _fn)(predictions, gt_sub,
+                                          cls_threshold=CLS_ND_THRESHOLD)
+                if _tgt == "planner_policy":
+                    planner_policy = _res
+                elif _tgt == "evidence_novelty":
+                    evidence_novelty = _res
+                else:
+                    budget_curve = _res
+            except Exception as _e:
+                logger.warning(f"{_name}_failed", error=str(_e))
+
     # ── 결과 취합 ────────────────────────────────────────────
     report = {
         "run_id":             os.getenv("RUN_ID", "unspecified"),   # ★
@@ -758,6 +854,9 @@ def run_evaluation(
         "anomaly_auroc":      anomaly_auroc,
         "agent_nd_dual":      nd_dual,               # ★ [요청 7] nd 이중 리포트
         "research_effect":    research_effect,      # ★ [EXP] 재검색 인과 분해
+        "planner_policy":     planner_policy,       # ★ [Planner] 정책 행동/포맷
+        "evidence_novelty":   evidence_novelty,     # ★ [Planner] 증거 신규성
+        "budget_curve":       budget_curve,         # ★ [Planner] 검색 예산 곡선
         "distance_at_threshold": dist_at_thr,   # 비교 표용
         "agent_at_threshold": llm_at_thr,       # 비교 표용
         "boundary":           boundary,

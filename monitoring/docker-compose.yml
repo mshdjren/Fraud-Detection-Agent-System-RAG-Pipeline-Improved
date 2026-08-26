@@ -11,7 +11,7 @@ services:
       - GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/key.json
     command:
       - "--web.listen-address=:9090"
-      - "--query.project-id=kakaoo-501107"
+      - "--query.project-id=kakao-504812"
     restart: unless-stopped
 
   renderer:

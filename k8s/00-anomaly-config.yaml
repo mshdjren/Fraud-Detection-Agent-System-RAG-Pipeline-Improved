@@ -22,7 +22,7 @@ data:
   COMPARE_TRACK_ENABLED: "false"
   FAST_TRACK_DISTANCE_THRESHOLD: "0.85"
   # ✅ GCP Configuration (for Analyzer)
-  GOOGLE_CLOUD_PROJECT: "kakaoo-501107"
+  GOOGLE_CLOUD_PROJECT: "kakao-504812"
   GOOGLE_CLOUD_REGION: "us-west1"
 
   # ===========================
@@ -86,7 +86,8 @@ data:
   #
   #   단일 percentage만 실행:  CORESET_PERCENTAGES: "100"
   # CORESET_PERCENTAGES: "100,10,1"
-  CORESET_PERCENTAGES: "100,10,1"
+  # CORESET_PERCENTAGES: "100,10,1"
+  CORESET_PERCENTAGES: "100"
   # ★ v5: Retriever 검색 모드
   #   script_score : Exact NN  (vec index=False 환경, gaussian_aug 인덱스 기본)
   #   knn          : HNSW      (vec index=True 환경, 원본 coreset 인덱스)
@@ -122,7 +123,6 @@ data:
   N_REPLICAS: "0"
 
   # ── vec 인덱스 축 (재적재 필요) ─────────────────────────
-  VEC_QUANT:             "bbq_hnsw"      # f32 | int8_hnsw | bbq_hnsw   (ES 8.18)
   HNSW_M:                "16"
   HNSW_EF_CONSTRUCTION:  "100"
   N_SHARDS_VEC:          "1"    # 정상 index용
@@ -156,9 +156,13 @@ data:
   #   AUG_MULTIPLIER: gaussian aug 인덱스 사용 시 배수 ("" = 원본 coreset 사용)
   #     "" | "2" | "5" | "10" | "20" | "30"
   #     → fraud_ecom_aug_{mult}x_{pct}pct_{vec_type}_vec
-  AUG_MULTIPLIER: "" # mult
-  AUG_PCT: "100" #pct
-  VEC_TYPE: "float32" #vec_type
+  AUG_MULTIPLIER: "" # mult : "" 원본, 2,5,10,20,30 
+  AUG_PCT: "100"        # pct : 1,10,100
+  VEC_QUANT: "bbq_hnsw"      # f32 | int8_hnsw | bbq_hnsw   (ES 8.18)
+  VEC_TYPE: "bbq"        #vec_type   #float32, bbq
+
+  # 00-anomaly-config.yaml — "── vec 인덱스 축" 섹션(VEC_QUANT 다음 줄)에 추가
+  AUG_RETRIEVAL_MODE:    "2stage"      # ★ [ADD] "1stage" | "2stage" — gaussian_aug 전용
 
   # index_aug용 SHARD 분산
   AUG_SHARD_DISTRIBUTION: "true"
@@ -183,7 +187,7 @@ data:
   # ===========================
 
   # 임베딩 파일이 저장된 GCS 폴더 (파일명 제외)
-  GCS_EMB_BASE: "gs://fraud_ecomm/tree-search/embeddings_fraudecom"
+  GCS_EMB_BASE: "gs://fraud_ecommm/tree-search/embeddings_fraudecom"
 
   # 임베딩 파일명 prefix
   # 실제 파일명: {prefix}_{percentage}_merged.npy
@@ -199,7 +203,7 @@ data:
   EMB_FILENAME_PREFIX: "anollm_lr5e-05_standard_smolLM_train_embeddings_percentage"
 
   # 케이스별 아티팩트 GCS 기본 경로
-  GCS_TREE_BASE: "gs://fraud_ecomm/tree-search/tree_fraudecom"
+  GCS_TREE_BASE: "gs://fraud_ecommm/tree-search/tree_fraudecom"
 
   # ★ v5.1: centroid fallback 용 클러스터 수 K
   #   GCS 경로: {GCS_TREE_BASE}/k{N_CLUSTERS}/cluster_centroids.npy  shape=(K, D)
@@ -212,20 +216,21 @@ data:
 
   BASE_TOP_K: "3"
   EXPAND_TOP_K: "5"
-  CLS_ND_THRESHOLD: "0.42"  # ===========================
+  CLS_ND_THRESHOLD: "0.42"  
+  # ===========================
   # Agent eval
   # ===========================
 
   SUFFICIENCY_BOUNDARY_LOW:  "0.3"
   SUFFICIENCY_BOUNDARY_HIGH: "0.55"
   EVAL_JSONL_GCS: "tree-search/analyzer_ft/pca_64_k100/hf_0713/training_data_mined_s5_eval.jsonl"
-  EVAL_SOURCE: "smoke"   # eval_set // smoke : agent_batch_inference.py
-  AGENT_EVAL_GCS_PREFIX: "gs://fraud_ecomm/agent_eval"
+  EVAL_SOURCE: "eval_set"   # eval_set // smoke : agent_batch_inference.py
+  AGENT_EVAL_GCS_PREFIX: "gs://fraud_ecommm/agent_eval"
 
   EVAL_RATIO: "0.1"          # NB01 EVAL_RATIO와 동일 (역매핑 구간)
   DIST_TOP_K : "5"
   PIPELINE_MODE: "agent"    #forward, agent
-  TOOL_EXECUTION_MODE: "mcp_native"
+  TOOL_EXECUTION_MODE: "direct"
 
 # ===========================
   # ★ [V3] Agent 재검색 실험 스위치 — 기본값 = legacy (기존 동작 100% 보존)
@@ -248,9 +253,16 @@ data:
 #   safe       : nd(top1) 제거 + TEST 섹션헤더 제거   (ni 증거 전부 보존)
 #   mid        : safe + CLUSTER FIT 의 value= 제거 + PERSONA 'ok' 행 필터
 #   aggressive : mid + PERSONA dom 값 제거 + spread 수치 제거  ← acc 회귀 발생
-  PROMPT_COMPACT: "mid"
+  # PROMPT_COMPACT: "mid"
+  PROMPT_COMPACT: "off"
 
   RUN_ID: "smoke-bbq-cs100"
+
+  PLANNER_STAGE:  "stage2"
+  MAX_CONTEXTUAL_FEATURES:  "2"
+  COST_RESEARCH:  "1.0"
+  ATTR_TOP_K: "5"
+  ATTR_MIN_SUPPORT: "3"
 
 # Index Name Convention (참고용)
 # ===========================

@@ -945,7 +945,7 @@ def upload_output_to_gcs(args, local_output_path):
             f"pct_{args.coreset_percentage}_{date_str}_output.txt"
         )
         
-        bucket_name = "fraud_ecomm"
+        bucket_name = "fraud_ecommm"
         destination_blob_name = f"tree-search/exp_result/{gcs_filename}"
 
         # 2. GCS 업로드 실행

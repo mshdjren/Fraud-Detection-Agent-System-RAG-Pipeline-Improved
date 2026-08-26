@@ -18,7 +18,7 @@ data:
   DATA_VERSION:     "s5"          
 
   # ── GCS 설정 ───────────────────────────────────────────────────
-  GCS_BUCKET:  "fraud_ecomm"
+  GCS_BUCKET:  "fraud_ecommm"
   GCS_FT_BASE: "tree-search/analyzer_ft"
 
   # ── 로컬 저장 경로 (init → main container 공유) ────────────────
@@ -39,12 +39,12 @@ data:
  # ── 서빙 백엔드 스위치 ───────────────────────────────────────
  # hf   : 기존 방식 (AutoModelForCausalLM + PeftModel merge, float32)
  # gguf : llama-cpp-python + Q4_K_M (NB02 Section 14 산출물)
-  MODEL_BACKEND:  "gguf"    #hf
+  MODEL_BACKEND:  "hf"    #hf
   GGUF_FILENAME:  "model.gguf"
-  GGUF_QUANT:     "q8_0"    #default :f16, q4_k_m, q5_k_m, q8_0
+  GGUF_QUANT:     "f16"    #default :f16, q4_k_m, q5_k_m, q8_0
   N_CTX:          "1024"    #default :768, 1024, 2048
 
-  PROMPT_COMPACT: "true"    # ★ [v4] 동적 블록 압축 (instruction 은 원문 유지)
+  PROMPT_COMPACT: "false"    # ★ [v4] 동적 블록 압축 (instruction 은 원문 유지)
 
   # ── Distance 분포 (colab Section 5 실측값: pca_64_k100) ────────
   DIST_P25: "1.264"
@@ -88,7 +88,7 @@ metadata:
   labels:
     app: local-analyzer
   annotations:
-    iam.gke.io/gcp-service-account: anomaly-analyzer@kakaoo-501107.iam.gserviceaccount.com
+    iam.gke.io/gcp-service-account: anomaly-analyzer@kakao-504812.iam.gserviceaccount.com
 
 ---
 # ===========================
@@ -204,7 +204,7 @@ spec:
       # ── Main Container ─────────────────────────────────────────
       containers:
       - name: local-analyzer
-        image: us-west1-docker.pkg.dev/kakaoo-501107/elasticsearch-images/local-analyzer:3.0
+        image: us-west1-docker.pkg.dev/kakao-504812/elasticsearch-images/local-analyzer:3.0
         imagePullPolicy: Always
 
         ports:
