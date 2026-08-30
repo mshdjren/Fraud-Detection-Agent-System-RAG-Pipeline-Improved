@@ -177,24 +177,6 @@ Range 조건을 **Bucket index + Term filter**로 변환해 후보군 pruning을
 
 **HNSW m/ef sweep** — `m`(그래프 연결도)과 `ef_construction`(build 품질)을 3조합 비교했고, AUROC·recall이 모두 동일해 **가장 빠른 `m=16, ef=100`을 운영점으로 고정**했습니다.
 
-**num_candidates 곡선** — 재적재가 없는 유일한 축입니다. recall이 평탄해지는 knee(200)가 운영점이며 그 이상은 latency만 냅니다.
-
-![t2e_numcand](plots/t2e_numcand.png)
-
-## 4️⃣ MCP Transport 벤치마크 · 운영 관측
-
-Router/Retriever를 **MCP tool로 표준화**하고 3가지 transport를 동일 wall-clock 구간(`mcp_transport_latency_seconds`)으로 감싸 비교했습니다.
-
-| transport | mode | tool Δ P95 (ms) | vs direct | dist AUROC |
-|---|---|---:|---:|---:|
-| direct | REST | 7,889.8 | +0.0 | 0.8283 |
-| mcp | HTTP wrapper | 8,186.9 | **+42.6** | 0.8283 |
-| mcpnative | stdio/SSE | 8,106.1 | **+63.1** | 0.8283 |
-
-> **AUROC가 세 행에서 동일해야 정상**입니다 — 다르면 transport가 결과를 바꾼 것이므로 버그입니다. 이 불변량을 sweep의 sanity check로 썼습니다.
->
-> 다만 `tool Δ`는 `total − base_retrieve`라 **analyzer 추론 수 초가 통째로 섞여** 있어 수십 ms짜리 transport overhead를 재기엔 부적합합니다(2.7초 vs 12.5ms). 정확한 값은 Prometheus의 `mcp p95`로 봐야 하며, 이는 **지표 정의 자체가 측정 가능성을 결정한다**는 사례로 기록했습니다.
-
 **Percolator 샤드 분산** — percolate는 등록 쿼리(5,725개)를 입력 문서에 MemoryIndex로 실행하므로 비용이 **샤드당 쿼리 수**에 비례합니다. 일반 역색인과 달리 CPU 작업이 실제로 나뉘어 near-linear로 스케일하되, **노드 CPU 코어 수까지만** 유효합니다(percolator limit 1800m ≈ 1.8코어 → 2배 부근 포화 예상).
 
 ---
@@ -475,6 +457,21 @@ P·s ≥ k  →  contextual이 이미 필터 일치 top-k를 pool 안에 갖고 
 | base logprob 차이 | 0.031 | 모델은 두 tool을 동등하게 봄 |
 
 > **원인은 tool 설계가 아니라 임베딩입니다.** AnoLLM 임베딩이 categorical feature를 이미 인코딩하고 있어, **같은 인덱스 안에서는 어떤 필터도 새 축이 되지 못합니다.** 코퍼스를 바꾸는 tool(사기 memory bank 조회 등)이 남은 탈출구입니다.
+
+## 4️⃣ MCP Transport 벤치마크 · 운영 관측
+
+Router/Retriever를 **MCP tool로 표준화**하고 3가지 transport를 동일 wall-clock 구간(`mcp_transport_latency_seconds`)으로 감싸 비교했습니다.
+
+| transport | mode | tool Δ P95 (ms) | vs direct | dist AUROC |
+|---|---|---:|---:|---:|
+| direct | REST | 7,889.8 | +0.0 | 0.8283 |
+| mcp | HTTP wrapper | 8,186.9 | **+42.6** | 0.8283 |
+| mcpnative | stdio/SSE | 8,106.1 | **+63.1** | 0.8283 |
+
+> **AUROC가 세 행에서 동일해야 정상**입니다 — 다르면 transport가 결과를 바꾼 것이므로 버그입니다. 이 불변량을 sweep의 sanity check로 썼습니다.
+>
+> 다만 `tool Δ`는 `total − base_retrieve`라 **analyzer 추론 수 초가 통째로 섞여** 있어 수십 ms짜리 transport overhead를 재기엔 부적합합니다(2.7초 vs 12.5ms). 정확한 값은 Prometheus의 `mcp p95`로 봐야 하며, 이는 **지표 정의 자체가 측정 가능성을 결정한다**는 사례로 기록했습니다.
+
 
 ## 1️⃣2️⃣ 서빙 평가 — 결과 산출 포맷
 
