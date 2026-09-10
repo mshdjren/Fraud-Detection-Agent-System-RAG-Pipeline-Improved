@@ -76,6 +76,7 @@ logger = structlog.get_logger()
 # Config (전부 ConfigMap에서 주입)
 # ===========================
 EXPERIMENT_CASE = os.getenv("EXPERIMENT_CASE", "pca_64_k100")
+RUN_ID = os.getenv("RUN_ID", "default")   # 상단 상수부에 추가
 
 # ── 모델/어댑터 ──────────────────────────────────────────────
 BASE_MODEL_ID   = os.getenv("BASE_MODEL_ID", "Qwen/Qwen2.5-0.5B-Instruct")
@@ -113,7 +114,9 @@ PLANNER_ENABLED_ACTIONS: Tuple[str, ...] = tuple(
 # 학습(GRPO_ONLY)이 SFT 없이 성립한 전제. 끄면 포맷 붕괴 + train-serve
 # mismatch가 동시에 발생한다. 진단 목적 외에는 끄지 말 것.
 CONSTRAINED_DECODE = os.getenv("PLANNER_CONSTRAINED_DECODE", "true").lower() == "true"
-
+# ★ [디버그] 생성 직전 user prompt 원문을 로그로 남긴다. 배관 검증이 끝나면
+#   false로 되돌릴 것 — 요청당 ~1KB가 stdout으로 나간다.
+PLANNER_LOG_PROMPT = os.getenv("PLANNER_LOG_PROMPT", "true").lower() == "true"
 # ── ★ [1-step 고정] ──────────────────────────────────────────
 # 학습된 정책은 step1만 학습했다(노트북 [K3] oracle_df["step"]==1).
 # 2-step으로 올리려면 프롬프트에 "이미 실행한 검색" 블록이 필요하고,
@@ -188,6 +191,10 @@ planner_valid_outputs  = Histogram("planner_valid_output_count", "유효 출력 
                                    buckets=[1, 3, 5, 9, 13, 21, 43])
 planner_ready_gauge    = Gauge("planner_model_ready", "1 if model loaded")
 
+planner_inflight = Gauge("planner_inflight_requests", "In-flight plan requests", ["run_id"])
+
+planner_build_info = Gauge("planner_build_info", "planner 서빙 구성 (값은 항상 1)",
+                           ["backend", "prompt_version", "stage", "constrained"])
 
 # ===========================
 # 모델 로드 (local_analyzer.py와 동일 패턴)
@@ -212,6 +219,9 @@ def load_model():
     else:
         _load_model_hf(t0)
     planner_ready_gauge.set(1)
+    planner_build_info.labels(
+    backend=MODEL_BACKEND, prompt_version=PLANNER_PROMPT_VERSION,
+    stage=PLANNER_STAGE, constrained=str(CONSTRAINED_DECODE).lower()).set(1)
 
 
 def _load_model_gguf(t0: float):
@@ -392,6 +402,7 @@ _PROMPT_BUILDERS = {
     "v1": "build_planner_user_prompt",
     "v2": "build_planner_user_prompt_v2",
     "v3": "build_planner_user_prompt_v3",
+    "v5": "build_planner_user_prompt_v5",
 }
 
 
@@ -412,19 +423,31 @@ def _check_prompt_module() -> None:
 
 def _build_user_prompt(*, test_features: Dict, cluster_id: int, distances: List[float],
                        persona: Optional[Dict], topk_feats: List[Dict],
-                       candidate_features: List[str]) -> str:
+                       candidate_features: List[str],
+                       wm_type: Optional[str] = None) -> str:
     fn = getattr(prompts, _PROMPT_BUILDERS[PLANNER_PROMPT_VERSION])
     kw: Dict[str, Any] = {}
-    if PLANNER_PROMPT_VERSION == "v3":
+
+    if PLANNER_PROMPT_VERSION == "v5":
+        # ★ v5는 cost를 프롬프트에 넣지 않는다 — Stage A(결정론 게이트)가 검색
+        #   여부를 이미 정했으므로 이 시점의 비용은 tool 간 동일하고, 옛 cost
+        #   값(1.2/1.5)을 노출하면 reward와 프롬프트가 다른 이야기를 하게 된다.
+        #   대신 wm_type(진단)과 support(필터 선택도)를 넘긴다.
+        kw = dict(actions=list(_active_action_names()),
+                  max_features=MAX_CONTEXTUAL_FEATURES,
+                  wm_type=wm_type)
+    elif PLANNER_PROMPT_VERSION == "v3":
         # ★ v3는 ACTIONS 블록을 호출자가 주입한다 — cost/action 목록이
         #   registry 단일 출처를 따르도록(프롬프트가 옛 cost를 말하는 사고 방지)
         _acts = list(_active_action_names())
         kw = dict(actions=_acts,
                   action_costs={a: float(ACTION_COST.get(a, 1.0)) for a in _acts},
                   max_features=MAX_CONTEXTUAL_FEATURES)
+
     return fn(test_features=test_features, cluster_id=cluster_id, distances=distances,
               persona=persona, topk_feats=topk_feats,
               candidate_features=candidate_features, **kw)
+
 
 
 # ===========================
@@ -460,6 +483,9 @@ def run_inference(user_prompt: str, valid_outputs: List[str],
                   meta: Optional[Dict] = None) -> str:
     """raw 생성 텍스트를 반환(파싱은 호출자). analyzer와 동일하게 _MODEL_LOCK 직렬화."""
     system = prompts.PLANNER_SYSTEM_PROMPT
+    # system = (prompts.PLANNER_SYSTEM_PROMPT_V5
+    #        if PLANNER_PROMPT_VERSION == "v5"
+    #        else prompts.PLANNER_SYSTEM_PROMPT)
     _t_q = time.perf_counter()
     with _MODEL_LOCK:
         _t_i = time.perf_counter()
@@ -667,13 +693,27 @@ async def startup():
                 logger.error("planner_action_space_mismatch",
                              trained=sorted(_tr), serving=sorted(_srv),
                              note="PLANNER_ENABLED_ACTIONS를 학습값에 맞출 것")
-            if _MANIFEST.get("stage") and _MANIFEST["stage"] != PLANNER_STAGE:
+            if _MANIFEST.get("stage") and \
+                str(_MANIFEST["stage"]).lower() != str(PLANNER_STAGE).lower():
                 logger.error("planner_manifest_stage_mismatch",
                              trained=_MANIFEST["stage"], serving=PLANNER_STAGE)
             logger.info("planner_manifest_loaded",
                         kernel=_MANIFEST.get("kernel"), lam=_MANIFEST.get("lam"),
                         tau=_MANIFEST.get("tau"), run_tag=_MANIFEST.get("run_tag"),
                         train_actions=_MANIFEST.get("train_actions"))
+            # ★ [디버그] 서빙이 실제로 생성 가능한 출력 집합. 학습 오라클과 대조하면
+            #   train/serve action space 불일치를 기동 시점에 잡을 수 있다.
+            try:
+                _sample_pool = ["sex", "source", "browser"]
+                _vo = build_planner_action_space(candidate_pool=_sample_pool,
+                                                stage=PLANNER_STAGE)
+                logger.info("planner_valid_output_sample",
+                            stage=PLANNER_STAGE, n=len(_vo),
+                            actions=sorted({a.get("action") for a in _vo}),
+                            head=[f"{a.get('action')}({'+'.join(a.get('features') or [])})"
+                                for a in _vo[:6]])
+            except Exception as e:
+                logger.warning("planner_valid_output_sample_failed", error=str(e))
         except Exception as _e:
             logger.warning("planner_manifest_read_failed", error=str(_e))
     else:
@@ -725,6 +765,16 @@ def _derive_prompt_inputs(req: PlanActionRequest):
 
 def _gate_stop(reason: str, req: PlanActionRequest, t0: float,
                pool: Optional[List[str]] = None) -> PlanActionResponse:
+    # ★ [디버그] 게이트 1~3은 지금까지 무음이었다 — 어느 게이트에서 몇 개가
+    #   죽는지가 "planner가 안 불린다"의 유일한 답이다.
+    logger.info("planner_gate_stop", reason=reason,
+                request_id=req.request_id, test_idx=req.test_idx,
+                nd_before=req.nd_before, wm_type=req.wm_type,
+                sufficiency=req.sufficiency,
+                round=req.round, expansion_used=req.expansion_used,
+                pool=pool or [], pool_in=req.candidate_features or [],
+                ambiguous_only=PLANNER_AMBIGUOUS_ONLY,
+                enabled=list(_active_action_names()))
     planner_action_total.labels(action="stop", source="gate").inc()
     planner_requests_total.labels(status="gate").inc()
     return PlanActionResponse(
@@ -737,121 +787,166 @@ def _gate_stop(reason: str, req: PlanActionRequest, t0: float,
 
 @app.post("/plan-action", response_model=PlanActionResponse)
 async def plan_action(req: PlanActionRequest):
-    import asyncio
-    t0 = time.time()
-
-    # ── 게이트 1: 학습 모집단(ambiguous-only) 밖이면 LLM 미호출 ──
-    if PLANNER_AMBIGUOUS_ONLY:
-        if req.sufficiency == "confident" or req.wm_type in (None, ""):
-            return _gate_stop("out_of_training_population(confident/no_wm_type)", req, t0)
-    # ── 게이트 2: 이미 재검색했으면 루프 가드 ──
-    if req.expansion_used or req.round >= PLANNER_MAX_STEPS:
-        return _gate_stop(
-            f"max_steps_reached(round={req.round}, max={PLANNER_MAX_STEPS})", req, t0)
-    # ── 게이트 3: 프롬프트 모듈 결손 ──
-    if not _PROMPT_OK["ok"]:
-        logger.error("planner_prompt_unavailable", reason=_PROMPT_OK["reason"])
-        return _gate_stop(f"prompt_unavailable:{_PROMPT_OK['reason']}", req, t0)
-
-    distances, topk_feats, pool = _derive_prompt_inputs(req)
-
-    # ── 게이트 4: 후보 pool이 비면 검색 tool이 실행 불가 → stop 확정 ──
-    valid_outputs = build_valid_outputs(pool)
-    planner_valid_outputs.observe(len(valid_outputs))
-    if len(valid_outputs) <= 1:
-        # evidence(agrees ∪ persona_match)가 비었거나 실행 가능한 categorical
-        # 축이 없다 → 검색할 근거가 없으므로 LLM 호출 없이 stop.
-        logger.info("planner_empty_pool_stop",
-                    request_id=req.request_id, wm_type=req.wm_type,
-                    agrees=req.agrees, persona_match=req.persona_match,
-                    candidate_features=req.candidate_features)
-        return _gate_stop("empty_candidate_pool(evidence-only policy)", req, t0, pool)
-
-    user_prompt = _build_user_prompt(
-        test_features=req.transaction, cluster_id=req.cluster_id, distances=distances,
-        persona=req.persona, topk_feats=topk_feats, candidate_features=pool,
-    )
-
-    meta: Dict[str, Any] = {}
+    planner_inflight.labels(run_id=RUN_ID).inc()
     try:
-        raw_text = await asyncio.to_thread(run_inference, user_prompt, valid_outputs, meta)
-    except Exception as e:
-        logger.error("planner_inference_failed", error_type=type(e).__name__, error=str(e))
-        planner_invalid_total.labels(reason="inference_error").inc()
-        planner_requests_total.labels(status="error").inc()
+        import asyncio
+        t0 = time.time()
+
+        # ── 게이트 1: 학습 모집단(ambiguous-only) 밖이면 LLM 미호출 ──
+        if PLANNER_AMBIGUOUS_ONLY:
+            if req.sufficiency == "confident" or req.wm_type in (None, ""):
+                return _gate_stop("out_of_training_population(confident/no_wm_type)", req, t0)
+        # ── 게이트 2: 이미 재검색했으면 루프 가드 ──
+        if req.expansion_used or req.round >= PLANNER_MAX_STEPS:
+            return _gate_stop(
+                f"max_steps_reached(round={req.round}, max={PLANNER_MAX_STEPS})", req, t0)
+        # ── 게이트 3: 프롬프트 모듈 결손 ──
+        if not _PROMPT_OK["ok"]:
+            logger.error("planner_prompt_unavailable", reason=_PROMPT_OK["reason"])
+            return _gate_stop(f"prompt_unavailable:{_PROMPT_OK['reason']}", req, t0)
+
+        distances, topk_feats, pool = _derive_prompt_inputs(req)
+
+        # ── 게이트 4: 후보 pool이 비면 검색 tool이 실행 불가 → stop 확정 ──
+        valid_outputs = build_valid_outputs(pool)
+        planner_valid_outputs.observe(len(valid_outputs))
+        if len(valid_outputs) <= 1:
+            # evidence(agrees ∪ persona_match)가 비었거나 실행 가능한 categorical
+            # 축이 없다 → 검색할 근거가 없으므로 LLM 호출 없이 stop.
+            logger.info("planner_empty_pool_stop",
+                        request_id=req.request_id, wm_type=req.wm_type,
+                        agrees=req.agrees, persona_match=req.persona_match,
+                        candidate_features=req.candidate_features)
+            return _gate_stop("empty_candidate_pool(evidence-only policy)", req, t0, pool)
+
+        user_prompt = _build_user_prompt(
+            test_features=req.transaction, cluster_id=req.cluster_id, distances=distances,
+            persona=req.persona, topk_feats=topk_feats, candidate_features=pool,
+            wm_type=req.wm_type, # ★ 추가 (없으면 None)
+        )
+
+        # ★ [디버그] 프롬프트 재료와 원문. pool_dropped는 controller가 보낸
+        #   축 중 CONTEXTUAL_CANDIDATE_FIELDS 필터에서 조용히 잘린 것 —
+        #   컬럼명 정규화(공백→언더스코어) 누락의 유일한 관측 지점이다.
+        logger.info(
+            "planner_prompt_built",
+            request_id=req.request_id, test_idx=req.test_idx,
+            prompt_version=PLANNER_PROMPT_VERSION,
+            wm_type=req.wm_type,
+            pool_in=req.candidate_features or [],
+            pool_used=pool,
+            pool_dropped=[f for f in (req.candidate_features or []) if f not in pool],
+            n_neighbors=len(req.neighbors or []), n_distances=len(distances),
+            neighbor_has_features=bool(topk_feats and topk_feats[0]),
+            has_persona=bool(req.persona),
+            n_valid=len(valid_outputs),
+            prompt_chars=len(user_prompt),
+            prompt=(user_prompt if PLANNER_LOG_PROMPT else None),
+        )
+
+        meta: Dict[str, Any] = {}
+        try:
+            raw_text = await asyncio.to_thread(run_inference, user_prompt, valid_outputs, meta)
+            # ★ [디버그] 모델이 실제로 무엇을 생성했는가.
+            #   제약 디코딩(trie/GBNF)이 걸려 있으면 valid_outputs 안에서만 나와야 한다.
+            #   여기서 stop이 보이는데 enabled에 없으면 그게 out_of_stage의 원인.
+            logger.info("planner_raw_output",
+                        raw=raw_text[:220] if raw_text else None,
+                        n_valid=len(valid_outputs or []),
+                        valid_head=[v[:60] for v in (valid_outputs or [])[:3]],
+                        constrained=CONSTRAINED_DECODE,
+                        backend=MODEL_BACKEND)
+        except Exception as e:
+            logger.error("planner_inference_failed", error_type=type(e).__name__, error=str(e))
+            planner_invalid_total.labels(reason="inference_error").inc()
+            planner_requests_total.labels(status="error").inc()
+            return PlanActionResponse(
+                request_id=req.request_id, action=PLANNER_FALLBACK_ACTION,
+                source="fallback", is_fallback=True,
+                invalid_reason=f"inference_error:{type(e).__name__}",
+                candidate_pool=pool, n_valid_outputs=len(valid_outputs),
+                enabled_actions=list(_active_action_names()),
+                latency_ms=(time.time() - t0) * 1000)
+
+        # ── 파싱 + stage registry 검증 ──
+        action, feats, scope, invalid = None, [], None, None
+        try:
+            d = json.loads(_extract_json(raw_text))
+            action = d.get("action") if isinstance(d.get("action"), str) else None
+            raw_feats = d.get("features", [])
+            feats = ([str(f) for f in raw_feats if isinstance(f, (str, int, float))]
+                    if isinstance(raw_feats, list) else [])
+            scope = d.get("scope") if isinstance(d.get("scope"), str) else None
+            if action is None:
+                invalid = "action_not_string"
+        except Exception as e:
+            invalid = f"json_parse_failed:{type(e).__name__}"
+
+        resolved = None
+        if invalid is None:
+            if action not in _active_action_names():
+                invalid = f"action_disabled:{action}"
+            else:
+                resolved = resolve_planner_action(action, features=feats, scope=scope,
+                                                candidate_pool=pool)
+                # ★ [디버그] out_of_stage / invalid의 정확한 원인.
+                #   parsed(모델 출력) vs enabled(서빙 허용) vs stage(registry)를
+                #   한 줄에 남겨야 어느 교집합에서 걸렸는지 즉시 보인다.
+                if not resolved.get("ok", True):
+                    logger.warning("planner_resolve_failed",
+                                   parsed_action=action, parsed_features=feats,
+                                   parsed_scope=scope,
+                                   reason=resolved.get("reason"),
+                                   enabled=list(_active_action_names()),
+                                   stage=PLANNER_STAGE,
+                                   stage_keys=list(planner_stage_actions()),
+                                   pool=pool)
+                if not resolved["valid"]:
+                    invalid = resolved["reason"]
+
+        if invalid is not None:
+            # ★ 제약 디코딩이 켜져 있으면 여기 오는 것 자체가 이상 신호다
+            #   (grammar/trie가 유효 집합 밖 생성을 막았어야 한다)
+            _lvl = logger.error if CONSTRAINED_DECODE else logger.warning
+            _lvl("planner_invalid_output", reason=invalid, raw=raw_text[:160],
+                constrained=CONSTRAINED_DECODE, n_valid=len(valid_outputs),
+                note=("제약 디코딩이 켜졌는데 무효 출력 — grammar/trie 미적용 의심"
+                    if CONSTRAINED_DECODE else None))
+            planner_invalid_total.labels(reason=invalid.split(":")[0]).inc()
+            planner_action_total.labels(action=PLANNER_FALLBACK_ACTION, source="fallback").inc()
+            planner_requests_total.labels(status="invalid").inc()
+            planner_latency.observe(time.time() - t0)
+            return PlanActionResponse(
+                request_id=req.request_id, action=PLANNER_FALLBACK_ACTION,
+                source="fallback", is_fallback=True, invalid_reason=invalid,
+                raw_text=raw_text[:200], candidate_pool=pool,
+                n_valid_outputs=len(valid_outputs),
+                enabled_actions=list(_active_action_names()),
+                latency_ms=(time.time() - t0) * 1000, **meta)
+
+        spec = resolved["spec"]
+        # ★ controller가 그대로 tool에 보낼 payload — registry가 만든다.
+        #   embedding/vec_index는 controller만 아는 값이라 여기서는 비운다.
+        payload = planner_tool_payload(
+            spec, features=resolved["features"], transaction=req.transaction,
+            cluster_id=req.cluster_id) if spec["tool_name"] else None
+
+        planner_action_total.labels(action=spec["action"], source="model").inc()
+        planner_requests_total.labels(status="success").inc()
+        planner_latency.observe(time.time() - t0)
+        logger.info("planner_decision", action=spec["action"], features=resolved["features"],
+                    scope=spec["scope"], cost=spec["cost"], stage=PLANNER_STAGE,
+                    nd_before=req.nd_before, wm_type=req.wm_type,
+                    n_valid=len(valid_outputs))
         return PlanActionResponse(
-            request_id=req.request_id, action=PLANNER_FALLBACK_ACTION,
-            source="fallback", is_fallback=True,
-            invalid_reason=f"inference_error:{type(e).__name__}",
+            request_id=req.request_id, action=spec["action"], features=resolved["features"],
+            scope=spec["scope"], cost=float(spec["cost"]), tool_name=spec["tool_name"],
+            tool_payload=payload, source="model", raw_text=raw_text[:200],
             candidate_pool=pool, n_valid_outputs=len(valid_outputs),
             enabled_actions=list(_active_action_names()),
-            latency_ms=(time.time() - t0) * 1000)
-
-    # ── 파싱 + stage registry 검증 ──
-    action, feats, scope, invalid = None, [], None, None
-    try:
-        d = json.loads(_extract_json(raw_text))
-        action = d.get("action") if isinstance(d.get("action"), str) else None
-        raw_feats = d.get("features", [])
-        feats = ([str(f) for f in raw_feats if isinstance(f, (str, int, float))]
-                 if isinstance(raw_feats, list) else [])
-        scope = d.get("scope") if isinstance(d.get("scope"), str) else None
-        if action is None:
-            invalid = "action_not_string"
-    except Exception as e:
-        invalid = f"json_parse_failed:{type(e).__name__}"
-
-    resolved = None
-    if invalid is None:
-        if action not in _active_action_names():
-            invalid = f"action_disabled:{action}"
-        else:
-            resolved = resolve_planner_action(action, features=feats, scope=scope,
-                                              candidate_pool=pool)
-            if not resolved["valid"]:
-                invalid = resolved["reason"]
-
-    if invalid is not None:
-        # ★ 제약 디코딩이 켜져 있으면 여기 오는 것 자체가 이상 신호다
-        #   (grammar/trie가 유효 집합 밖 생성을 막았어야 한다)
-        _lvl = logger.error if CONSTRAINED_DECODE else logger.warning
-        _lvl("planner_invalid_output", reason=invalid, raw=raw_text[:160],
-             constrained=CONSTRAINED_DECODE, n_valid=len(valid_outputs),
-             note=("제약 디코딩이 켜졌는데 무효 출력 — grammar/trie 미적용 의심"
-                   if CONSTRAINED_DECODE else None))
-        planner_invalid_total.labels(reason=invalid.split(":")[0]).inc()
-        planner_action_total.labels(action=PLANNER_FALLBACK_ACTION, source="fallback").inc()
-        planner_requests_total.labels(status="invalid").inc()
-        planner_latency.observe(time.time() - t0)
-        return PlanActionResponse(
-            request_id=req.request_id, action=PLANNER_FALLBACK_ACTION,
-            source="fallback", is_fallback=True, invalid_reason=invalid,
-            raw_text=raw_text[:200], candidate_pool=pool,
-            n_valid_outputs=len(valid_outputs),
-            enabled_actions=list(_active_action_names()),
             latency_ms=(time.time() - t0) * 1000, **meta)
-
-    spec = resolved["spec"]
-    # ★ controller가 그대로 tool에 보낼 payload — registry가 만든다.
-    #   embedding/vec_index는 controller만 아는 값이라 여기서는 비운다.
-    payload = planner_tool_payload(
-        spec, features=resolved["features"], transaction=req.transaction,
-        cluster_id=req.cluster_id) if spec["tool_name"] else None
-
-    planner_action_total.labels(action=spec["action"], source="model").inc()
-    planner_requests_total.labels(status="success").inc()
-    planner_latency.observe(time.time() - t0)
-    logger.info("planner_decision", action=spec["action"], features=resolved["features"],
-                scope=spec["scope"], cost=spec["cost"], stage=PLANNER_STAGE,
-                nd_before=req.nd_before, wm_type=req.wm_type,
-                n_valid=len(valid_outputs))
-    return PlanActionResponse(
-        request_id=req.request_id, action=spec["action"], features=resolved["features"],
-        scope=spec["scope"], cost=float(spec["cost"]), tool_name=spec["tool_name"],
-        tool_payload=payload, source="model", raw_text=raw_text[:200],
-        candidate_pool=pool, n_valid_outputs=len(valid_outputs),
-        enabled_actions=list(_active_action_names()),
-        latency_ms=(time.time() - t0) * 1000, **meta)
+    finally:
+        planner_inflight.labels(run_id=RUN_ID).dec()
 
 
 @app.post("/debug/valid-outputs")
@@ -875,14 +970,19 @@ async def health():
 
 @app.get("/ready")
 async def ready():
-    ok = _model is not None and _PROMPT_OK["ok"] and bool(_active_action_names())
-    body = {"ready": ok, "model_loaded": _model is not None,
-            "prompt_ok": _PROMPT_OK["ok"], "prompt_reason": _PROMPT_OK["reason"],
-            "stage": PLANNER_STAGE, "prompt_version": PLANNER_PROMPT_VERSION,
-            "enabled_actions": list(_active_action_names()),
-            "constrained": CONSTRAINED_DECODE}
-    return Response(content=json.dumps(body), status_code=200 if ok else 503,
-                    media_type="application/json")
+    # ok = _model is not None and _PROMPT_OK["ok"] and bool(_active_action_names())
+    # body = {"ready": ok, "model_loaded": _model is not None,
+    #         "prompt_ok": _PROMPT_OK["ok"], "prompt_reason": _PROMPT_OK["reason"],
+    #         "stage": PLANNER_STAGE, "prompt_version": PLANNER_PROMPT_VERSION,
+    #         "enabled_actions": list(_active_action_names()),
+    #         "constrained": CONSTRAINED_DECODE}
+    # return Response(content=json.dumps(body), status_code=200 if ok else 503,
+    #                 media_type="application/json")
+    # 권장: action space는 warning, readiness는 모델·프롬프트만
+    ok = _model is not None and _PROMPT_OK["ok"]
+    if not ok:
+        logger.error("planner_no_active_actions",
+                    note="요청 시 fallback으로 처리됨 — ConfigMap 확인 필요")
 
 
 @app.get("/config")

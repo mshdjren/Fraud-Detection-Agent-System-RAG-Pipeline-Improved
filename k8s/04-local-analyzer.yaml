@@ -268,6 +268,12 @@ spec:
             configMapKeyRef:
               name: anomaly-config
               key: SUFFICIENCY_BOUNDARY_HIGH
+        - name: RUN_ID
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: RUN_ID
+              optional: true
 
         volumeMounts:
         - name: data-volume

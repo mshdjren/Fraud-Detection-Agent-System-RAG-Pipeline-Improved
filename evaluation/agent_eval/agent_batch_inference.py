@@ -157,7 +157,7 @@ async def call_agent_detect(
             "planner_scope", "planner_cost", "planner_source",
             "planner_is_fallback", "planner_invalid_reason",
             "planner_latency_ms", "planner_ttft_ms", "planner_n_out_tokens",
-            "planner_nd_mode", "planner_backend",
+            "planner_nd_mode", "planner_backend", "planner_gate_reason",
         )
         for _k in _planner_keys:
             result[f"_{_k}"] = next((r.get(_k) for r in reversed(_num_rounds)

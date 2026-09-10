@@ -143,6 +143,31 @@ spec:
     # - agent_path_total{path}                          # fast+none / deep+expand / deep+reroute 등
     # - agent_loop_budget_exceeded_total
     # - agent_rounds_per_request_bucket
+# 4-B. Local Planner PodMonitoring (★ 누락되어 있던 것)
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: local-planner-monitoring
+  namespace: elastic
+  labels:
+    app: local-planner
+    tier: inference
+spec:
+  selector:
+    matchLabels:
+      app: local-planner
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics
+    # planner_requests_total{status}          # success | gate | invalid | error
+    # planner_action_total{action, source}    # source: model | gate | fallback
+    # planner_invalid_total{reason}           # ★ 제약 디코딩 정상이면 0이어야 함
+    # planner_latency_seconds_bucket
+    # planner_valid_output_count_bucket       # state별 유효 출력 수
+    # planner_output_tokens_bucket
+    # planner_inflight_requests{run_id}
 
 # 5. Orchestrator PodMonitoring (메트릭 목록 갱신 — pipeline_* 계열은 실제로 없음)
 ---
@@ -169,6 +194,7 @@ spec:
     # - service_latency_seconds_bucket{service}
     # - retry_attempts_total{service, attempt}
     # - validation_errors_total{field}
+
 
 # 6. Locust PodMonitoring — 로드테스트 시에만 배포되는 job, 상시 아님
 ---

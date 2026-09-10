@@ -348,7 +348,7 @@ plan_latency        = Histogram("plan_latency_seconds", "Planner latency",
                                 buckets=[0.1, 0.3, 0.5, 1.0, 2.0, 5.0])
 detect_requests_total = Counter("detect_requests_total", "Agent /detect requests", ["status", "track"])
 detect_latency       = Histogram("detect_latency_seconds", "End-to-end agent loop latency",
-                                  buckets=[0.2, 0.5, 1.0, 2.0, 5.0, 10.0])
+                                     buckets=[0.5, 1, 2, 5, 10, 20, 30, 60, 120, 180, 300])
 agent_round_total    = Counter("agent_round_total", "Agent loop rounds executed", ["action"])
 agent_path_total     = Counter("agent_path_total", "Full agent path signature per request", ["path"])
 agent_loop_budget_exceeded_total = Counter(
@@ -357,6 +357,9 @@ agent_loop_budget_exceeded_total = Counter(
 agent_rounds_histogram = Histogram(
     "agent_rounds_per_request", "analyze round count per /detect call",
     buckets=[0, 1, 2, 3, 4])
+analyzer_skip_total = Counter("analyzer_skip_total",
+                              "analyzer LLM 호출을 건너뛴 횟수", ["reason"])
+# reason: confident | evaluator_once
 
 
 # ============================================================
@@ -1130,6 +1133,7 @@ async def node_analyze(state: AgentState) -> AgentState:
             logger.info("node_analyze_skipped_confident",
                         request_id=state.get("request_id", "?"),
                         round=current_round, nd=round(_nd_skip, 4))
+            analyzer_skip_total.labels(reason="confident").inc()
             return {
                 "analyzer": raw,
                 "analyzer_history": [{"round": current_round,
@@ -1199,14 +1203,21 @@ async def node_analyze(state: AgentState) -> AgentState:
         # ── [진단] analyzer 응답 raw 확인 ───────────────────────────
         # analyzer가 실제로 반환한 값 — controller의 normalize 전 원본
         # cls/sufficiency/what_missing 키가 있는지, 값이 예상 범위인지
+        # ★ [디버그] pool 공급원 — analyzer가 evidence 축을 실제로 돌려주는가.
+        #   agrees/persona_match가 비면 controller가 empty_pool로 stop한다.
+        #   키 자체가 없으면 analyzer 이미지/스키마가 구버전(v3 미적용)이다.
         logger.info(
-            "node_analyze_response",
-            raw_keys=list(raw.keys()) if isinstance(raw, dict) else type(raw).__name__,
-            cls=raw.get("cls") if isinstance(raw, dict) else None,
-            sufficiency=raw.get("sufficiency") if isinstance(raw, dict) else None,
-            what_missing=raw.get("what_missing") if isinstance(raw, dict) else None,
-            round=state.get("round", 0),
-            analyzer_call_ms=round((time.time() - _t0) * 1000, 1),
+            "node_analyze_evidence",
+            request_id=state.get("request_id", "?"),
+            has_axes=all(k in (raw or {}) for k in ("agrees", "persona_match")),
+            agrees=(raw or {}).get("agrees"),
+            differs=(raw or {}).get("differs"),
+            deviant=(raw or {}).get("deviant"),
+            rare=(raw or {}).get("rare"),
+            persona_match=(raw or {}).get("persona_match"),
+            spread_tag=(raw or {}).get("spread_tag"),
+            wm_type=(raw or {}).get("wm_type"),
+            wm_axes=(raw or {}).get("wm_axes"),
         )
     except httpx.TimeoutException as e:
         # ANALYZER_TIMEOUT(기본 120s) 안에 응답을 못 받은 경우 — GGUF 추론이
@@ -1920,6 +1931,23 @@ async def _node_plan_local(state: AgentState) -> Optional[Dict]:
         "round":         state.get("round", 0),
         "expansion_used": bool(state.get("expansion_used", False)),
     }
+
+    # ★ [디버그] planner가 실제로 무엇을 받았는가. 프롬프트 재료가 여기서
+    #   비어 있으면 planner 쪽 로그만 봐서는 원인을 알 수 없다.
+    _nb_p = payload["neighbors"]
+    logger.info(
+        "planner_request_payload",
+        request_id=payload["request_id"], test_idx=payload["test_idx"],
+        pool=_pool, pool_n=len(_pool),
+        agrees=_ev["agrees"], persona_match=_ev["persona_match"],
+        wm_type=payload["wm_type"], sufficiency=payload["sufficiency"],
+        nd_before=payload["nd_before"], top1_distance=payload["top1_distance"],
+        n_neighbors=len(_nb_p),
+        neighbor_has_features=bool(_nb_p and (_nb_p[0] or {}).get("features")),
+        has_persona=bool(payload["persona"]),
+        tx_keys=sorted((payload["transaction"] or {}).keys()),
+        round=payload["round"], expansion_used=payload["expansion_used"],
+    )
     t0 = time.time()
     resp: Dict = {}
     try:
@@ -1947,6 +1975,25 @@ async def _node_plan_local(state: AgentState) -> Optional[Dict]:
                                 "invalid_reason": f"out_of_stage:{action}"}
 
     latency_ms = (time.time() - t0) * 1000
+    # ★ [디버그] planner가 무엇을 돌려줬는가 — controller 관점의 최종 수용값.
+    #   planner 쪽 planner_decision과 대조해 HTTP 경계에서 손실이 없는지 본다.
+    logger.info(
+        "planner_response_received",
+        request_id=state.get("request_id"),
+        action=action, features=resp.get("features"), scope=resp.get("scope"),
+        source=resp.get("source"), is_fallback=bool(resp.get("is_fallback")),
+        invalid_reason=resp.get("invalid_reason"),
+        gate_reason=resp.get("gate_reason"),
+        n_valid_outputs=resp.get("n_valid_outputs"),
+        candidate_pool=resp.get("candidate_pool"),
+        raw_text=resp.get("raw_text"),
+        prompt_version=resp.get("prompt_version"),
+        planner_stage=resp.get("stage"), constrained=resp.get("constrained"),
+        n_out_tokens=resp.get("n_output_tokens"),
+        planner_latency_ms=round(latency_ms, 1),
+        route_next=("research" if action in planner_action_names()
+                    and action != "stop" else "finalize"),
+    )
     plan_action_total.labels(action=action).inc()
     agent_round_total.labels(action=action).inc()
     plan_latency.observe(latency_ms / 1000)
@@ -2060,7 +2107,26 @@ async def node_expand(state: AgentState) -> AgentState:
         # ★ [OBS] 예외를 삼키면 nd 불변이 "재검색이 효과 없음"으로 오독된다.
         updates["_research_error"] = f"expand:{type(e).__name__}:{str(e)[:120]}"
         updates["_patchcore_status"] = "tool_failed"
-    updates["_research_ms"] = round((time.time() - _t0) * 1000, 1)   # ★ round1 재검색 시간
+    updates["_research_ms"] = round((time.time() - _t0) * 1000, 1)
+    # ★ [디버그] tool이 실제로 다른 걸 가져왔는가. zero_hit / support=0이면
+    #   재검색은 "실행됐지만 결과가 없는" 상태이고 nd는 그대로다.
+    _nd_b = (state.get("nd_history") or [None])[-1]
+    _nd_a = (updates.get("nd_history") or [None])[-1]
+    logger.info(
+        "planner_research_done",
+        request_id=state.get("request_id"), action=action,
+        features=resolved.get("features"), tool=spec.get("tool_name"),
+        tool_mode=PLANNER_TOOL_MODE,
+        nd_before=_nd_b, nd_after=_nd_a,
+        nd_delta=(round(_nd_a - _nd_b, 4)
+                  if isinstance(_nd_b, (int, float)) and isinstance(_nd_a, (int, float))
+                  else None),
+        support=_result_meta.get("support"), zero_hit=_result_meta.get("zero_hit"),
+        features_used=_result_meta.get("features_used"),
+        n_neighbors=len(updates.get("neighbors") or []),
+        research_error=updates.get("_research_error"),
+        research_ms=updates["_research_ms"],
+    )   # ★ round1 재검색 시간
     return updates
 
 
@@ -2128,7 +2194,7 @@ async def node_finalize(state: AgentState) -> AgentState:
         reason = "accept_verdict"
     elif state.get("action") == "stop":
         reason = "planner_stop"                    # ★ [Planner Serving]
-    elif state.get("action") in ("global_knn", "contextual_knn"):
+    elif state.get("action") in ("global_knn", "contextual_knn", "attribute_knn"):
         reason = "planner_research_done"
     elif state.get("round", 0) >= state.get("budget", AGENT_MAX_ROUNDS) \
             and state.get("action") in ("expand_within_cluster", "reroute_cross_cluster"):

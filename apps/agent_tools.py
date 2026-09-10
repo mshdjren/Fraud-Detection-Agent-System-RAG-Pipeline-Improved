@@ -331,6 +331,7 @@ PLANNER_STAGE_ACTIONS: Dict[str, tuple] = {
     # stage3 = scope 재도입
     "stage3": ("stop", "global_knn", "contextual_knn", "attribute_knn",
                "contextual_knn@cluster"),
+    "grpo_only": ("stop", "contextual_knn", "attribute_knn"),
 }
 
 

@@ -12,17 +12,17 @@
 
 **Multi-Cluster Memory Bank 이상탐지 알고리즘(EAAI 2025, 공동 1저자)을 GKE 위에서 운영 가능한 AgentRAG 시스템으로 확장한 엔드투엔드 프로젝트**입니다.
 
-Tabular 이상 거래를 `retrieval → 거리 기반 이상탐지 → 판정 근거 설명 → 선택적 재검색` 흐름으로 처리하며, Router · Retriever · Evaluator · Planner · Orchestrator를 MSA로 분리해 배포했습니다.
+Tabular 이상 거래를 `retrieval → 거리 기반 이상탐지 → 판정 근거 설명 → 선택적 재검색` 흐름으로 처리하며, Router · Retriever · LLM Evaluator - Planner · Orchestrator를 MSA로 분리해 배포했습니다.
 
 프로젝트는 세 단계로 진행됐고, 각 단계의 결론이 다음 단계의 설계 전제가 됩니다.
 
-| 단계 | 질문 | 결론 |
+| 단계 | 목표 | 결론 |
 |---|---|---|
-| **1. RAG 시스템 구축** | 12만 건 memory bank를 free-tier GKE에서 어떻게 서빙하는가 | Percolate 라우팅 + Coreset 10% + BBQ 양자화 → **메모리 −89%, AUROC 손실 0.4%p** |
-| **2. forwardRAG → Evaluator** | 이상 판정에 LLM을 어디까지 쓸 것인가 | 6회 독립 측정 결과 **판정 신호는 거리(nd)가 유일** → 출력 자유도 5키 → 1키, 3B → 0.5B |
-| **3. Agent 시스템** | 재검색 계획에 LLM이 필요한가, 그 값어치는 얼마인가 | 전수 counterfactual 오라클(130,883 rollout)로 **상한을 먼저 측정** → 게이트는 결정론, tool 선택만 LLM |
+| **1. RAG 시스템 구축** | 1200만 건 정상 벡터로 구성된 memory bank를 free-tier GKE에서의 효율적 서빙 | Percolate 라우팅 + Coreset 10% + BBQ 양자화 → **메모리 −89%, AUROC 손실 0.4%p** |
+| **2. 이상판단 → 검색 결과 Evaluator** | 이상 판정에 LLM을 어디까지 쓸 것인가 | 서빙 제약에 따른 Qwen2.5-0.5B의 **검색 결과 판단 성능 5%p 향상**|
+| **3. Agent 시스템** | 재검색 계획에 LLM이 필요한가, 그 값어치는 얼마인가 | GRPO trained plannner 기반 재검색 tool 설계로 **검색 성능 및 AUROC**  |
 
-> 세 단계 모두 **"LLM을 넣기 전에 넣을 가치가 있는지부터 측정한다"** 는 같은 방법론을 씁니다. 그 결과 두 번(Evaluator 판정, Planner 게이트)은 LLM을 빼는 쪽이 옳다는 결론이 나왔고, 그 판단 근거를 정량적으로 남긴 것이 이 프로젝트의 핵심 산출물입니다.
+> 세 단계 모두 **"LLM을 넣기 전에 넣을 가치가 있는지부터 측정한다"** 는 같은 방법론을 씁니다. 그 결과 Evaluator 판정, Planner 게이트에 필요한 상황 및 데이터에만 LLM을 개입시키는 결론과, 그 판단 근거를 정량적으로 남긴 것이 이 프로젝트의 핵심 산출물입니다.
 
 ---
 
@@ -33,30 +33,27 @@ Test Transaction
       ↓
 [Router]      Percolate Query → 클러스터 매칭 (rank1=percolate, rank2~5=centroid)
       ↓
-[Retriever]   Filtered HNSW (cluster-scoped, k=3) → nd_before / 이웃 evidence
+[Retriever]   Matching cluster-Filtered HNSW (cluster-scoped, k=3)
       ↓
 [Evaluator]   LLM 1회 — what_missing (cluster_mismatch / neighbor_insufficient / accept)
       ↓
-   sufficiency = f(nd)  ── confident(60.4%) → 종료, 이후 LLM 호출 없음
-      ↓ ambiguous (39.6%)
-┌──────────────────────────────────────────────────────────────┐
-│ [Stage A] 결정론 게이트  |nd − τ| 상위 B%           비용 0     │  ← admission control
+   confident = nd <0.3 or nd >0.5(60.4%) → 판단 종료
+      ↓ ambiguous = 0.3<=nd<=0.55(39.6%)
+┌─[AgentRAG Planner]───────────────────────────────────────────┐
+│ [Stage A] 결정론 게이트  |nd − τ| 상위 B%           비용 0   │  ← admission control
 │ [Stage B] Planner(LLM)  think → tool + feature 선택          │  ← GRPO 학습 대상
-│              contextual_knn(f≤2)  |  attribute_knn(f≤2)      │
+│           Re-search tools : contextual_knn |  attribute_knn  │
 └──────────────────────────────────────────────────────────────┘
       ↓
 [Orchestrator] nd_final vs τ → 최종 판정 + round_log / termination
 ```
 <img src="picture/Langgraph.jpg" width="100%">
 
-`PIPELINE_MODE=forward` 전환 시 동일 인프라에서 **정적 forwardRAG baseline**(route → retrieve → analyze 1회)으로 동작합니다 — Agent의 가치를 같은 문제지에서 A/B 측정하기 위한 구조입니다.
-
----
 ---
 
 # Part 1. RAG 시스템 구축
 
-> 목표는 **"12만 건 memory bank를 free-tier GKE(e2, 메모리 2GB 제한)에서 P95 300ms 안에 서빙"** 입니다. 검색 축을 하나씩 sweep해 운영점을 고정하고, 그 위에서 LLM 실험을 진행했습니다. 검색이 흔들리면 이후 MCP·tool gate 측정이 전부 교란되기 때문입니다.
+> 목표는 **"1200만 건 memory bank를 free-tier GKE(e2, 메모리 2GB 제한)에서 P95 300ms 안에 서빙"** 입니다. 검색 축을 하나씩 sweep해 최적 운영점을 도출하고, 그 위에서 LLM 실험을 진행했습니다. 
 
 ## 1️⃣ Percolate Query-based Cluster Routing
 

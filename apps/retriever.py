@@ -57,7 +57,7 @@ EXPERIMENT_LABEL = os.getenv("EXPERIMENT_LABEL", "baseline")  # Prometheus label
 # ★ SKIP_ANALYZER=true: cluster_id filter 제거 → 전체 인덱스 순수 vec 검색
 SKIP_ANALYZER = os.getenv("SKIP_ANALYZER", "false").lower() == "true"
 
-RUN_ID = os.getenv("RUN_ID", EXPERIMENT_LABEL)
+RUN_ID = os.getenv("RUN_ID", "default")   # 상단 상수부에 추가
 # ★ ES 8.18 rescore_vector — 양자화 후보를 원본 float32로 재채점
 #   >1.0 일 때만 블록을 붙인다 (f32 인덱스에는 불필요)
 RETRIEVER_OVERSAMPLE = float(os.getenv("RETRIEVER_OVERSAMPLE", "0"))
@@ -96,12 +96,14 @@ from prometheus_client import Counter, Histogram, Gauge, make_asgi_app
 
 search_latency = Histogram(
     "retriever_search_latency_ms", "Search latency per request",
-    ["search_mode", "index_name", "experiment_label"],
+    ["search_mode", "index_name", "experiment_label", "run_id"],
     buckets=[10, 50, 100, 200, 500, 1000, 2000, 5000]
 )
 page_fault_delta = Histogram(
     "retriever_page_fault_delta", "Major page fault delta per request",
-    ["index_name"],
+    # ★ run_id 추가 — 같은 부하를 variant별로 두 번 돌려 비교하려면 필수.
+    #   run_id 없이는 f32/bbq 시계열이 같은 라인에 겹쳐 구분 불가.
+    ["index_name", "run_id"],
     buckets=[0, 1, 2, 5, 10, 50, 100]
 )
 
@@ -120,6 +122,10 @@ top1_distance = Histogram(
     ["index_name", "experiment_label"],
     buckets=[0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.5, 3.0, 4.0]
 )
+
+# ★ [부하 검증] 동시 처리 요청 수. p95만으로는 "처리량 한계"인지 "단건 지연"인지
+#   구분이 안 된다. in-flight가 users와 함께 오르면 큐잉, 평평하면 단건 지연.
+inflight = Gauge("retriever_inflight_requests", "In-flight retrieve requests", ["run_id"])
 
 skip_analyzer_search_counter = Counter(
     "retriever_skip_analyzer_total", "retriever_skip_analyzer_total_count",  ['index_name', 'experiment_label'] 
@@ -806,13 +812,20 @@ def search(
                      note="0건 반환 — 호출자는 nd를 새로 계산하지 말고 nd_before를 유지할 것")
 
     # ── Prometheus & Metrics 기록 ──
-    search_latency.labels(
-        search_mode=SEARCH_MODE,
-        index_name=vec_index,
-        experiment_label=EXPERIMENT_LABEL,
-    ).observe(elapsed)
+    # search_latency.labels(
+    #     search_mode=SEARCH_MODE,
+    #     index_name=vec_index,
+    #     experiment_label=EXPERIMENT_LABEL,
+    # ).observe(elapsed)
 
-    page_fault_delta.labels(index_name=vec_index).observe(pf_delta)
+    # page_fault_delta.labels(index_name=vec_index).observe(pf_delta)
+
+    # page_fault_delta.labels(index_name=vec_index).observe(...)
+    page_fault_delta.labels(index_name=vec_index, run_id=RUN_ID).observe(pf_delta)
+
+    # search_latency.labels(search_mode=..., index_name=..., experiment_label=...).observe(...)
+    search_latency.labels(search_mode=SEARCH_MODE, index_name=vec_index,
+                        experiment_label=EXPERIMENT_LABEL, run_id=RUN_ID).observe(elapsed)
 
     if dist_top1 is not None:            # ★ [B1] 0건이면 히스토그램을 오염시키지 않는다
         top1_distance.labels(
@@ -892,31 +905,34 @@ async def retrieve(req: RetrieveRequest):
     cluster_ids: router top-k cluster ID 목록
       - SKIP_ANALYZER=true 시 [] 전달 → 전체 인덱스 검색
     """
-    
-    # ★ [B4] 조용히 무시되던 파라미터를 명시적으로 알린다.
-    if req.filter_clauses:
-        logger.warning("filter_clauses_ignored", n=len(req.filter_clauses),
-                       note="현재 dispatch는 field_filters(dict)만 사용 — "
-                            "raw term 절이 필요하면 field_filters로 변환해 보낼 것")
-    if req.attribute_mode and req.should_boost:
-        # ★ 두 모드가 동시에 오면 attribute(hard filter)가 이기고 should_boost는
-        #   무시된다 — 조용히 넘어가면 contextual/attribute 비교 실험이 오염된다.
-        logger.warning("should_boost_ignored_by_attribute_mode",
-                       should_boost=list(req.should_boost),
-                       field_filters=list(req.field_filters or {}))
+    inflight.labels(run_id=RUN_ID).inc()
+    try:
+        # ★ [B4] 조용히 무시되던 파라미터를 명시적으로 알린다.
+        if req.filter_clauses:
+            logger.warning("filter_clauses_ignored", n=len(req.filter_clauses),
+                        note="현재 dispatch는 field_filters(dict)만 사용 — "
+                                "raw term 절이 필요하면 field_filters로 변환해 보낼 것")
+        if req.attribute_mode and req.should_boost:
+            # ★ 두 모드가 동시에 오면 attribute(hard filter)가 이기고 should_boost는
+            #   무시된다 — 조용히 넘어가면 contextual/attribute 비교 실험이 오염된다.
+            logger.warning("should_boost_ignored_by_attribute_mode",
+                        should_boost=list(req.should_boost),
+                        field_filters=list(req.field_filters or {}))
 
-    return await asyncio.to_thread(
-        search,
-        req.embedding,
-        req.cluster_ids,
-        req.vec_index,
-        req.top_k,
-        req.field_filters,      # ★ [V3] contrast 축 고정 필터
-        req.should_boost,       # ★ [GRPO] contextual_knn soft boost
-        req.attribute_mode,
-        req.attribute_keyword_fallback,
-        req.return_support,     # ★ [B4] 이제 실제로 전달된다
-    )
+        return await asyncio.to_thread(
+            search,
+            req.embedding,
+            req.cluster_ids,
+            req.vec_index,
+            req.top_k,
+            req.field_filters,      # ★ [V3] contrast 축 고정 필터
+            req.should_boost,       # ★ [GRPO] contextual_knn soft boost
+            req.attribute_mode,
+            req.attribute_keyword_fallback,
+            req.return_support,     # ★ [B4] 이제 실제로 전달된다
+        )
+    finally:
+        inflight.labels(run_id=RUN_ID).dec()
 
 @app.post("/retrieve-batch")
 async def retrieve_batch(reqs: List[RetrieveRequest]):

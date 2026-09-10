@@ -258,7 +258,7 @@ data:
 
   RUN_ID: "smoke-bbq-cs100"
 
-  PLANNER_STAGE:  "stage2"
+  PLANNER_STAGE:  "grpo_only"
   MAX_CONTEXTUAL_FEATURES:  "2"
   COST_RESEARCH:  "1.0"
   ATTR_TOP_K: "5"

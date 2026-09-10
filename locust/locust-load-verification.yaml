@@ -1,0 +1,191 @@
+# ============================================================
+# locust-load-verification.yaml
+# ============================================================
+# 부하로만 검증 가능한 3요소를 위한 Job.
+#
+#   ① 압축 이득의 인과   — page fault ↔ retriever p95
+#   ② 포화점             — 어느 RPS에서 p95가 꺾이는가
+#   ③ 동시성 하 LLM 붕괴 — in-flight × latency 비선형
+#
+# ★ 기존 locust-stage-run.yaml과의 차이
+#   · Stage 1~3은 "기능별 분리 측정"이 목적 (users 10 고정)
+#   · 이 Job은 "같은 시나리오를 variant별로 2회" 돌려 **비교**하는 것이 목적
+#   · LoadTestShape로 계단을 자동 생성 → 대시보드 x축이 명확한 3구간이 된다
+#   · --prometheus-port 로 Locust 지표를 스크레이프 대상으로 노출
+#
+# ★ 실행 순서 (반드시 이 순서)
+#   1) docs 노드 메모리를 조인다 — 안 하면 f32도 pf=0이라 두 결과가 같아진다
+#        kubectl -n elastic patch elasticsearch elasticsearch-ha --type merge -p \
+#          '{"spec":{"nodeSets":[{"name":"docs","podTemplate":{"spec":{"containers":
+#           [{"name":"elasticsearch","resources":{"limits":{"memory":"2Gi"}}}]}}}]}}'
+#   2) RUN_ID=c-quant-f32     로 인덱스 전환 후 이 Job 실행
+#   3) RUN_ID=c-quant-bbqos3  로 인덱스 전환 후 이 Job 재실행
+#   4) Grafana에서 $run_id 전환하며 스크린샷 2장
+# ============================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: locust-shape
+  namespace: elastic
+data:
+  # ★ LoadTestShape — 계단을 코드로 고정한다.
+  #   --users/--spawn-rate 플래그로는 계단이 안 생겨 대시보드에서
+  #   "어느 RPS에서 꺾였는지"를 읽을 수 없다.
+  shape.py: |
+    import os
+    from locust import LoadTestShape
+
+    # ★ locust-plugins의 prometheus exporter를 여기서 import하면
+    #   -f 에 파일 경로를 적을 필요가 없다(설치 경로가 파이썬 버전마다 다름).
+    #   이 import만으로 /metrics 엔드포인트가 web UI에 등록된다.
+    try:
+        from locust_plugins.listeners import prometheus_exporter  # noqa: F401
+        print("[shape] locust-plugins prometheus exporter loaded")
+    except ImportError:
+        print("[shape] WARN: locust-plugins 없음 — Locust 지표가 수집되지 않습니다")
+
+    _D = int(os.getenv("STAGE_DURATION", "300"))
+
+
+    class SteppedLoad(LoadTestShape):
+        """light → medium → heavy 3단계."""
+        stages = [
+            {"duration": _D * 1, "users": 5,  "spawn_rate": 1},
+            {"duration": _D * 2, "users": 20, "spawn_rate": 2},
+            {"duration": _D * 3, "users": 50, "spawn_rate": 5},
+        ]
+
+        def tick(self):
+            t = self.get_run_time()
+            for s in self.stages:
+                if t < s["duration"]:
+                    return (s["users"], s["spawn_rate"])
+            return None
+---
+# ★ Locust 내장 Prometheus exporter 스크레이프
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: locust-load-monitoring
+  namespace: elastic
+  labels:
+    app: locust-load
+spec:
+  selector:
+    matchLabels:
+      app: locust-load
+  endpoints:
+  - port: metrics
+    interval: 15s          # 계단 전환을 놓치지 않으려면 15s 이하
+    path: /metrics
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: locust-load-verification
+  namespace: elastic
+  labels:
+    app: locust-load
+    purpose: load-verification
+spec:
+  backoffLimit: 0          # 부하 실험은 재시도하면 계단이 겹쳐 해석 불가
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: locust-load
+        purpose: load-verification
+    spec:
+      restartPolicy: Never
+      # 부하 생성기가 대상 서비스와 CPU를 다투면 측정이 오염된다
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-role
+                operator: In
+                values: ["batch-node"]
+      containers:
+      - name: locust
+        image: locustio/locust:2.24.0
+        ports:
+        - name: metrics
+          containerPort: 9646
+        env:
+        # ★ Stage 4(PageFaultProbe, wait_time=0)가 page fault를 가장 확실히 유발한다.
+        #   ①을 목적으로 하면 4, ②③까지 함께 보려면 3(FullPipeline).
+        - name: ACTIVE_STAGE
+          value: "4"
+        - name: STAGE_DURATION
+          value: "300"
+        # ★ 서비스 지표와 조인하기 위한 키. 인덱스 variant와 반드시 일치시킬 것.
+        - name: RUN_ID
+          valueFrom:
+            configMapKeyRef:
+              name: anomaly-config
+              key: RUN_ID
+              optional: true
+        - name: ROUTER_URL
+          value: "http://anomaly-router:80"
+        - name: RETRIEVER_URL
+          value: "http://anomaly-retriever:80"
+        - name: ORCHESTRATOR_URL
+          value: "http://anomaly-orchestrator:80"
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          echo "=================================================="
+          echo " Locust Load Verification"
+          echo "  ACTIVE_STAGE   : ${ACTIVE_STAGE}"
+          echo "  RUN_ID         : ${RUN_ID:-<unset>}"
+          echo "  STAGE_DURATION : ${STAGE_DURATION}s x 3 stages"
+          echo "  shape          : 5 → 20 → 50 users"
+          echo "=================================================="
+
+          cd /mnt/locust
+          # shape.py를 locustfile과 함께 로드해야 LoadTestShape가 인식된다
+          locust \
+            -f locustfile.py,shape.py \
+            --headless \
+            --only-summary \
+            --web-host 0.0.0.0 \
+            --web-port 9646 \
+            --host "${ORCHESTRATOR_URL}" \
+            --csv /results/locust_${RUN_ID:-run} \
+            --csv-full-history \
+            --html /results/locust_${RUN_ID:-run}.html \
+            --exit-code-on-error 0
+          # ↑ --users/--spawn-rate/--run-time 미지정: LoadTestShape가 전 구간을 통제
+
+          echo "=================================================="
+          echo " 완료 — CSV/HTML은 /results, 시계열은 Grafana에서"
+          echo "=================================================="
+        volumeMounts:
+        - name: locust-script
+          mountPath: /mnt/locust/locustfile.py
+          subPath: locustfile.py
+        - name: locust-shape
+          mountPath: /mnt/locust/shape.py
+          subPath: shape.py
+        - name: results
+          mountPath: /results
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 2000m         # 부하 생성기가 병목이면 포화점 측정이 왜곡된다
+            memory: 1Gi
+      volumes:
+      - name: locust-script
+        configMap:
+          name: locust-script
+      - name: locust-shape
+        configMap:
+          name: locust-shape
+      - name: results
+        emptyDir: {}

@@ -23,7 +23,8 @@ services:
   grafana:
     image: grafana/grafana:latest
     ports:
-      - "3000:3000"
+      # - "13000:3000"          # ★ 3000은 Hyper-V 예약 구간(2958-3057)에 포함됨
+      - "3000"          # ★ 3000은 Hyper-V 예약 구간(2958-3057)에 포함됨
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=change-me
       - GF_RENDERING_SERVER_URL=http://renderer:8081/render

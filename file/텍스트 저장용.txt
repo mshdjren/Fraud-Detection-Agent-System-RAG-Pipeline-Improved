@@ -1,140 +1,68 @@
-노트북 출력을 전부 확인했습니다. 순서대로 정리하겠습니다.
+Locust 같은 부하 테스트 도구를 통한 시스템 차원의 Latency p95/QPS와 별개로, ANN(Approximate Nearest Neighbor) 알고리즘 단건 자체의 처리 성능 및 속도를 측정할 때 사용되는 대표적인 지표들을 정리해 드립니다.
 
-1. 결과 정리
-✅ 지난 수정 2건은 정확히 검증됐습니다
-지표	이전 보고	이번 실측	판정
-pred_attr_rate	0.0 (100 step 내내)	≈ 52% (샘플 60건 중 31건)	인덱스 버그 확정 — "attribute가 안 나온다"는 거짓
-oov_feature_rate	0.39	pool 정의 수정 반영	think 오염 아님, pool 누락이 맞았음
+1. 단건 처리(알고리즘 내부)에서 측정하는 대표 속도 지표
+단건 쿼리가 입력되었을 때 통계적 지연시간 분포(p95, p99 등)를 보기 힘든 상태에서는 단일 연산에 소요되는 절대적 작업량이나 평균 시간을 측정합니다.
 
-telemetry 샘플 60건(10 step × 6 generation)을 직접 세어본 결과입니다. attribute_knn이 절반 나옵니다. 문서의 진단 ②는 폐기하세요. MU_BASE를 올릴 근거가 없었습니다.
+Query Latency (Mean / Median Latency, 단건 탐색 시간):
 
-❗ 대신 반대 문제가 드러났습니다 — tool_bonus가 오라클 라벨을 뒤집었습니다
-[K2] STAGE별 oracle action 분포 (step1)
-   STAGE 1: {contextual 0.980, attribute 0.020}     ← bonus 없음
-   ...
-[K3-B] oracle action: {attribute 0.615, contextual 0.385}   ← STAGE "1T" 실제 라벨
+측정 방식: 단 1개의 쿼리 벡터가 주어졌을 때, 인덱스 그래프를 탐색하여 Top-K 결과를 반환하기까지 걸린 순수 시간(ms 또는 μs 단위).
 
-_tool_bonus(평균 0.023, R_flip 대비 2.3%)가 98% contextual → 61.5% attribute로 라벨을 완전히 뒤집었습니다. 약해서 안 먹힌 게 아니라, 동률 65.1% 구간 전체를 혼자 결정하고 있습니다.
+특징: 부하가 없는 환경에서 수천~수만 개의 테스트 쿼리를 1개씩 단건(Single-thread)으로 순차 실행한 후, 그 평균(Mean)이나 중앙값(Median/p50)을 속도 지표로 사용합니다.
 
-원인은 μ 정규화가 크기만 맞추고 빈도는 안 맞췄기 때문입니다.
+Distance Computations per Query (쿼리당 거리 계산 횟수):
 
-action별 평균: attribute 0.01401 / contextual 0.01386    ← 크기는 동일 ✅
-action별 >0  : attribute 0.719   / contextual 0.271      ← 빈도가 2.7배 ❌
+측정 방식: 1회 검색 중 벡터 간 거리(L2, Cosine 등)를 총 몇 번 계산했는지 누적 횟수를 측정.
 
-escape>0이 75.5%인데 Δspread>0은 29.4%입니다. 평균으로 나누는 정규화는 이 비대칭을 보정하지 못합니다. 셀 8 주석에 "attribute에만 거의 항상 보너스가 붙어 라벨이 한쪽으로 쏠린다"고 우려한 그 현상이 그대로 일어났습니다.
+특징: 시간(ms) 지표는 측정하는 CPU 성능에 영향을 받지만, 거리 계산 횟수는 하드웨어 스펙과 무관한 알고리즘 고유의 순수 계산량이므로 학술적·이론적 속도 지표로 매우 선호됩니다.
 
-그리고 [A] 진단은 두 tool이 여전히 거의 등가라고 말합니다:
+Visited Nodes / Hops (방문 노드 및 홉 수):
 
-[contextual 제거] 순기여 +0.01132   [attribute 제거] 순기여 +0.00876   (EVPI 0.25636)
+HNSW 그래프 탐색 시 몇 개의 노드(벡터)를 거쳐 지나갔는지 나타내는 지표로, 탐색 알고리즘의 비효율성을 측정합니다.
 
-둘 다 EVPI의 4% 미만입니다. 즉 61.5% attribute 라벨은 데이터가 말하는 게 아니라 bonus가 만든 것입니다.
+2. 알고리즘 트레이드오프 평가를 위한 2대 축: "정확도 vs 속도"
+ANN 알고리즘을 평가할 때 기준이 되는 트레이드오프 두 축은 Index-level Recall(정확도)과 단건 탐색 속도 지표입니다.
 
-⚠️ 학습 자체는 신호가 거의 없습니다
-Training Loss (5~100 step): 0.0018 → 0.0009 → 0.0030 → ... → 0.0015
-                            부호가 계속 바뀌고 |loss| < 0.003
-group_diversity: 1.88 ~ 2.00 (100 step 내내 평평)
-[100/100 41:06, Epoch 1/2]   ← max_steps=100에서 조기 종료
+                  [ANN 평가의 핵심 축]
 
-loss가 0 근처에서 진동만 합니다. 그리고 group_diversity 2.00은 action 2종이 갈렸다는 뜻일 뿐입니다. feature는 사실상 고정입니다 — 샘플 60건의 그룹별 unique feature set이 평균 1.6개입니다:
+         ▲ Index-level Recall@k (정확도)
+         │
+    1.0  │            /─── HNSW (num_candidates 증가)
+         │           /
+    0.8  │          /
+         │         /
+         └────────┴─────────────────────────►  
+                 0.1ms      1.0ms     10.0ms
+                  Query Latency (단건 속도)
+                  또는 QPS (단일 스레드 기준)
+축 1: 정확도 (Accuracy)
+Index-level Recall@k (또나 ϵ-Recall):
 
-step 20: 6개 생성 전부 features=["sex","source"]      ← 1종
-step 40: 6개 전부 ["sex","source"]                     ← 1종
-step 80: 6개 전부 ["sex","source"]                     ← 1종
-step100: 6개 전부 ["source","weekday_purchase"]        ← 1종
+Brute-force(전수 조사/Exact kNN)로 구한 진짜 Top-K 결과와, HNSW(ANN 근사)로 구한 Top-K 결과의 일치 비율입니다.
 
-GRPO가 학습하고 있는 건 "attribute냐 contextual이냐"라는 전역 prior 하나뿐이고, state별 feature 선택은 탐색조차 안 하고 있습니다. 이건 [S1]에서 물으려던 질문("아무 feature나 골랐을 때보다 잘 골랐는가")에 답할 수 없다는 뜻입니다.
+ANN Recall@k= 
+k
+∣ANN Top-K∩Exact Top-K∣
+​
+ 
+축 2: 속도 (Speed)
+Query Latency (ms/Query) 또는 Single-thread QPS (queries/sec/thread):
 
-🔍 think 프롬프트 — 자유도가 아니라 복사 대상이 바뀐 것입니다
+단일 스레드 환경에서 1초 동안 처리할 수 있는 순수 알고리즘 탐색 횟수입니다.
 
-말씀하신 직관은 절반 맞습니다. 다만 원인이 다릅니다.
+3. ann-benchmarks 등 글로벌 표준에서 쓰는 표준 표현
+FAISS, ScaNN, HNSWlib, ann-benchmarks 등 벡터 검색 업계 표준 벤치마크에서는 알고리즘 성능을 표기할 때 주로 다음과 같이 표현합니다.
 
-이전: [RARE] browser - cluster assignment suspect... 를 글자 그대로 복사 → hallucinated 89.2%
-이번: 추상화한 placeholder 자체를 글자 그대로 복사합니다.
+Recall vs. Queries Per Second (QPS) Curve (Single-Threaded):
 
-step 50: {"think":"<TAG> <field>: <one-line reason>", ...}      ← 완전 복사
-step 80: {"think":"<TAG> <field> - <one-line reason>", ...}      ← 완전 복사
-step 10: {"think":"<TAG> <field> - No specific defect was flagged..."}
-step 30: {"think":"<TAG> browser - the evidence shows..."}
-step100: {"think":"<NON-FEATURE> source - IP_country*, weekday..."}
+여기서 QPS는 Locust 부하 테스트의 서버 QPS가 아니라, 1 / Mean Query Latency로 계산되는 알고리즘 순수 초당 처리 속도를 의미합니다.
 
-60건 중 약 47%가 <TAG> / <field> / <EVIDENCE> / <tag> 리터럴을 포함합니다. 0.5B에게 <TAG>는 "채워 넣으라는 슬롯"이 아니라 그냥 복사할 문자열입니다. grounded 판정에서 <TAG>는 실제 evidence 태그가 아니므로, grounded rate는 이전보다 더 나빠질 가능성이 큽니다.
+Recall vs. Latency (ms) Curve:
 
-추가로 THINK_MAXTOK = 16이 너무 짧습니다. think 대부분이 문장 중간에서 잘립니다:
+x축을 단건 탐색 시간(ms), y축을 Recall@k로 두고, HNSW의 efSearch / num_candidates 파라미터를 늘려가며 선을 그립니다.
 
-"...features related to the contract (e.g.,"
-"...evidence is scatter too far but"
-"...consistent with IP_country being the"
+요약
+부하 테스트 (Locust, E2E): QPS (서버 통행량) & Latency p95/p99 (상위 95% 사용자 지연)
 
-16토큰은 "태그 + 필드 + 한 줄 이유"를 담기에 부족합니다.
+단건 알고리즘 튜닝 (HNSW 단독): Index-level Recall@k (정확도) & Mean Query Latency 또는 Distance Computations (순수 계산 속도)
 
-📌 미실행
-
-셀 38(SFT vs GRPO) 이후 전부 미실행입니다. achieved / regret / grounded / 3축 비교 결과가 이번 런에는 없습니다. 셀 36 에러로 중단됐기 때문입니다.
-
-2. 에러 원인
-① 치명적 — pred_ctx_rate가 빈 리스트 (셀 36 ValueError)
-ValueError: ... the array at index 0 has size 100 and the array at index 2 has size 0
-
-index 2 = GRPO_TELEMETRY["pred_ctx_rate"]. 크기가 0입니다.
-
-원인: Section 11-B, 1번째 block에서 제가 "L233–234 두 줄 삭제"라고 안내했는데, 바로 위 L232의 pred_ctx_rate 줄까지 함께 주석 처리되었습니다.
-
-python
-243    GRPO_TELEMETRY["pred_stop_rate"].append(...)
-244    GRPO_TELEMETRY["pred_global_rate"].append(...)
-245    # GRPO_TELEMETRY["pred_ctx_rate"].append(_valid_actions.count("contextual_knn") / _n_valid)   ← ★ 이게 살아있어야 함
-246    # GRPO_TELEMETRY.setdefault("pred_attr_rate", []).append(
-247    # float(np.mean([a == "attribute_knn" for a, _ in parsed_actions])) if parsed_actions else 0.0)
-
-GRPO_TELEMETRY가 defaultdict(list)라 KeyError 대신 빈 리스트가 나오고, stackplot에서 터졌습니다.
-
-수정 — Section 11-B, 1번째 block
-바로 위 line:     GRPO_TELEMETRY["pred_global_rate"].append(_valid_actions.count("global_knn") / _n_valid)
-
-python
-    GRPO_TELEMETRY["pred_ctx_rate"].append(_valid_actions.count("contextual_knn") / _n_valid)
-
-L245의 주석 줄은 그대로 두셔도 되고 지우셔도 됩니다. 재학습은 필요 없습니다 — 다만 이번 런의 pred_ctx_rate는 복구 불가이므로, 셀 36을 그냥 돌리려면 아래 방어를 함께 넣으세요.
-
-Section 11-B.0, 6번째 block
-바로 위 line:     a = ax[1, 1]
-
-python
-    _n_st = len(GRPO_TELEMETRY["step"])
-    def _tl(k):   # ★ 길이 불일치/누락 키 방어 — 한 지표가 비어도 패널 전체가 죽지 않게
-        _v = GRPO_TELEMETRY.get(k) or []
-        return list(_v[:_n_st]) + [0.0] * max(_n_st - len(_v), 0)
-
-그리고 L48–50의 4개 인자를 _tl("pred_stop_rate"), _tl("pred_global_rate"), _tl("pred_ctx_rate"), _tl("pred_attr_rate")로 교체하세요.
-
-② 비치명 — [S] 게이트가 ❌
-⚠ pool 3개 이하 — TestCase/컬럼명 정규화 확인
-❌ 위 항목 해결 후 진행
-
-candidate pool 중앙값 3개입니다. 에러는 아니지만, pool이 3개면 무작위 선택으로도 33% 적중이라 [S1] 회수율 해석이 흔들립니다. 셀 31 출력 "state별 유효 출력 수: 중앙값 13"과 함께 보면, feature 조합은 13개인데 그룹당 6개만 생성하므로 탐색 커버리지가 46%입니다.
-
-③ 무시 가능 — 한글 폰트 warning
-
-Glyph 49457 missing from font(s) DejaVu Sans — 그림 제목의 한글이 □로 나옵니다. 결과에는 영향 없습니다. 고치려면 셀 상단에 plt.rcParams["font.family"] = "NanumGothic" (Colab은 !apt install fonts-nanum 후 캐시 재빌드) 정도면 됩니다.
-
-3. 다음 우선순위 제안
-[0] pred_ctx_rate 복구 + 셀 36 방어      ← 2줄, 즉시. 그래야 이후 셀이 돈다
-[1] think placeholder 복사 차단          ← grounded의 직접 원인
-[2] tool_bonus 비대칭 보정               ← 라벨 61.5% attribute의 원인
-[3] feature 탐색 부재 대응
-
-[1] 구체안 — <TAG> 같은 각괄호 placeholder를 프롬프트에서 없애는 것보다, think 구간에서 < 토큰 자체를 금지하는 게 확실합니다. 이미 _noquote_ids로 "를 막는 구조가 있으니 한 글자만 추가하면 됩니다.
-
-Section 11-B.0, 1번째 block
-바로 위 line:         if '"' in tokenizer.convert_tokens_to_string([_s]):
-
-python
-        # ★ '<'도 배제 — placeholder(<TAG>/<field>/<EVIDENCE>)를 글자 그대로
-        #   복사하는 것이 hallucinated의 새 원인이 됐다(실측 60건 중 47%).
-        #   생성 자체를 막으면 모델은 실제 태그 이름을 쓸 수밖에 없다.
-
-그리고 다음 줄 조건을 if any(_ch in tokenizer.convert_tokens_to_string([_s]) for _ch in ('"', '<')): 로 교체하세요.
-
-동시에 THINK_MAXTOK을 16 → 32로 올리는 것을 권합니다(Section 11-B.0, 1번째 block L158). 16토큰은 "태그+필드+이유"가 물리적으로 안 들어갑니다.
-
-[2] 구체안 — μ를 평균이 아니라 양수 빈도로도 정규화해야 합니다. 지금은 크기만 맞고 빈도가 2.7배 차이납니다. 다만 이건 "attribute가 정말 더 나은가"를 먼저 정해야 하는 설계 판단이라, [A] 순기여가 둘 다 4% 미만인 현 상황에서는 tool_bonus를 아예 빼고 STAGE 1으로 한 번 돌려 비교하는 쪽이 더 정직한 실험일 수 있습니다. 어느 쪽으로 가실지 알려주시면 해당 수정 위치를 짚어드리겠습니다.
+프로젝트 README나 실험 기록을 작성할 때는 "Brute-force 대비 Recall@10 = 0.92를 달성하는 지점에서의 단건 탐색 Latency (Mean Query Latency)가 0.8ms"와 같은 형식으로 표기하는 것이 가장 정석적입니다.

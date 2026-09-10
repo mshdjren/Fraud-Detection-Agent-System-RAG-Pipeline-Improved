@@ -53,7 +53,7 @@ import asyncio
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 import structlog
 
 import prompts   # ConfigMap mount: /app/prompts.py, /app/config.py (prompts.py가 import함)
@@ -63,6 +63,8 @@ import prompts   # ConfigMap mount: /app/prompts.py, /app/config.py (prompts.py�
 # ===========================
 
 EXPERIMENT_CASE  = os.getenv("EXPERIMENT_CASE",  "pca_64_k100")
+RUN_ID = os.getenv("RUN_ID", "default")   # 상단 상수부에 추가
+
 TEACHER_PROVIDER = os.getenv("TEACHER_PROVIDER", "hf")
 ADAPTER_TYPE     = os.getenv("ADAPTER_TYPE",     "mined")
 BASE_MODEL_ID    = os.getenv("BASE_MODEL_ID",    "Qwen/Qwen2.5-0.5B-Instruct")
@@ -127,6 +129,8 @@ analyze_requests  = Counter("analyzer_requests_total",  "Total /analyze requests
 analyze_latency   = Histogram("analyzer_latency_seconds", "Inference latency",
                                buckets=[1, 2, 5, 10, 30, 60, 120, 300])
 parse_errors      = Counter("analyzer_parse_errors_total", "JSON parse errors", ["mode"])
+
+analyzer_inflight = Gauge("analyzer_inflight_requests", "In-flight analyze requests", ["run_id"])
 # Continuous batching 실측 — hf 백엔드에서만 의미 있는 지표. gguf에서는
 # 항상 1로 관측된다(순차 처리이므로) — 백엔드 전환 시 이 값의 분포 변화로
 # "진짜 배치가 걸리고 있는지"를 바로 확인할 수 있다.
@@ -1089,56 +1093,60 @@ async def analyze_transaction(
     x_persona_enabled:    Optional[str] = Header(None),
     x_tree_rules_enabled: Optional[str] = Header(None),
 ):
-    effective_persona_enabled = (
-        (x_persona_enabled.lower() == "true")
-        if x_persona_enabled is not None else PERSONA_ENABLED
-    )
-    effective_tree_rules_enabled = (
-        (x_tree_rules_enabled.lower() == "true")
-        if x_tree_rules_enabled is not None else TREE_RULES_ENABLED
-    )
-
-    first_neighbor = request.top_k_normal_results[0] if request.top_k_normal_results else None
-    logger.info(
-        "analyze_request_received",
-        cluster_id=request.cluster_id, top_k=len(request.top_k_normal_results),
-        top1_distance=request.top1_distance, persona_present=request.persona is not None,
-        first_neighbor_keys=list(first_neighbor.keys()) if first_neighbor else None,
-        test_transaction_keys=list(request.test_transaction.keys()) if request.test_transaction else None,
-    )
-
+    analyzer_inflight .labels(run_id=RUN_ID).inc()
     try:
-        if ENABLE_CONTINUOUS_BATCHING:
-            effective_persona = request.persona if (effective_persona_enabled and request.persona is not None) else None
-            user_prompt, suf, nd = build_user_prompt(
-                test_transaction=request.test_transaction, cluster_id=request.cluster_id,
-                top_k_normal_results=request.top_k_normal_results, top1_distance=request.top1_distance,
-                persona=effective_persona,
-            )
-            _evidence = _evidence_kwargs(request.test_transaction, request.top_k_normal_results, effective_persona)
-            return await _batcher.submit(
-                user_prompt, sufficiency=suf, nd=nd, persona_used=effective_persona is not None,
-                tree_rules_used=effective_tree_rules_enabled, evidence=_evidence,
-            )
-        logger.info("analyze_dispatching_to_thread", backend=MODEL_BACKEND,
-                    model_loaded=(_model is not None))
-        result = await asyncio.to_thread(
-            _run_single, request, effective_persona_enabled, effective_tree_rules_enabled, "single",
+        effective_persona_enabled = (
+            (x_persona_enabled.lower() == "true")
+            if x_persona_enabled is not None else PERSONA_ENABLED
         )
-        logger.info("analyze_thread_returned", cluster_id=request.cluster_id)
-        return result
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        parse_errors.labels(mode="single").inc()
-        analyze_requests.labels(status="parse_error", mode="single").inc()
-        logger.error("analyze_parse_error", mode="single", error=str(e))
-        raise HTTPException(status_code=422, detail=f"LLM output parse failed: {e}")
-    except Exception as e:
-        import traceback
-        analyze_requests.labels(status="error", mode="single").inc()
-        tb = traceback.format_exc()
-        logger.error("analyze_error", mode="single", error_type=type(e).__name__,
-                     error=str(e), traceback=tb[:2000])
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+        effective_tree_rules_enabled = (
+            (x_tree_rules_enabled.lower() == "true")
+            if x_tree_rules_enabled is not None else TREE_RULES_ENABLED
+        )
+
+        first_neighbor = request.top_k_normal_results[0] if request.top_k_normal_results else None
+        logger.info(
+            "analyze_request_received",
+            cluster_id=request.cluster_id, top_k=len(request.top_k_normal_results),
+            top1_distance=request.top1_distance, persona_present=request.persona is not None,
+            first_neighbor_keys=list(first_neighbor.keys()) if first_neighbor else None,
+            test_transaction_keys=list(request.test_transaction.keys()) if request.test_transaction else None,
+        )
+
+        try:
+            if ENABLE_CONTINUOUS_BATCHING:
+                effective_persona = request.persona if (effective_persona_enabled and request.persona is not None) else None
+                user_prompt, suf, nd = build_user_prompt(
+                    test_transaction=request.test_transaction, cluster_id=request.cluster_id,
+                    top_k_normal_results=request.top_k_normal_results, top1_distance=request.top1_distance,
+                    persona=effective_persona,
+                )
+                _evidence = _evidence_kwargs(request.test_transaction, request.top_k_normal_results, effective_persona)
+                return await _batcher.submit(
+                    user_prompt, sufficiency=suf, nd=nd, persona_used=effective_persona is not None,
+                    tree_rules_used=effective_tree_rules_enabled, evidence=_evidence,
+                )
+            logger.info("analyze_dispatching_to_thread", backend=MODEL_BACKEND,
+                        model_loaded=(_model is not None))
+            result = await asyncio.to_thread(
+                _run_single, request, effective_persona_enabled, effective_tree_rules_enabled, "single",
+            )
+            logger.info("analyze_thread_returned", cluster_id=request.cluster_id)
+            return result
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            parse_errors.labels(mode="single").inc()
+            analyze_requests.labels(status="parse_error", mode="single").inc()
+            logger.error("analyze_parse_error", mode="single", error=str(e))
+            raise HTTPException(status_code=422, detail=f"LLM output parse failed: {e}")
+        except Exception as e:
+            import traceback
+            analyze_requests.labels(status="error", mode="single").inc()
+            tb = traceback.format_exc()
+            logger.error("analyze_error", mode="single", error_type=type(e).__name__,
+                        error=str(e), traceback=tb[:2000])
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+    finally:
+        analyzer_inflight.labels(run_id=RUN_ID).dec()
 
 
 # ===========================

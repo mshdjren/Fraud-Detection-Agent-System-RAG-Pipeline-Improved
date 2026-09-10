@@ -78,8 +78,14 @@ logger = structlog.get_logger()
 
 track_total          = Counter("track_total", "Pre-router track", ["track"])
 planner_calls_total  = Counter("planner_calls_total", "Controller agent-loop delegation calls", ["status"])
-service_latency      = Histogram("service_latency_seconds", "Service latency", ["service"],
-                                 buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0])
+
+RUN_ID = os.getenv("RUN_ID", "default")   # 상단 상수부에 추가
+
+service_latency = Histogram("service_latency_seconds", "Service latency",
+                            ["service", "run_id"],
+                            buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30])
+# service_latency      = Histogram("service_latency_seconds", "Service latency", ["service"],
+#                                  buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0])
 retry_attempts       = Counter("retry_attempts_total", "Retry attempts", ["service", "attempt"])
 
 global_centroid: Optional[np.ndarray] = None
@@ -237,7 +243,8 @@ async def call_router(client, embedding, experiment_case, percolate_version) -> 
                  "X-Router-Case": experiment_case, "X-Router-Version": percolate_version},
     )
     result = resp.json()
-    service_latency.labels(service="router").observe(time.time() - start)
+    # service_latency.labels(service="router").observe(time.time() - start)
+    service_latency.labels(service="router", run_id=RUN_ID).observe(time.time() - start)
     logger.info("router_success", primary_cluster_id=result.get("primary_cluster_id"),
                 vec_index=result.get("vec_index"), match_type=result.get("match_type"))
     return result
@@ -284,7 +291,8 @@ async def call_retriever(client, embedding, cluster_ids, vec_index, top_k=3) -> 
         headers={"Content-Type": "application/json"},
     )
     result = resp.json()
-    service_latency.labels(service="retriever").observe(time.time() - start)
+    # service_latency.labels(service="retriever").observe(time.time() - start)
+    service_latency.labels(service="retriever", run_id=RUN_ID).observe(time.time() - start)
     logger.info("retriever_success", cluster_ids=cluster_ids,
                 n_results=len(result.get("results", [])), top1_distance=result.get("top1_distance"))
     return result
