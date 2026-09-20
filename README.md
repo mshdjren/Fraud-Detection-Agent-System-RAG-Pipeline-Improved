@@ -176,19 +176,287 @@ Range 조건을 **Bucket index + Term filter**로 변환해 후보군 pruning을
 
 **Percolator 샤드 분산** — percolate는 등록 쿼리(5,725개)를 입력 문서에 MemoryIndex로 실행하므로 비용이 **샤드당 쿼리 수**에 비례합니다. 일반 역색인과 달리 CPU 작업이 실제로 나뉘어 near-linear로 스케일하되, **노드 CPU 코어 수까지만** 유효합니다(percolator limit 1800m ≈ 1.8코어 → 2배 부근 포화 예상).
 
-## 3️⃣ 결과 도출
+## 4️⃣ 결과 도출 — 운영점 결정
 
-#### **Result 1: 검색 기법 및 관련 기법 parameter 최적화 in batch inference**
-Point : Percolate query version, coreset, quantization, ,
+> **정확도를 제약으로 두고 처리량을 최대화**하는 형태로 결정했습니다. 정확도와 속도를 가중합으로 섞으면 가중치가 또 하나의 자의적 축이 되기 때문입니다.
+>
+> ```
+> maximize   QPS @ (p95 ≤ SLA)
+> s.t.       dist AUROC   ≥ f32 − 0.005
+>            cls@τ acc    ≥ f32 − 0.02      ← 양자화 거리 편향 방어
+>            ANN recall@10 ≥ 0.95           ← 인덱스 근사 하한
+>            working set  ≤ page cache      ← 부하에서만 검증 가능
+> ```
+>
+> 세 Result는 **측정 환경과 결정 대상**이 다릅니다.
+>
+> | | 질문 | 환경 | 결정 축 |
+> |---|---|---|---|
+> | **R1** | 정확도를 얼마나 잃는가 | 단건 batch | 재적재 축 — coreset · quantization · percolate ver |
+> | **R2** | 동시성에서 버티는가 | **Locust 부하** | 런타임 축 — num_candidates · shard · oversample |
+> | **R3** | brute-force 대비 어디쯤인가 | 단건 batch | 두 target의 정량화 |
 
-#### **Result 2: 실제 Locust test에서 운영 최적점 확정**
-Point : hnsw(m-ef), shard, num_candidates,  + (oversample,topkcluster) --> P95, QPS, recall@5 깍이는거  
-(dynamic thresholding cluster id filteriinng hnsw 필요하다면 okay)
+### **Result 1: 단건 batch — 재적재 축 최적화**
 
-#### **Result 3: ANN과의 비교**
-Point : 지표 ANN recall@10(index 수준) cand_recall@5-routing_acc,MRR(cluster 수준), dist AUROC, cls@tau acc, FNR
+재색인이 필요한 축(Percolate version · Coreset · Quantization · PCA)을 **인덱스를 사전 생성해 격자 sweep**했습니다. `num_candidates=200` 고정.
+
+#### R1-A. Percolate query version
+
+| version | routing_acc | cand_recall@5 | MRR | knn recall@5 | dist AUROC | p99 (ms) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Strict AND (v1) | 0.816 | 0.816 | 0.941 | 0.786 | 0.8726 | 420.25 |
+| **V1 + centroid aug** | **0.823** | **0.905** | **1.00** | **0.956** | **0.9125** | 430.01 |
+| V1 + aug + bucket | 0.823 | 0.897 | 0.988 | 0.956 | 0.9037 | **409.25** |
+
+#### R1-B. Coreset 비율
+
+| Coreset % | Docs | Index (GB) | working set (MB) | **ANN r@10** | cand_r@5 | dist AUROC | cls@τ acc | mean (ms) | **QPS(1-thread)** |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 100 | 140,128 | 2.8 | 284.8 | | 0.956 | 0.956 | | 125 | |
+| **10** | 14,012 | 0.31 | 23.4 | | 0.947 | **0.952** | | 68 | |
+| 1 | 1,401 | 0.035 | | | 0.882 | 0.901 | | 52 | |
+
+#### R1-C. Vector Quantization
+
+| variant | quant | oversample | working set (MB) | **ANN r@10** | dist AUROC | **cls@0.42 acc** | FNR | mean (ms) |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| f32 | f32 | — | 284.8 | | 0.8711 | 0.76 | | |
+| **bbq os3** | bbq_hnsw | 3 | **23.4** | | **0.8711** | 0.76 | | |
+| bbq os1.5 | bbq_hnsw | 1.5 | 23.4 | | | | | |
+| int8 os0 | int8_hnsw | 0 | 82.5 | | 0.8599 | **0.47** | | |
+| int8 os3 | int8_hnsw | 3 | 82.5 | | 0.8711 | 0.76 | | |
+
+> **`cls@τ acc`를 별도로 본 것이 결정적이었습니다.** `int8 os0`은 AUROC 0.86(순위)을 유지한 채 고정 임계 정확도만 0.47(FPR 1.0)로 붕괴합니다. 양자화 거리가 체계적으로 커지는 방향으로 편향돼 `nd` 분포 전체가 밀리기 때문이며, **순위 지표만 봤으면 놓쳤을 실패**입니다.
+
+#### R1-D. PCA 차원 (압축 사슬의 첫 레버)
+
+| PCA dim | 설명분산 | index (MB) | **ANN r@10** | dist AUROC | mean (ms) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 576 (원본) | 1.00 | 285 | 1.000 | | |
+| 128 | | 63 | | | |
+| **64** (운영점) | | **32** | | **0.8711** | |
+| 32 | | 16 | | | |
+
+<p align="center">
+<img src="picture/r1_pareto_workingset_auroc.png" width="75%"><br>
+<i>[R1] working set(MB) × AUROC Pareto — coreset 3 × quantization 4 격자</i>
+</p>
+
+**R1 컷 기준** — `AUROC 손실 ≤ 0.5%p` ∧ `cls@τ acc ≥ f32 − 0.02` ∧ `ANN r@10 ≥ 0.95`
+→ 통과 후보: `coreset10+bbq_os3`, `coreset10+f32`, `coreset100+bbq_os3`
 
 ---
+
+### **Result 2: Locust 부하 — 런타임 축 확정과 포화점**
+
+**단건에서는 잴 수 없는 것만** 부하로 검증합니다. 순차 실행에서는 working set이 page cache에 그대로 남아 f32도 `pf=0`이 되어, 압축 유무의 차이가 나타나지 않습니다.
+
+시나리오: 3단계 계단(**5 → 20 → 50 users**, 각 5/10/15분)을 `LoadTestShape`로 코드 고정, `RUN_ID`만 바꿔 후보별 반복.
+
+#### R2-A. 후보별 포화점
+
+| 후보 | 포화 RPS | p95 @목표RPS | p99 | **page fault/s** | ES search 큐 | 실패율 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| coreset100 + f32 | | | | | | |
+| **coreset10 + bbq os3** | | | | | | |
+| coreset10 + f32 | | | | | | |
+
+#### R2-B. num_candidates × recall × QPS
+
+재색인이 없는 유일한 축이라 **운영 중 조정 가능한 레버**입니다.
+
+| nc | **ANN r@10** | cand_r@5 | dist AUROC | mean (ms) | p95 (ms) | **QPS(서버)** |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 25 | | 0.7 | | | | |
+| 100 | | 0.7 | | | | |
+| **200** | | 0.7 | | | | |
+| 400 | | 0.7 | | | | |
+| 800 | | 0.7 | | | | |
+
+> `cand_recall@5`가 전 행에서 **0.7로 동일**한 것이 `ANN recall@10` 컬럼을 추가한 이유입니다 — task 지표는 근사 오차에 둔감해 이 축의 효과를 전혀 잡지 못합니다.
+
+#### R2-C. Shard × num_candidates
+
+HNSW는 **샤드별 독립 그래프**라 `num_candidates`가 샤드마다 적용됩니다.
+
+```
+샤드 ↑ → 후보 총량 ↑ → recall ↑   (직관과 반대)
+       → coordinator 병합 비용 ↑ → p95 ↑
+```
+
+| shard | nc | **ANN r@10** | p95 (ms) | 포화 RPS | 비고 |
+| ---: | ---: | ---: | ---: | ---: | :--- |
+| 1 | 200 | | | | 현재 |
+| 2 | 200 | | | | |
+| 4 | 200 | | | | |
+
+**Percolator 샤드** — percolate는 등록 쿼리(5,725개)를 MemoryIndex로 실행하므로 비용이 **샤드당 쿼리 수**에 비례합니다. CPU 작업이 실제로 나뉘어 near-linear로 스케일하되 **노드 코어 수까지만** 유효합니다(limit 1800m ≈ 1.8코어 → 2배 부근 포화).
+
+| percolator shard | 등록 쿼리/샤드 | p95 (ms) | 포화 RPS |
+| ---: | ---: | ---: | ---: |
+| 1 | 5,725 | 710 | |
+| 2 | 2,863 | | |
+| 4 | 1,431 | | |
+
+#### R2-D. HNSW m / ef_construction
+
+| m | ef_c | segments | **ANN r@10** | cand_r@5 | build (s) | p95 (ms) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **16** | **100** | 13 | | 0.7 | | |
+| 32 | 200 | 15 | | 0.7 | | |
+| 64 | 400 | 18 | | 0.7 | | |
+
+> 3조합의 AUROC·recall이 모두 동일해 **가장 빠른 `m=16, ef=100`을 운영점으로 고정**했습니다. 검색 운영점을 LLM 실험 **전에** 얼려, 이후 Evaluator·Planner 측정이 검색 변동에 오염되지 않도록 한 것이 목적입니다.
+
+#### R2-E. oversample × top_k_clusters
+
+| os | cls@τ acc | rescore I/O | | K | cand_r@5 | 검색 문서 수 | p95 (ms) |
+| ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| 0 | **0.47** | 0 | | 1 | 0.823 | 1/500 | |
+| 1.5 | | | | 3 | | | |
+| **3** | 0.76 | k×3 | | **5** | **0.905** | 1/100 | 82 |
+| 5 | | k×5 | | 10 | | 1/50 | |
+
+<p align="center">
+<img src="picture/r2_grafana_load_verification.png" width="95%"><br>
+<i>[R2] Grafana 부하 검증 — Row1 RPS 계단 / Row2 page fault × retriever p95 / Row3 포화점·큐 적체 / Row4 동시성</i>
+</p>
+
+<p align="center">
+<img src="picture/r2_pagefault_p95_overlay.png" width="80%"><br>
+<i>[R2] <code>f32</code> vs <code>bbq</code> — 동일 부하에서 page fault(우축, 점선)와 p95(좌축)가 같은 시점에 튀는 것이 압축 이득의 인과 증거</i>
+</p>
+
+---
+
+### **Result 3: Brute-force kNN 대비 — 라우팅과 양자화의 손익 정량화**
+
+두 개선 축을 **exact kNN 기준으로** 분리 측정합니다.
+
+```
+target A:  brute-force 대비 router-retriever(2-stage)의 손익
+target B:  brute-force 대비 정상 인덱스 quantization의 손익
+```
+
+#### R3-A. 검색 범위별 — 라우팅이 무엇을 얼마에 팔았는가
+
+| 검색 범위 | **ANN r@10** | cand_r@5 | routing_acc | MRR | dist AUROC | cls@τ acc | FNR | dist comp/query | mean (ms) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **brute-force (exact)** | **1.000** | 1.000 | 1.000 | 1.000 | | | | 140,128 | |
+| global HNSW (라우팅 없음) | | | — | — | **0.9141** | | | | |
+| **cluster-scoped (2-stage)** | | **0.905** | **0.823** | **1.00** | **0.8568** | 0.76 | | | 82 |
+
+> **라우팅은 정확도를 위한 것이 아니라 비용을 위한 것입니다.**
+>
+> ```
+> nd_global ≤ nd_cluster  가 99.97%에서 성립
+>   (부분집합의 최소거리는 전체집합의 최소거리보다 클 수밖에 없다)
+> → AUROC −5.73%p 를 검색공간 1/100 과 교환
+> ```
+>
+> Part 3의 **선택적 재검색이 이 손실 중 얼마를 되찾는지**가 Agent 시스템의 존재 이유입니다.
+
+#### R3-B. 양자화별 — 인덱스 근사가 잃은 양
+
+라우팅 영향을 제거하기 위해 **global 범위에서** 측정합니다.
+
+| variant | **ANN r@10 (global)** | dist AUROC | cls@τ acc | FNR | working set (MB) | **QPS(1-thread)** |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| exact (brute-force) | 1.000 | | | | 284.8 | |
+| f32 HNSW | | 0.8711 | 0.76 | | 284.8 | |
+| **bbq os3** | | **0.8711** | 0.76 | | **23.4** | |
+| int8 os0 | | 0.8599 | **0.47** | | 82.5 | |
+
+#### R3-C. Filtered kNN — 선택도가 recall을 무너뜨리는 지점
+
+**이 파이프라인은 모든 검색이 filtered입니다**(`cluster_ids` 또는 `field_filters`). HNSW에서 필터를 걸면 그래프 탐색이 필터 통과 노드를 못 찾고 조기 종료하는 실패 모드가 있고, 실제로 `attribute_knn`이 `support=71,501`(전체의 58%)인데 **0건을 반환**한 사건을 겪었습니다.
+
+| 선택도 s | 통과 문서 수 | **ANN r@10** | 반환 건수 | p95 (ms) |
+| ---: | ---: | ---: | ---: | ---: |
+| 0.001 | 123 | | | |
+| 0.01 | 1,228 | | | |
+| 0.1 | 12,281 | | | |
+| 1.0 (무필터) | 122,810 | | | |
+
+```python
+# 운영 결정 — 붕괴 임계 아래에서는 exact로 전환
+if support < BRUTE_FORCE_THRESHOLD:
+    exact script_score                      # 후보가 적어 감당 가능
+else:
+    filtered HNSW, num_candidates = max(200, k * 40)
+```
+
+<p align="center">
+<img src="picture/r3_recall_qps_pareto.png" width="80%"><br>
+<i>[R3] Recall–QPS Pareto (ann-benchmarks 표준 형식) — x: ANN recall@10, y: QPS(1-thread), 점: num_candidates, 색: quantization variant, ★: 운영점</i>
+</p>
+
+<p align="center">
+<img src="picture/r3_filtered_recall_selectivity.png" width="75%"><br>
+<i>[R3] 선택도 vs filtered ANN recall — 붕괴 임계(수직선)와 후보 조합 분포(막대)</i>
+</p>
+
+---
+
+### 📌 운영점 확정
+
+| 축 | 운영점 | 결정 근거 | 출처 |
+| :--- | :--- | :--- | :---: |
+| Percolate | V1 + centroid aug (top-5) | Recall@5 +9%p, MRR 1.00. bucket prefilter는 **서열 희석**으로 기각 | R1-A |
+| Coreset | **10%** | 메모리 −89%, AUROC 손실 0.4%p 이내, median latency −46% | R1-B |
+| Quantization | **BBQ + oversample 3** | f32와 동일 AUROC, working set 1/12. rescore가 **τ 불변**을 보장 | R1-C |
+| PCA dim | **64** | 압축 사슬의 첫 9× | R1-D |
+| HNSW | `m=16, ef_c=100` | 3조합 AUROC 동일 → 최속 | R2-D |
+| `num_candidates` | **200** | ANN recall knee. 이후는 latency만 | R2-B |
+| Shard | | 포화 RPS 최대. percolator 우선(Stage1이 2.7배 느림) | R2-C |
+| `top_k_clusters` | **5** | cand_recall 한계효용 | R2-E |
+| filtered fallback | support < 임계 시 exact | 저선택도에서 HNSW 조기 종료 | R3-C |
+
+> **`Stage 1(router) 220ms` vs `Stage 2(retriever) 82ms`** — 캐스케이드 통념("싼 필터 → 비싼 정밀")과 반대로, 라우팅이 HNSW보다 2.7배 느립니다. percolate가 5,725개 등록 쿼리를 MemoryIndex로 실행하기 때문이며, 이것이 percolator 샤드 분산을 우선 최적화 대상으로 둔 근거입니다.
+
+3. 추가 제안 — 자료 2개
+
+위 코드에 이미 그림 자리를 넣어뒀는데, 텍스트로 더 필요한 게 두 개 있습니다.
+
+① 쿼리 형태 대조 (R3-A 앞)
+
+검색 엔지니어가 가장 빨리 이해하는 자료입니다. 세 범위의 실제 ES 쿼리를 나란히 두면 라우팅의 의미가 즉시 전달됩니다.
+
+#### 검색 범위별 쿼리 형태
+
+```jsonc
+// ① brute-force (exact) — ground truth 생성용
+{"query": {"script_score": {
+    "query": {"match_all": {}},
+    "script": {"source": "1 / (1 + l2norm(params.q, 'vec'))", "params": {"q": [...]}}}}}
+
+// ② global HNSW — 라우팅 없음
+{"knn": {"field": "vec", "query_vector": [...], "k": 5,
+         "num_candidates": 200,
+         "rescore_vector": {"oversample": 3}}}
+
+// ③ cluster-scoped (운영) — Stage 1이 좁힌 5개 클러스터 안에서만
+{"knn": {"field": "vec", "query_vector": [...], "k": 5,
+         "num_candidates": 200,
+         "rescore_vector": {"oversample": 3},
+         "filter": {"terms": {"cluster_id": [63, 12, 88, 41, 7]}}}}
+```
+
+② Sweep 설계도 (Result 1 앞)
+
+왜 전조합을 안 했는가를 답합니다.
+#### Sweep 설계 — 계층적 축소
+
+```
+전조합:  coreset3 × quant4 × pca4 × hnsw3 × shard3 × nc6 × os4 × K4 = 41,472  ✗
+
+계층 분할:
+  [R1] 재적재 축 격자        12 인덱스  →  컷 3기준  →  후보 3개
+  [R2] 런타임 축 곡선        후보별 nc/os/K sweep (재색인 0)
+  [R3] exact 대조            최종 운영점 + 검색범위 3종
+```
+
+**재적재 여부가 sweep 방식을 가릅니다.** `num_candidates`·`oversample`·`top_k_clusters`는 ConfigMap patch만으로 바뀌므로 **운영 중 조정 가능한 레버**이고, 나머지는 인덱스 하나가 한 점입니다.
 ---
 
 # Part 2. forwardRAG → LLM Evaluator
