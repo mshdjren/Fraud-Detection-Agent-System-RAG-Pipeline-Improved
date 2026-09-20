@@ -456,7 +456,7 @@ else:
   [R3] exact 대조            최종 운영점 + 검색범위 3종
 ```
 
-**재적재 여부가 sweep 방식을 가릅니다.** `num_candidates`·`oversample`·`top_k_clusters`는 ConfigMap patch만으로 바뀌므로 **운영 중 조정 가능한 레버**이고, 나머지는 인덱스 하나가 한 점입니다.
+재적재 여부가 sweep 방식을 가릅니다. `num_candidates`·`oversample`·`top_k_clusters`는 ConfigMap patch만으로 바뀌므로 운영 중 조정 가능한 레버이고, 나머지는 인덱스 하나가 한 점입니다.
 ---
 
 # Part 2. forwardRAG → LLM Evaluator
