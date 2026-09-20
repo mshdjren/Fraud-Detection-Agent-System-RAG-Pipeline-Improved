@@ -12,17 +12,17 @@
 
 **Multi-Cluster Memory Bank 이상탐지 알고리즘(EAAI 2025, 공동 1저자)을 GKE 위에서 운영 가능한 AgentRAG 시스템으로 확장한 엔드투엔드 프로젝트**입니다.
 
-Tabular 이상 거래를 `retrieval → 거리 기반 이상탐지 → 판정 근거 설명 → 선택적 재검색` 흐름으로 처리하며, Router · Retriever · LLM Evaluator - Planner · Orchestrator를 MSA로 분리해 배포했습니다.
+Tabular 이상 거래를 `최근접 클러스터 routing → retrieval → 거리 기반 이상탐지 → 판정 근거 설명 → 선택적 재검색` 흐름으로 처리하며, Router · Retriever · LLM Evaluator - LLM Planner · Orchestrator를 MSA로 분리해 배포했습니다.
 
 프로젝트는 세 단계로 진행됐고, 각 단계의 결론이 다음 단계의 설계 전제가 됩니다.
 
 | 단계 | 목표 | 결론 |
 |---|---|---|
 | **1. RAG 시스템 구축** | 1200만 건 정상 벡터로 구성된 memory bank를 free-tier GKE에서의 효율적 서빙 | Percolate 라우팅 + Coreset 10% + BBQ 양자화 → **메모리 −89%, AUROC 손실 0.4%p** |
-| **2. 이상판단 → 검색 결과 Evaluator** | 이상 판정에 LLM을 어디까지 쓸 것인가 | 서빙 제약에 따른 Qwen2.5-0.5B의 **검색 결과 판단 성능 5%p 향상**|
+| **2. Anomaly Detector  → 검색 결과 Evaluator** | 이상 판정 및 검색에 LLM을 어디까지 쓸 것인가 | 서빙 제약에 따른 Qwen2.5-0.5B의 **검색 결과 판단 성능 5%p 향상**|
 | **3. Agent 시스템** | 재검색 계획에 LLM이 필요한가, 그 값어치는 얼마인가 | GRPO trained plannner 기반 재검색 tool 설계로 **검색 성능 및 AUROC**  |
 
-> 세 단계 모두 **"LLM을 넣기 전에 넣을 가치가 있는지부터 측정한다"** 는 같은 방법론을 씁니다. 그 결과 Evaluator 판정, Planner 게이트에 필요한 상황 및 데이터에만 LLM을 개입시키는 결론과, 그 판단 근거를 정량적으로 남긴 것이 이 프로젝트의 핵심 산출물입니다.
+<!-- > 세 단계 모두 **"LLM을 넣기 전에 넣을 가치가 있는지부터 측정한다"** 는 같은 방법론을 씁니다. 그 결과 Evaluator 판정, Planner 게이트에 필요한 상황 및 데이터에만 LLM을 개입시키는 결론과, 그 판단 근거를 정량적으로 남긴 것이 이 프로젝트의 핵심 산출물입니다. -->
 
 ---
 
@@ -38,14 +38,14 @@ Test Transaction
 [Evaluator]   LLM 1회 — what_missing (cluster_mismatch / neighbor_insufficient / accept)
       ↓
    confident = nd <0.3 or nd >0.5(60.4%) → 판단 종료
-      ↓ ambiguous = 0.3<=nd<=0.55(39.6%)
+      ↓ ambiguous = 0.3<=nd<=0.55(39.6%)만 재검색 진행
 ┌─[AgentRAG Planner]───────────────────────────────────────────┐
-│ [Stage A] 결정론 게이트  |nd − τ| 상위 B%           비용 0   │  ← admission control
-│ [Stage B] Planner(LLM)  think → tool + feature 선택          │  ← GRPO 학습 대상
-│           Re-search tools : contextual_knn |  attribute_knn  │
+│ Planner(LLM)  think → tool + feature 선택                    │
+│ [Tool A] contextual_knn :                                    │  
+│ [Tool B] attribute_knn :                                     │  ← GRPO 학습 대상
 └──────────────────────────────────────────────────────────────┘
       ↓
-[Orchestrator] nd_final vs τ → 최종 판정 + round_log / termination
+[Orchestrator] 재검색된 정상 데이터 및 nd_final → 최종 판정 + round_log / termination
 ```
 <img src="picture/Langgraph.jpg" width="100%">
 
@@ -111,7 +111,7 @@ Range 조건을 **Bucket index + Term filter**로 변환해 후보군 pruning을
 | **V1 + aug** | **0.823 / 0.905** | **1.00** | 430.01 | **0.956 / 0.9125** |
 | V1 + aug + bucket | 0.823 / 0.897 | 0.988 | **409.25** | 0.956 / 0.9037 |
 
-**Bucket prefilter는 기각했습니다.** 별도 튜닝 sweep(`tolerance × min_match` 4조합)에서 `routing_acc`가 0.80 → 0.34~0.42로 무너졌는데, `cand_recall@5`는 1.0을 유지했습니다. **정답 클러스터는 top-5에 계속 있는데 top-1 서열만 흔들린다** — prefilter가 후보를 거르는 게 아니라 percolate 점수 서열을 희석시킨다는 뜻입니다. `base P95`도 함께 떨어져야 정상인데 오히려 늘어난 것이 확진 근거였습니다.
+<!-- **Bucket prefilter는 기각했습니다.** 별도 튜닝 sweep(`tolerance × min_match` 4조합)에서 `routing_acc`가 0.80 → 0.34~0.42로 무너졌는데, `cand_recall@5`는 1.0을 유지했습니다. **정답 클러스터는 top-5에 계속 있는데 top-1 서열만 흔들린다** — prefilter가 후보를 거르는 게 아니라 percolate 점수 서열을 희석시킨다는 뜻입니다. `base P95`도 함께 떨어져야 정상인데 오히려 늘어난 것이 확진 근거였습니다. -->
 
 ## 2️⃣ Coreset Sampling — 메모리·성능·지연 운영점 도출
 
@@ -175,6 +175,18 @@ Range 조건을 **Bucket index + Term filter**로 변환해 후보군 pruning을
 **HNSW m/ef sweep** — `m`(그래프 연결도)과 `ef_construction`(build 품질)을 3조합 비교했고, AUROC·recall이 모두 동일해 **가장 빠른 `m=16, ef=100`을 운영점으로 고정**했습니다.
 
 **Percolator 샤드 분산** — percolate는 등록 쿼리(5,725개)를 입력 문서에 MemoryIndex로 실행하므로 비용이 **샤드당 쿼리 수**에 비례합니다. 일반 역색인과 달리 CPU 작업이 실제로 나뉘어 near-linear로 스케일하되, **노드 CPU 코어 수까지만** 유효합니다(percolator limit 1800m ≈ 1.8코어 → 2배 부근 포화 예상).
+
+## 3️⃣ 결과 도출
+
+#### **Result 1: 검색 기법 및 관련 기법 parameter 최적화 in batch inference**
+Point : Percolate query version, coreset, quantization, ,
+
+#### **Result 2: 실제 Locust test에서 운영 최적점 확정**
+Point : hnsw(m-ef), shard, num_candidates,  + (oversample,topkcluster) --> P95, QPS, recall@5 깍이는거  
+(dynamic thresholding cluster id filteriinng hnsw 필요하다면 okay)
+
+#### **Result 3: ANN과의 비교**
+Point : 지표 ANN recall@10(index 수준) cand_recall@5-routing_acc,MRR(cluster 수준), dist AUROC, cls@tau acc, FNR
 
 ---
 ---
