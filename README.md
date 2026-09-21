@@ -532,7 +532,7 @@ Teacher(Qwen2.5-14B) 증류 데이터의 품질 문제를 **프롬프트와 필�
 </tr>
 </table>
 
-## 7️⃣ Deterministic–LLM 역할 분리 — 출력 자유도 5키 → 1키
+## 7️⃣ Deterministic–LLM 역할 분리 — 출력 자유도 3키 → 1키 (Data정제에도 student model 및 환경 제약성 극복)
 
 **"어디까지 LLM에 맡길 것인가"를 단계별 실험(S1→S4)으로 측정해 축소**했습니다.
 
@@ -573,6 +573,115 @@ what_missing = LLM(prompt + "[SYSTEM-COMPUTED] sufficiency=...")  # 유일한 LL
 | student cls acc vs nd acc | 0.703 vs **0.791** | evidence < nd |
 | net gain (student가 nd를 이긴 순증) | **−14** | ⛔ LLM 판정 개입은 손해 → deterministic 전환 확정 |
 
+## 7️⃣ CPU 서빙을 위한 경량화 — 14B → 0.5B, 출력 5키 → 1키, GGUF
+
+> **제약** — free-tier GKE(e2, GPU 없음)에서 LLM을 매 요청 호출해야 합니다. 3B는 CPU에서 요청당 수 초~수십 초가 걸려 파이프라인 전체를 지배합니다.
+>
+> **접근** — 모델 크기를 줄이는 것만으로는 품질이 무너집니다. **과제 자체를 0.5B가 감당할 수 있는 형태로 먼저 축소**하고, 그다음 모델을 줄였습니다. 7-1 → 7-2 → 7-3 순서가 곧 인과 순서입니다.
+
+### 7-1. 프롬프트 — "통계는 코드가, 해석만 LLM이"
+
+0.5B가 틀리는 지점을 추적하니 대부분 **산술**이었습니다(z-score 암산, 이웃 합의 집계). 모델에게 계산을 시키지 않도록 입력을 재구성했습니다.
+
+| | v1 | v2 (운영) |
+| :--- | :--- | :--- |
+| 이웃 정보 | 원시 feature 덤프 **~200 tok** | RETRIEVAL digest **~15 tok** (`agrees: sex(3/3) \| differs: browser(1/3)`) |
+| 수치 비교 | mean/std 표 → 모델이 z 암산 | **Deviation Table** — z를 사전 계산해 `[ok]`/`[DEVIANT]` 태그로 주입 |
+| 판정 신호 | 모델이 추론 | `[SYSTEM-COMPUTED] sufficiency=...` **결정론 주입** |
+| 정적 instruction | 본문 중간 | **선두 배치 (~120 tok)** — KV prefix cache 대상 |
+
+```text
+[정적 instruction ~120 tok ← 요청 간 공유, KV cache 재사용]
+[SYSTEM-COMPUTED] sufficiency=ambiguous
+[Deviation Table]  purchase_value: z=+0.79 [ok]   age: z=-2.31 [DEVIANT] ...
+[RETRIEVAL]        agrees: sex(3/3), source(2/3) | differs: browser(1/3)
+```
+
+> 정적 prefix를 선두로 옮긴 것은 **CPU 서빙 비용**을 위한 선택입니다. llama.cpp는 공통 prefix의 KV를 재사용하므로, 요청마다 달라지는 부분만 새로 prefill됩니다.
+
+### 7-2. 출력 — 자유도 5키 → 1키
+
+6️⃣에서 "cls 판정에 LLM 개입은 순손실(net −14)"이 확인됐으므로, 판정·확신도·충분성을 전부 코드로 옮기고 **LLM에는 감사 주석 하나만** 남겼습니다.
+
+```jsonc
+// Before — 5키 (0.5B가 판정과 서술을 동시에 못 함)
+{"cls": "ABNORMAL", "sufficiency": "ambiguous", "confidence": 72,
+ "what_missing": "...", "reasoning": "..."}
+
+// After — 1키 typed. 형식이 곧 파서 스키마
+{"what_missing": "cluster_mismatch: age z=-2.31 — deviates from persona"}
+//               └── type ──────┘  └── evidence ──┘ └── rationale ──┘
+```
+
+`type ∈ {cluster_mismatch, neighbor_insufficient, accept}` 3종이 **Part 3 planner의 입력(DIAGNOSIS)** 이 됩니다.
+
+| 출력 길이 | mean | p95 | max | budget | 잘림 위험 |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| 1키 typed (S5) | **22.8** | 31 | 32 | 56 | **0.0%** |
+
+### 7-3. 모델 — 14B Teacher → 0.5B Student
+
+| 단계 | 모델 | 역할 |
+| :--- | :--- | :--- |
+| Teacher | Qwen2.5-14B | GT-free blind 생성 → 3중 rejection (5️⃣) |
+| ~~Student v1~~ | Qwen2.5-3B | 5키 출력. CPU 지연 과다 |
+| **Student (운영)** | **Qwen2.5-0.5B + LoRA** | 1키 typed. SFT → GRPO |
+
+#### 📊 실험 결과 — 0.5B Student, S5 (eval n=158, 무필터)
+
+| 지표 | 실측 | 의미 |
+| :--- | ---: | :--- |
+| **type accuracy** | **0.975** (154/158) | cm / ni / accept 3-way |
+| grounded-consistency (P1) | **100.0%** | 인용 feature의 사실 방향이 Deviation Table과 일치 |
+| hallucination (P6) | **0.000** | 존재하지 않는 feature 인용 0건 |
+| evidence axes F1 (P6) | 0.869 | 지목한 이탈 축 vs GT |
+| teacher-parity Jaccard (P2) | 0.579 | 14B와 **다른 표현**으로 같은 방향 (direction 일치 100%) |
+| 고유율 / top-1 점유 (P4) | 66.5% / 10.8% | 템플릿 붕괴 없음 |
+| parse rate | **100%** | 1키 스키마의 효과 |
+
+| type | precision | recall | f1 | support |
+| :--- | ---: | ---: | ---: | ---: |
+| cluster_mismatch | 1.000 | 1.000 | **1.000** | 32 |
+| neighbor_insufficient | 0.940 | 1.000 | 0.969 | 63 |
+| accept | 1.000 | 0.937 | 0.967 | 63 |
+
+#### SFT vs GRPO — 과제가 충분히 좁아지면 RL이 더 얻을 게 없다
+
+| | type acc | P1 grounded | axes F1 | 고유율 |
+| :--- | ---: | ---: | ---: | ---: |
+| SFT | 0.980 | 100% | **0.899** | 78.0% |
+| SFT → GRPO | 0.980 | 100% | 0.886 | 78.0% |
+
+> **동일합니다.** 8️⃣의 GRPO는 5키 시절 템플릿 암기·hacking을 교정하려고 설계했는데, 과제를 "표에서 골라 서술"로 격하하자 **SFT만으로 천장(type 0.98, 환각 0)에 도달**했습니다.
+>
+> 이는 실패가 아니라 **축소의 효과를 역으로 증명**합니다 — RL이 필요했던 이유가 모델이 아니라 과제의 자유도에 있었다는 뜻입니다. 운영은 SFT adapter로 확정했습니다.
+
+### 7-4. GGUF 변환 — CPU 추론
+
+```
+LoRA adapter ─merge─▶ fp16 (HF) ─convert_hf_to_gguf─▶ GGUF ─quantize─▶ Q8_0 / Q4_K_M
+                                                                     │
+                                                      llama-cpp-python (CPU, local-analyzer)
+```
+
+| 변형 | 크기 (MB) | parse rate | type acc | P1 grounded | CPU p50 (ms) | 판정 |
+| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
+| HF fp16 (기준) | | 100% | 0.975 | 100% | — | GPU 평가 기준 |
+| GGUF **Q8_0** | | | | | | |
+| GGUF Q4_K_M | | | | | | |
+
+> **1키 스키마가 양자화 내성을 만듭니다.** planner(Part 3)에서는 Q4_K_M 변환 후 JSON 포맷이 붕괴(parse 0%)해 Q8_0로 되돌렸는데, evaluator는 출력이 `{"what_missing": "<type>: ..."}` 한 줄로 고정돼 **양자화 오차가 형식을 깨뜨릴 여지가 작습니다.** HF vs GGUF를 **동일 입력으로 A/B**해 품질 저하가 양자화 때문인지 템플릿 차이 때문인지를 분리 검증합니다.
+
+### 7️⃣ 요약 — 무엇을 줄였고, 무엇이 남았나
+
+| 축소 대상 | Before | After | 근거 |
+| :--- | :--- | :--- | :--- |
+| 입력 산술 | 모델이 z 암산 | 코드가 사전 계산 | 0.5B 오류의 주원인이 산술 |
+| 입력 길이 | 이웃 덤프 ~200 tok | digest ~15 tok | CPU prefill 비용 |
+| 출력 자유도 | 5키 | **1키 typed** | 판정 개입 net −14 (6️⃣) |
+| 모델 | 3B | **0.5B** | 과제 축소 후 SFT만으로 type 0.975 |
+| 학습 | SFT → GRPO | **SFT** | GRPO 순이득 0 |
+| 정밀도 | fp16 | **GGUF Q8_0** | CPU 서빙, 포맷 안정성 |
 ## 8️⃣ Evaluator GRPO — 검증 가능 reward와 실패 진단
 
 SFT는 토큰 우도를 최적화해 **템플릿 암기를 보상**합니다. grounding을 직접 밀어올리기 위해 전 항이 **코드로 검증 가능한** reward를 설계했고, 두 번의 실패를 진단해 수정했습니다.
