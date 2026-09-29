@@ -41,8 +41,8 @@ Test Transaction
       ↓ ambiguous = 0.3<=nd<=0.55(39.6%)만 재검색 진행
 ┌─[AgentRAG Planner]───────────────────────────────────────────┐
 │ Planner(LLM)  think → tool + feature 선택                    │
-│ [Tool A] contextual_knn :                                    │  
-│ [Tool B] attribute_knn :                                     │  ← GRPO 학습 대상
+│ [Tool A] contextual_knn : dense pool 확장 + soft rerank      │  
+│ [Tool B] attribute_knn : exact term filter                   │  ← GRPO 학습 대상
 └──────────────────────────────────────────────────────────────┘
       ↓
 [Orchestrator] 재검색된 정상 데이터 및 nd_final → 최종 판정 + round_log / termination
@@ -682,6 +682,7 @@ LoRA adapter ─merge─▶ fp16 (HF) ─convert_hf_to_gguf─▶ GGUF ─quanti
 | 모델 | 3B | **0.5B** | 과제 축소 후 SFT만으로 type 0.975 |
 | 학습 | SFT → GRPO | **SFT** | GRPO 순이득 0 |
 | 정밀도 | fp16 | **GGUF Q8_0** | CPU 서빙, 포맷 안정성 |
+
 ## 8️⃣ Evaluator GRPO — 검증 가능 reward와 실패 진단
 
 SFT는 토큰 우도를 최적화해 **템플릿 암기를 보상**합니다. grounding을 직접 밀어올리기 위해 전 항이 **코드로 검증 가능한** reward를 설계했고, 두 번의 실패를 진단해 수정했습니다.
@@ -716,7 +717,6 @@ SFT는 토큰 우도를 최적화해 **템플릿 암기를 보상**합니다. gr
 | P4 고유율 / soft-top1 | 100% / 2.7% | 붕괴 없음 |
 | P5 cls acc / FNR | 0.773 / 0.250 | FNR은 threshold 직교 레버 |
 
----
 ---
 
 # Part 3. Agent 시스템 구축
