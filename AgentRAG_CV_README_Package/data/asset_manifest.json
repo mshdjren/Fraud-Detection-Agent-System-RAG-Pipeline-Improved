@@ -1,0 +1,79 @@
+[
+  {
+    "file": "picture/cv_20261026/system_flow.png",
+    "source": "Toss_AgentRAG_Report F01",
+    "status": "[D] proposed architecture; no operating result implied",
+    "transformation": "original embedded image reused",
+    "sha256": "9494ff22f4a5d1ea4cdfeae86876cdca168975944be863582a9a77cbf0ec28c4"
+  },
+  {
+    "file": "picture/cv_20261026/streamlit_original.jpg",
+    "source": "PPT v3 slide 7 embedded image9",
+    "status": "[R] historical UI screenshot; individual latency/confidence/model version are not benchmark results",
+    "transformation": "original embedded image reused",
+    "sha256": "f4fb6696b2b2d9fa62a4863ae514652a82fda1a87e4c03318ec9547808b3320c"
+  },
+  {
+    "file": "picture/cv_20261026/grafana_search_original.png",
+    "source": "PPT v3 slide 16 embedded image14",
+    "status": "[R] historical dashboard, Locust RPS/users No data; no capacity conclusion",
+    "transformation": "original embedded image reused",
+    "sha256": "1391fbd30c58174288293ee59858962adb7481fe06bf86cf9bbb993e48963437"
+  },
+  {
+    "file": "picture/cv_20261026/router_vectors.png",
+    "source": "AgentRAG_Online_Experiment_Update.pptx v3 slide 3",
+    "status": "[D] conceptual normal vectors, routed subset, nearest neighbors",
+    "transformation": "rendered diagram region (20, 145, 940, 299) in PDF points; removed surrounding slide text only",
+    "sha256": "7aa1fe370809bff2d260f53d4e479c2c6f0c217b3d7500edec52336bcc6e18bd"
+  },
+  {
+    "file": "picture/cv_20261026/mining_types.png",
+    "source": "AgentRAG_Online_Experiment_Update.pptx v3 slide 8",
+    "status": "[D] three failure types; extracted separately to keep old off-canvas text out",
+    "transformation": "rendered diagram region (20, 147, 898, 307) in PDF points; removed surrounding slide text only",
+    "sha256": "e9e3e585ada4a6fd19da5aca8722476470918320a26b57078099473352f6e0b3"
+  },
+  {
+    "file": "picture/cv_20261026/distillation_flow.png",
+    "source": "AgentRAG_Online_Experiment_Update.pptx v3 slide 8",
+    "status": "[D] complete teacher-filter-student diagram; no manual Sankey counts reused",
+    "transformation": "rendered diagram region (20, 322, 920, 457) in PDF points; removed surrounding slide text only",
+    "sha256": "e48034cbb5474e33b5622445bb3486d79d305d5b07f97973448f944fe22e1c40"
+  },
+  {
+    "file": "picture/cv_20261026/evaluator_evidence.png",
+    "source": "AgentRAG_Online_Experiment_Update.pptx v3 slide 7",
+    "status": "[D] illustrated transaction/evidence/one-key output; no live prediction",
+    "transformation": "rendered diagram region (20, 150, 940, 464) in PDF points; removed surrounding slide text only",
+    "sha256": "ebd60994ce31ff49df67a1cbf1110b0731f6505de1067167808d5fd9ef4cf56e"
+  },
+  {
+    "file": "picture/cv_20261026/planner_action.png",
+    "source": "AgentRAG_Online_Experiment_Update.pptx v3 slide 11",
+    "status": "[D] illustrated observation/action; no live prediction",
+    "transformation": "rendered diagram region (20, 151, 940, 291) in PDF points; removed surrounding slide text only",
+    "sha256": "6f0a6c09c1388246dc7313f3c0645f40b1712d48d381b6b4822271a21a7caf88"
+  },
+  {
+    "file": "picture/cv_20261026/grafana_llm_panels.png",
+    "source": "PPT v3 slide 16 embedded image15",
+    "status": "[R] historical concurrency and LLM latency panels; cannot derive current CPU or QPS gains",
+    "transformation": "unchanged panel excerpt (0, 875, 2230, 1330) in source pixels",
+    "sha256": "4be0f469905507f876faffd3dcbaeada03dacdb6700e82f7a4b1f0145a89940e"
+  },
+  {
+    "file": "picture/cv_20261026/policy_comparison_target.png",
+    "source": "Final CV + calibrated_targets.json",
+    "status": "[T] hypothetical, not measured",
+    "transformation": "New plot from calibrated values; no ROC reconstruction, interpolation or invented CI",
+    "sha256": "ba4ee828345c8d8789a5235499bff496a39aeb36090db4f768125a1bb1d29ec0"
+  },
+  {
+    "file": "picture/cv_20261026/budget_target.png",
+    "source": "Final CV + calibrated_targets.json",
+    "status": "[T] hypothetical, not measured",
+    "transformation": "New plot from calibrated values; no ROC reconstruction, interpolation or invented CI",
+    "sha256": "c4266cc21fafd02091e408bbef7ebd36bab06d2ae3176124e79404b71219001c"
+  }
+]

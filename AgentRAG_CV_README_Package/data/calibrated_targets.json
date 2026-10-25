@@ -1,0 +1,90 @@
+{
+  "status": "T: unmeasured hypothetical calibrated scenario, not experimental results",
+  "n_total": 10000,
+  "policy_comparison": [
+    {
+      "name": "검색 단독",
+      "auroc": 0.892,
+      "correct_flip": 0,
+      "harmful_flip": 0,
+      "errors": 1600
+    },
+    {
+      "name": "고정 재검색 도구",
+      "auroc": 0.905,
+      "correct_flip": 150,
+      "harmful_flip": 50,
+      "errors": 1500
+    },
+    {
+      "name": "GBDT · LLM 진단 없음",
+      "auroc": 0.91,
+      "correct_flip": 235,
+      "harmful_flip": 65,
+      "errors": 1430
+    },
+    {
+      "name": "Evaluator + GBDT",
+      "auroc": 0.914,
+      "correct_flip": 280,
+      "harmful_flip": 60,
+      "errors": 1380
+    },
+    {
+      "name": "Evaluator + SFT",
+      "auroc": 0.918,
+      "correct_flip": 300,
+      "harmful_flip": 60,
+      "errors": 1360
+    },
+    {
+      "name": "Evaluator + GRPO",
+      "auroc": 0.925,
+      "correct_flip": 380,
+      "harmful_flip": 60,
+      "errors": 1280
+    }
+  ],
+  "budget": [
+    {
+      "entry_pct": 0,
+      "auroc": 0.892,
+      "errors": 1600
+    },
+    {
+      "entry_pct": 40,
+      "auroc": 0.923,
+      "errors": 1300
+    },
+    {
+      "entry_pct": 100,
+      "auroc": 0.925,
+      "errors": 1280
+    }
+  ],
+  "selected_subset": {
+    "n": 4000,
+    "initial_errors": 1300,
+    "correct_flip": 350,
+    "harmful_flip": 50,
+    "final_errors": 1000
+  },
+  "unselected_subset": {
+    "n": 6000,
+    "initial_errors": 300,
+    "final_errors": 300
+  },
+  "serving_targets": {
+    "search_qps_normalized_before": 1.0,
+    "search_qps_normalized_after": 1.2,
+    "search_p95_limit_ms": 250,
+    "search_failure_limit_pct": 0.5,
+    "model_cpu_per_request_normalized_before": 1.0,
+    "model_cpu_per_request_normalized_after": 0.8,
+    "evaluator_grounding_pct": 90,
+    "planner_grounding_action_pct": 92,
+    "model_path_p95_limit_s": 8,
+    "request_deadline_s": 10,
+    "model_timeout_limit_pct": 1
+  }
+}

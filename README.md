@@ -1,1031 +1,398 @@
-# Fraud Detection AgentRAG Pipeline
+# AgentRAG — 검색 근거 진단·재검색을 위한 소형 LLM 학습과 서빙 최적화
 
-<p align="center">
-  <img src="https://img.shields.io/badge/GKE-Kubernetes-326CE5?logo=kubernetes" />
-  <img src="https://img.shields.io/badge/Elasticsearch-8.x-005571?logo=elasticsearch" />
-  <img src="https://img.shields.io/badge/LangGraph-StateGraph-1C3C3C" />
-  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi" />
-  <img src="https://img.shields.io/badge/Python-3.10-3776AB?logo=python" />
-</p>
+**정상 이웃 검색의 실패를 진단하고, 필요한 요청만 재검색하는 이상탐지 시스템**입니다. 다중 클러스터 메모리 뱅크 연구를 Elasticsearch 기반 Router–Retriever로 확장하고, 검색 근거를 진단하는 **LLM Evaluator**, 판단 근거와 재검색 행동을 생성하는 **GRPO Planner**, 호출 예산과 실패 복귀를 제어하는 **Agent 실행 환경**을 구성했습니다.
 
-## 📌 프로젝트 개요
+이 README는 최종 국문 CV의 프로젝트 항목에 대응하는 실험 포트폴리오입니다. 데이터 구축·모델 학습·비교 평가·CPU GKE 배포 검증을 중심으로 정리하며, 오라클 상한 분석·전체 하이퍼파라미터 sweep·시계열 및 분산학습 확장은 본문에서 제외했습니다.
 
-**Multi-Cluster Memory Bank 이상탐지 알고리즘(EAAI 2025, 공동 1저자)을 GKE 위에서 운영 가능한 AgentRAG 시스템으로 확장한 엔드투엔드 프로젝트**입니다.
+> **결과 표기 — 2026-10-26 갱신**  
+> **[R] 기존 보고값:** 기존 README·발표자료에 기록된 결과. 이번 문서 작업에서 원시 로그를 재수집하거나 실험을 재실행하지 않았습니다.  
+> **[N] 저장 노트북 결과:** 해당 노트북의 평가 집합·출력 정의에 한정된 결과.  
+> **[T] 보정 시나리오:** 최종 CV와 직전 합의에 맞춘 **미실측 가상 수치·운영 목표**. 기존 결과로부터 실측값을 추정한 것이 아니며, 실제 실험 후 교체 대상입니다.  
+> **[D] 설계·개념 예시:** 역할과 실행 흐름을 설명하는 도식. 배포 완료나 성능 개선의 증거와 구분합니다.
 
-Tabular 이상 거래를 `최근접 클러스터 routing → retrieval → 거리 기반 이상탐지 → 판정 근거 설명 → 선택적 재검색` 흐름으로 처리하며, Router · Retriever · LLM Evaluator - LLM Planner · Orchestrator를 MSA로 분리해 배포했습니다.
+## 핵심 결과와 CV 대응
 
-프로젝트는 세 단계로 진행됐고, 각 단계의 결론이 다음 단계의 설계 전제가 됩니다.
+| CV 항목 | 비교 결과 | 해석·범위 | 상태 |
+|---|---|---|:---:|
+| Two-Stage Retrieval | Router Recall@5 **0.816→0.905**, +8.9%p | Strict AND에 클러스터 중심 거리 기반 후보 보완 | [R] |
+| Coreset·HNSW 운영점 | 인덱스 **2.8→0.31 GB**, −89%; median **125→68 ms**, −46% | 별도 coreset 실험, AUROC **0.956→0.952** | [R] |
+| Rejection Sampling | 문장 고유율 **18.9%→75.8%**, 최빈 문장 비중 **28.2%→4.6%** | 생성 학습 데이터의 반복 표현 개선 | [R] |
+| Evaluator 증류·SFT | 정제 전후 Student 근거 정합률 **75%→90%**; Teacher **92%** | 독립 평가에서 Teacher 대비 −2%p인 0.5B 모델 | [T] |
+| GRPO 보상·출력 제약 | 후보 보상 동률 **99.6%→64.2%**; Base 파싱 **84.0%→95.5%**, GRPO **96.4%** | 보상 진단 [R]과 n=337 출력 평가 [N]는 별도 실험 | [R/N] |
+| 재검색 정책 비교 | 검색 단독 **0.892** / Evaluator+GBDT **0.914** / +SFT **0.918** / +GRPO **0.925** | 공통 10,000건의 전체 AUROC | [T] |
+| Quality-constrained Budgeting | 모델 진입률 **40%**, 전체 AUROC **0.923**, 전체 오판 **1,600→1,300건** | 전수 재검색 대비 AUROC −0.002 | [T] |
+| Quantization·Prompt Compression | 모델 경로 요청당 CPU 시간 **20% 절감** | Evaluator 근거 정합률 90%·Planner 근거–행동 정합률 92% 유지 | [T] |
+| Quality-constrained Load Testing | 최대 지속 성공 QPS **20% 향상** | 동일 총자원·검색 품질, 검색 API p95≤250 ms·실패율≤0.5% | [T] |
 
-| 단계 | 목표 | 결론 |
+**대표 운영 후보는 AUROC 0.923**입니다. 0.925는 모든 요청에 재검색을 적용한 오프라인 비교 조건이며, 0.956/0.952는 별도 인덱스 비교 실험입니다. 서로 다른 실험의 AUROC를 연결하거나 개선량을 합산하지 않습니다.
+
+### 바로가기
+
+- [1. 시스템·데이터·평가 범위](#scope)
+- [2. Router–Retriever: 검색 품질과 인덱스 비용](#retrieval)
+- [3. Evaluator: 실패 데이터 구축·증류·SFT](#evaluator)
+- [4. Planner: GRPO와 재검색 정책 비교](#planner)
+- [5. LLM 역할 분리·양자화·입력 축약](#serving)
+- [6. Agent 호출 예산·부하·실패 복귀](#agent)
+- [7. 결과 재현과 시각 자료](#artifacts)
+
+<a id="scope"></a>
+## 1. 시스템·데이터·평가 범위
+
+### 문제와 접근
+
+정상 데이터만으로 구성한 메모리 뱅크에서 입력 거래와 가까운 사례를 검색하고, 그 거리를 이용해 이상 점수를 계산합니다. **정상 이웃 누락·비교 집단 오류는 거리 기반 판정에도 영향을 줄 수 있으므로**, 검색 근거의 부족한 점을 진단하고 다른 검색 행동을 선택하는 보강 경로를 추가했습니다.
+
+원본 거래와 임베딩은 재검색 전후에 동일합니다. 달라지는 것은 **검색 범위·정상 이웃·거리·최종 판정**입니다. Evaluator의 설명 자체를 이상 점수로 사용하지 않습니다.
+
+![시스템의 역할과 학습·서빙 경계 [D]](picture/cv_20261026/system_flow.png)
+
+*보고서의 구조도 재사용 [D]. 코드 게이트가 Evaluator 호출 전에 위치하는 운영 설계이며, 미선정 요청은 기본 거리 판정으로 종료합니다.*
+
+| 단계 | 입력 → 출력 | 역할·선택 |
 |---|---|---|
-| **1. RAG 시스템 구축** | 1200만 건 정상 벡터로 구성된 memory bank를 free-tier GKE에서의 효율적 서빙 | Percolate 라우팅 + Coreset 10% + BBQ 양자화 → **메모리 −89%, AUROC 손실 0.4%p** |
-| **2. Anomaly Detector  → 검색 결과 Evaluator** | 이상 판정 및 검색에 LLM을 어디까지 쓸 것인가 | 서빙 제약에 따른 Qwen2.5-0.5B의 **검색 결과 판단 성능 5%p 향상**|
-| **3. Agent 시스템** | 재검색 계획에 LLM이 필요한가, 그 값어치는 얼마인가 | GRPO trained plannner 기반 재검색 tool 설계로 **검색 성능 및 AUROC**  |
-
-<!-- > 세 단계 모두 **"LLM을 넣기 전에 넣을 가치가 있는지부터 측정한다"** 는 같은 방법론을 씁니다. 그 결과 Evaluator 판정, Planner 게이트에 필요한 상황 및 데이터에만 LLM을 개입시키는 결론과, 그 판단 근거를 정량적으로 남긴 것이 이 프로젝트의 핵심 산출물입니다. -->
-
----
-
-## 🏗️ 시스템 아키텍처
-
-```text
-Test Transaction
-      ↓
-[Router]      Percolate Query → 클러스터 매칭 (rank1=percolate, rank2~5=centroid)
-      ↓
-[Retriever]   Matching cluster-Filtered HNSW (cluster-scoped, k=3)
-      ↓
-[Evaluator]   LLM 1회 — what_missing (cluster_mismatch / neighbor_insufficient / accept)
-      ↓
-   confident = nd <0.3 or nd >0.5(60.4%) → 판단 종료
-      ↓ ambiguous = 0.3<=nd<=0.55(39.6%)만 재검색 진행
-┌─[AgentRAG Planner]───────────────────────────────────────────┐
-│ Planner(LLM)  think → tool + feature 선택                    │
-│ [Tool A] contextual_knn : dense pool 확장 + soft rerank      │  
-│ [Tool B] attribute_knn : exact term filter                   │  ← GRPO 학습 대상
-└──────────────────────────────────────────────────────────────┘
-      ↓
-[Orchestrator] 재검색된 정상 데이터 및 nd_final → 최종 판정 + round_log / termination
-```
-<img src="picture/Langgraph.jpg" width="100%">
-
----
-
-# Part 1. RAG 시스템 구축
-
-> 목표는 **"1200만 건 memory bank를 free-tier GKE(e2, 메모리 2GB 제한)에서 P95 300ms 안에 서빙"** 입니다. 검색 축을 하나씩 sweep해 최적 운영점을 도출하고, 그 위에서 LLM 실험을 진행했습니다. 
-
-## 1️⃣ Percolate Query-based Cluster Routing
-
-최근접 정상 클러스터의 매칭 정확도와 검색 속도를 위해 라우팅 쿼리를 **3단계에 걸쳐 고도화**했습니다. K-means 클러스터링 결과를 Decision Tree로 설명 가능한 규칙으로 컴파일하고, 그 규칙을 Elasticsearch Percolate Query로 등록하는 구조입니다.
-
-#### **Version 1: Strict AND**
-
-Decision Tree의 리프 노드 경로를 `bool.filter`의 range 조건으로 직접 변환해 정밀 매칭합니다.
-
-```python
-# 예시: feature v1 ∈ [0.8, ∞) AND v3 ∈ [-1.2, ∞) → Cluster 63
-{"query": {"bool": {"filter": [
-    {"range": {"v1": {"gte": 0.8}}},
-    {"range": {"v3": {"gte": -1.2}}}
-]}}}
-```
-
-- **의도**: Decision tree leaf를 각 클러스터의 rule로 표현해 직관적으로 매칭
-- **한계**: Strict AND 다수 결합으로 Top-5 매칭 다양성이 떨어짐 (같은 클러스터 1개만 매칭)
-
-#### **Version 2: Centroid-Augmented Diversity**
-
-Top-1 매칭 결과에 **벡터 유사도 기반 Top-4**를 추가해 다양성을 보완합니다.
-
-```python
-top_1 = percolate_strict_and(test_vec)                       # Phase 1
-top_4 = sorted(centroids, key=lambda c: 1 - cos(test_vec, c))[:4]   # Phase 2
-candidates = [top_1] + top_4
-```
-
-- **의도**: Recall@5 및 Top-5 다양성 ↑
-- **한계**: Strict AND 대비 검색 지연 ↑
-
-#### **Version 3: Optimized Bucketization**
-
-Range 조건을 **Bucket index + Term filter**로 변환해 후보군 pruning을 최적화합니다. 부동소수점 range 비교를 term filter bitset 연산으로 바꾸는 것이 목적입니다.
-
-```python
-# Ingest: v1 ≤ 0.8 → bucket_3, direction="lte"
-# Query : test_vec["v1"]=0.05 → bucket_3, tolerance ±1 → terms [2,3,4]
-{"bool": {"must": [
-    {"percolate": {"field": "query", "document": {...}}},
-    {"bool": {"should": [ ... 9개 feature ... ], "minimum_should_match": 3}}
-]}}
-```
-
-- **의도**: Range 비교 → Term bitset
-- **한계**: Percolate index 크기 ↑, rule 수 증가 시 지연 가능성
-
-#### 📊 실험 결과 — Percolate query routing
-
-| query version | Cluster acc / Recall@5 | Router MRR | Latency p99 (ms) | Recall@5 (knn) / AUROC |
-| :--- | :---: | :---: | :---: | :---: |
-| Strict AND (v1) | 0.816 / 0.816 | 0.941 | 420.25 | 0.786 / 0.8726 |
-| **V1 + aug** | **0.823 / 0.905** | **1.00** | 430.01 | **0.956 / 0.9125** |
-| V1 + aug + bucket | 0.823 / 0.897 | 0.988 | **409.25** | 0.956 / 0.9037 |
-
-<!-- **Bucket prefilter는 기각했습니다.** 별도 튜닝 sweep(`tolerance × min_match` 4조합)에서 `routing_acc`가 0.80 → 0.34~0.42로 무너졌는데, `cand_recall@5`는 1.0을 유지했습니다. **정답 클러스터는 top-5에 계속 있는데 top-1 서열만 흔들린다** — prefilter가 후보를 거르는 게 아니라 percolate 점수 서열을 희석시킨다는 뜻입니다. `base P95`도 함께 떨어져야 정상인데 오히려 늘어난 것이 확진 근거였습니다. -->
-
-## 2️⃣ Coreset Sampling — 메모리·성능·지연 운영점 도출
-
-<table>
-<tr>
-<td width="50%" align="center">
-<img src="picture/coreset_explain.jpg" width="100%"><br>
-<b>Coreset Sampling Algorithm</b><br><a href="https://kmhana.tistory.com/6">(from kmhana.tistory.com)</a>
-</td>
-<td width="50%" align="center">
-<img src="picture/coreset_tsne.jpg" width="100%"><br>
-<b>Cluster Distribution by sampling ratio</b> (t-SNE)
-</td>
-</tr>
-</table>
-
-#### 📊 실험 결과 — Coreset 비율 vs AUROC vs 지연
-
-| Coreset % | Index (GB) | Docs | AUROC | Recall@5 | Median Latency (ms) |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| 100 | 2.8 | 140,128 | 0.956 | **0.956** | 125 |
-| **10** | 0.31 | 14,012 | **0.952** | 0.947 | 68 |
-| 1 | 0.035 | 1,401 | 0.901 | 0.882 | **52** |
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-**Page Faults (Node 메모리 2GB 제한 시)**
-
-| Index sharding | 100% Index | 10% Index |
-| :---: | :---: | :---: |
-| X | 45.2 /s | 38.7 /s |
-| **O** | 52.3 /s | **8.1 /s** |
-
-> **압축의 latency 이득은 page fault가 날 때만 발현됩니다.** working set이 page cache 안에 전부 들어가면 f32도 pf=0이라 압축과 차이가 없습니다 — 이 조건을 만들기 위해 docs 노드 메모리를 의도적으로 제한했습니다.
-
-</td>
-<td width="50%" valign="top" align="center">
-<img src="picture/coreset_tradeoff.jpg" width="100%"><br>
-<i>AUROC and Inference Speed vs. Coreset Ratio</i>
-</td>
-</tr>
-</table>
-
-## 3️⃣ Vector Quantization · HNSW · num_candidates Sweep
-
-검색 축을 **재적재가 필요한 것 / 쿼리 파라미터**로 나눠 sweep했습니다. 후자는 ConfigMap patch만으로 바뀌므로 운영 중 조정 가능한 레버입니다.
-
-**Vector Quantization** — BBQ(binary quantization) + rescore oversample 조합이 f32와 **동일 AUROC(0.8711)에 working set 1/12**입니다.
-
-| variant | quant | oversample | working set (MB) | dist AUROC | cls@0.42 acc |
-|---|---|---|---:|---:|---:|
-| f32 | f32 | — | 284.8 | 0.8711 | 0.76 |
-| **bbq os3** | bbq_hnsw | 3 | **23.4** | **0.8711** | 0.76 |
-| int8 os0 | int8_hnsw | 0 | 82.5 | 0.8599 | **0.47** |
-| int8 os3 | int8_hnsw | 3 | 82.5 | 0.8711 | 0.76 |
-
-> `int8 os0`의 `cls@0.42 acc 0.47 / FPR 1.0`이 중요한 관찰입니다. **rescore 없이 양자화 거리를 그대로 쓰면 distance 스케일이 달라져 고정 임계값이 붕괴합니다.** AUROC(순위)는 0.86으로 멀쩡한데 절대 임계 판정만 무너지는 형태라, 순위 지표만 봤으면 놓쳤을 실패입니다.
-
-**HNSW m/ef sweep** — `m`(그래프 연결도)과 `ef_construction`(build 품질)을 3조합 비교했고, AUROC·recall이 모두 동일해 **가장 빠른 `m=16, ef=100`을 운영점으로 고정**했습니다.
-
-**Percolator 샤드 분산** — percolate는 등록 쿼리(5,725개)를 입력 문서에 MemoryIndex로 실행하므로 비용이 **샤드당 쿼리 수**에 비례합니다. 일반 역색인과 달리 CPU 작업이 실제로 나뉘어 near-linear로 스케일하되, **노드 CPU 코어 수까지만** 유효합니다(percolator limit 1800m ≈ 1.8코어 → 2배 부근 포화 예상).
-
-## 4️⃣ 결과 도출 — 운영점 결정
-
-> **정확도를 제약으로 두고 처리량을 최대화**하는 형태로 결정했습니다. 정확도와 속도를 가중합으로 섞으면 가중치가 또 하나의 자의적 축이 되기 때문입니다.
->
-> ```
-> maximize   QPS @ (p95 ≤ SLA)
-> s.t.       dist AUROC   ≥ f32 − 0.005
->            cls@τ acc    ≥ f32 − 0.02      ← 양자화 거리 편향 방어
->            ANN recall@10 ≥ 0.95           ← 인덱스 근사 하한
->            working set  ≤ page cache      ← 부하에서만 검증 가능
-> ```
->
-> 세 Result는 **측정 환경과 결정 대상**이 다릅니다.
->
-> | | 질문 | 환경 | 결정 축 |
-> |---|---|---|---|
-> | **R1** | 정확도를 얼마나 잃는가 | 단건 batch | 재적재 축 — coreset · quantization · percolate ver |
-> | **R2** | 동시성에서 버티는가 | **Locust 부하** | 런타임 축 — num_candidates · shard · oversample |
-> | **R3** | brute-force 대비 어디쯤인가 | 단건 batch | 두 target의 정량화 |
-
-### **Result 1: 단건 batch — 재적재 축 최적화**
-
-재색인이 필요한 축(Percolate version · Coreset · Quantization · PCA)을 **인덱스를 사전 생성해 격자 sweep**했습니다. `num_candidates=200` 고정.
-
-#### R1-A. Percolate query version
-
-| version | routing_acc | cand_recall@5 | MRR | knn recall@5 | dist AUROC | p99 (ms) |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Strict AND (v1) | 0.816 | 0.816 | 0.941 | 0.786 | 0.8726 | 420.25 |
-| **V1 + centroid aug** | **0.823** | **0.905** | **1.00** | **0.956** | **0.9125** | 430.01 |
-| V1 + aug + bucket | 0.823 | 0.897 | 0.988 | 0.956 | 0.9037 | **409.25** |
-
-#### R1-B. Coreset 비율
-
-| Coreset % | Docs | Index (GB) | working set (MB) | **ANN r@10** | cand_r@5 | dist AUROC | cls@τ acc | mean (ms) | **QPS(1-thread)** |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100 | 140,128 | 2.8 | 284.8 | | 0.956 | 0.956 | | 125 | |
-| **10** | 14,012 | 0.31 | 23.4 | | 0.947 | **0.952** | | 68 | |
-| 1 | 1,401 | 0.035 | | | 0.882 | 0.901 | | 52 | |
-
-#### R1-C. Vector Quantization
-
-| variant | quant | oversample | working set (MB) | **ANN r@10** | dist AUROC | **cls@0.42 acc** | FNR | mean (ms) |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| f32 | f32 | — | 284.8 | | 0.8711 | 0.76 | | |
-| **bbq os3** | bbq_hnsw | 3 | **23.4** | | **0.8711** | 0.76 | | |
-| bbq os1.5 | bbq_hnsw | 1.5 | 23.4 | | | | | |
-| int8 os0 | int8_hnsw | 0 | 82.5 | | 0.8599 | **0.47** | | |
-| int8 os3 | int8_hnsw | 3 | 82.5 | | 0.8711 | 0.76 | | |
-
-> **`cls@τ acc`를 별도로 본 것이 결정적이었습니다.** `int8 os0`은 AUROC 0.86(순위)을 유지한 채 고정 임계 정확도만 0.47(FPR 1.0)로 붕괴합니다. 양자화 거리가 체계적으로 커지는 방향으로 편향돼 `nd` 분포 전체가 밀리기 때문이며, **순위 지표만 봤으면 놓쳤을 실패**입니다.
-
-#### R1-D. PCA 차원 (압축 사슬의 첫 레버)
-
-| PCA dim | 설명분산 | index (MB) | **ANN r@10** | dist AUROC | mean (ms) |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 576 (원본) | 1.00 | 285 | 1.000 | | |
-| 128 | | 63 | | | |
-| **64** (운영점) | | **32** | | **0.8711** | |
-| 32 | | 16 | | | |
-
-<p align="center">
-<img src="picture/r1_pareto_workingset_auroc.png" width="75%"><br>
-<i>[R1] working set(MB) × AUROC Pareto — coreset 3 × quantization 4 격자</i>
-</p>
-
-**R1 컷 기준** — `AUROC 손실 ≤ 0.5%p` ∧ `cls@τ acc ≥ f32 − 0.02` ∧ `ANN r@10 ≥ 0.95`
-→ 통과 후보: `coreset10+bbq_os3`, `coreset10+f32`, `coreset100+bbq_os3`
-
----
-
-### **Result 2: Locust 부하 — 런타임 축 확정과 포화점**
-
-**단건에서는 잴 수 없는 것만** 부하로 검증합니다. 순차 실행에서는 working set이 page cache에 그대로 남아 f32도 `pf=0`이 되어, 압축 유무의 차이가 나타나지 않습니다.
-
-시나리오: 3단계 계단(**5 → 20 → 50 users**, 각 5/10/15분)을 `LoadTestShape`로 코드 고정, `RUN_ID`만 바꿔 후보별 반복.
-
-#### R2-A. 후보별 포화점
-
-| 후보 | 포화 RPS | p95 @목표RPS | p99 | **page fault/s** | ES search 큐 | 실패율 |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| coreset100 + f32 | | | | | | |
-| **coreset10 + bbq os3** | | | | | | |
-| coreset10 + f32 | | | | | | |
-
-#### R2-B. num_candidates × recall × QPS
-
-재색인이 없는 유일한 축이라 **운영 중 조정 가능한 레버**입니다.
-
-| nc | **ANN r@10** | cand_r@5 | dist AUROC | mean (ms) | p95 (ms) | **QPS(서버)** |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 25 | | 0.7 | | | | |
-| 100 | | 0.7 | | | | |
-| **200** | | 0.7 | | | | |
-| 400 | | 0.7 | | | | |
-| 800 | | 0.7 | | | | |
-
-> `cand_recall@5`가 전 행에서 **0.7로 동일**한 것이 `ANN recall@10` 컬럼을 추가한 이유입니다 — task 지표는 근사 오차에 둔감해 이 축의 효과를 전혀 잡지 못합니다.
-
-#### R2-C. Shard × num_candidates
-
-HNSW는 **샤드별 독립 그래프**라 `num_candidates`가 샤드마다 적용됩니다.
-
-```
-샤드 ↑ → 후보 총량 ↑ → recall ↑   (직관과 반대)
-       → coordinator 병합 비용 ↑ → p95 ↑
-```
-
-| shard | nc | **ANN r@10** | p95 (ms) | 포화 RPS | 비고 |
-| ---: | ---: | ---: | ---: | ---: | :--- |
-| 1 | 200 | | | | 현재 |
-| 2 | 200 | | | | |
-| 4 | 200 | | | | |
-
-**Percolator 샤드** — percolate는 등록 쿼리(5,725개)를 MemoryIndex로 실행하므로 비용이 **샤드당 쿼리 수**에 비례합니다. CPU 작업이 실제로 나뉘어 near-linear로 스케일하되 **노드 코어 수까지만** 유효합니다(limit 1800m ≈ 1.8코어 → 2배 부근 포화).
-
-| percolator shard | 등록 쿼리/샤드 | p95 (ms) | 포화 RPS |
-| ---: | ---: | ---: | ---: |
-| 1 | 5,725 | 710 | |
-| 2 | 2,863 | | |
-| 4 | 1,431 | | |
-
-#### R2-D. HNSW m / ef_construction
-
-| m | ef_c | segments | **ANN r@10** | cand_r@5 | build (s) | p95 (ms) |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **16** | **100** | 13 | | 0.7 | | |
-| 32 | 200 | 15 | | 0.7 | | |
-| 64 | 400 | 18 | | 0.7 | | |
-
-> 3조합의 AUROC·recall이 모두 동일해 **가장 빠른 `m=16, ef=100`을 운영점으로 고정**했습니다. 검색 운영점을 LLM 실험 **전에** 얼려, 이후 Evaluator·Planner 측정이 검색 변동에 오염되지 않도록 한 것이 목적입니다.
-
-#### R2-E. oversample × top_k_clusters
-
-| os | cls@τ acc | rescore I/O | | K | cand_r@5 | 검색 문서 수 | p95 (ms) |
-| ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: |
-| 0 | **0.47** | 0 | | 1 | 0.823 | 1/500 | |
-| 1.5 | | | | 3 | | | |
-| **3** | 0.76 | k×3 | | **5** | **0.905** | 1/100 | 82 |
-| 5 | | k×5 | | 10 | | 1/50 | |
-
-<p align="center">
-<img src="picture/r2_grafana_load_verification.png" width="95%"><br>
-<i>[R2] Grafana 부하 검증 — Row1 RPS 계단 / Row2 page fault × retriever p95 / Row3 포화점·큐 적체 / Row4 동시성</i>
-</p>
-
-<p align="center">
-<img src="picture/r2_pagefault_p95_overlay.png" width="80%"><br>
-<i>[R2] <code>f32</code> vs <code>bbq</code> — 동일 부하에서 page fault(우축, 점선)와 p95(좌축)가 같은 시점에 튀는 것이 압축 이득의 인과 증거</i>
-</p>
-
----
-
-### **Result 3: Brute-force kNN 대비 — 라우팅과 양자화의 손익 정량화**
-
-두 개선 축을 **exact kNN 기준으로** 분리 측정합니다.
-
-```
-target A:  brute-force 대비 router-retriever(2-stage)의 손익
-target B:  brute-force 대비 정상 인덱스 quantization의 손익
-```
-
-#### R3-A. 검색 범위별 — 라우팅이 무엇을 얼마에 팔았는가
-
-| 검색 범위 | **ANN r@10** | cand_r@5 | routing_acc | MRR | dist AUROC | cls@τ acc | FNR | dist comp/query | mean (ms) |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **brute-force (exact)** | **1.000** | 1.000 | 1.000 | 1.000 | | | | 140,128 | |
-| global HNSW (라우팅 없음) | | | — | — | **0.9141** | | | | |
-| **cluster-scoped (2-stage)** | | **0.905** | **0.823** | **1.00** | **0.8568** | 0.76 | | | 82 |
-
-> **라우팅은 정확도를 위한 것이 아니라 비용을 위한 것입니다.**
->
-> ```
-> nd_global ≤ nd_cluster  가 99.97%에서 성립
->   (부분집합의 최소거리는 전체집합의 최소거리보다 클 수밖에 없다)
-> → AUROC −5.73%p 를 검색공간 1/100 과 교환
-> ```
->
-> Part 3의 **선택적 재검색이 이 손실 중 얼마를 되찾는지**가 Agent 시스템의 존재 이유입니다.
-
-#### R3-B. 양자화별 — 인덱스 근사가 잃은 양
-
-라우팅 영향을 제거하기 위해 **global 범위에서** 측정합니다.
-
-| variant | **ANN r@10 (global)** | dist AUROC | cls@τ acc | FNR | working set (MB) | **QPS(1-thread)** |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| exact (brute-force) | 1.000 | | | | 284.8 | |
-| f32 HNSW | | 0.8711 | 0.76 | | 284.8 | |
-| **bbq os3** | | **0.8711** | 0.76 | | **23.4** | |
-| int8 os0 | | 0.8599 | **0.47** | | 82.5 | |
-
-#### R3-C. Filtered kNN — 선택도가 recall을 무너뜨리는 지점
-
-**이 파이프라인은 모든 검색이 filtered입니다**(`cluster_ids` 또는 `field_filters`). HNSW에서 필터를 걸면 그래프 탐색이 필터 통과 노드를 못 찾고 조기 종료하는 실패 모드가 있고, 실제로 `attribute_knn`이 `support=71,501`(전체의 58%)인데 **0건을 반환**한 사건을 겪었습니다.
-
-| 선택도 s | 통과 문서 수 | **ANN r@10** | 반환 건수 | p95 (ms) |
-| ---: | ---: | ---: | ---: | ---: |
-| 0.001 | 123 | | | |
-| 0.01 | 1,228 | | | |
-| 0.1 | 12,281 | | | |
-| 1.0 (무필터) | 122,810 | | | |
-
-```python
-# 운영 결정 — 붕괴 임계 아래에서는 exact로 전환
-if support < BRUTE_FORCE_THRESHOLD:
-    exact script_score                      # 후보가 적어 감당 가능
-else:
-    filtered HNSW, num_candidates = max(200, k * 40)
-```
-
-<p align="center">
-<img src="picture/r3_recall_qps_pareto.png" width="80%"><br>
-<i>[R3] Recall–QPS Pareto (ann-benchmarks 표준 형식) — x: ANN recall@10, y: QPS(1-thread), 점: num_candidates, 색: quantization variant, ★: 운영점</i>
-</p>
-
-<p align="center">
-<img src="picture/r3_filtered_recall_selectivity.png" width="75%"><br>
-<i>[R3] 선택도 vs filtered ANN recall — 붕괴 임계(수직선)와 후보 조합 분포(막대)</i>
-</p>
-
----
-
-### 📌 운영점 확정
-
-| 축 | 운영점 | 결정 근거 | 출처 |
-| :--- | :--- | :--- | :---: |
-| Percolate | V1 + centroid aug (top-5) | Recall@5 +9%p, MRR 1.00. bucket prefilter는 **서열 희석**으로 기각 | R1-A |
-| Coreset | **10%** | 메모리 −89%, AUROC 손실 0.4%p 이내, median latency −46% | R1-B |
-| Quantization | **BBQ + oversample 3** | f32와 동일 AUROC, working set 1/12. rescore가 **τ 불변**을 보장 | R1-C |
-| PCA dim | **64** | 압축 사슬의 첫 9× | R1-D |
-| HNSW | `m=16, ef_c=100` | 3조합 AUROC 동일 → 최속 | R2-D |
-| `num_candidates` | **200** | ANN recall knee. 이후는 latency만 | R2-B |
-| Shard | | 포화 RPS 최대. percolator 우선(Stage1이 2.7배 느림) | R2-C |
-| `top_k_clusters` | **5** | cand_recall 한계효용 | R2-E |
-| filtered fallback | support < 임계 시 exact | 저선택도에서 HNSW 조기 종료 | R3-C |
-
-> **`Stage 1(router) 220ms` vs `Stage 2(retriever) 82ms`** — 캐스케이드 통념("싼 필터 → 비싼 정밀")과 반대로, 라우팅이 HNSW보다 2.7배 느립니다. percolate가 5,725개 등록 쿼리를 MemoryIndex로 실행하기 때문이며, 이것이 percolator 샤드 분산을 우선 최적화 대상으로 둔 근거입니다.
-
-3. 추가 제안 — 자료 2개
-
-위 코드에 이미 그림 자리를 넣어뒀는데, 텍스트로 더 필요한 게 두 개 있습니다.
-
-① 쿼리 형태 대조 (R3-A 앞)
-
-검색 엔지니어가 가장 빨리 이해하는 자료입니다. 세 범위의 실제 ES 쿼리를 나란히 두면 라우팅의 의미가 즉시 전달됩니다.
-
-#### 검색 범위별 쿼리 형태
-
-```jsonc
-// ① brute-force (exact) — ground truth 생성용
-{"query": {"script_score": {
-    "query": {"match_all": {}},
-    "script": {"source": "1 / (1 + l2norm(params.q, 'vec'))", "params": {"q": [...]}}}}}
-
-// ② global HNSW — 라우팅 없음
-{"knn": {"field": "vec", "query_vector": [...], "k": 5,
-         "num_candidates": 200,
-         "rescore_vector": {"oversample": 3}}}
-
-// ③ cluster-scoped (운영) — Stage 1이 좁힌 5개 클러스터 안에서만
-{"knn": {"field": "vec", "query_vector": [...], "k": 5,
-         "num_candidates": 200,
-         "rescore_vector": {"oversample": 3},
-         "filter": {"terms": {"cluster_id": [63, 12, 88, 41, 7]}}}}
-```
-
-② Sweep 설계도 (Result 1 앞)
-
-왜 전조합을 안 했는가를 답합니다.
-#### Sweep 설계 — 계층적 축소
-
-```
-전조합:  coreset3 × quant4 × pca4 × hnsw3 × shard3 × nc6 × os4 × K4 = 41,472  ✗
-
-계층 분할:
-  [R1] 재적재 축 격자        12 인덱스  →  컷 3기준  →  후보 3개
-  [R2] 런타임 축 곡선        후보별 nc/os/K sweep (재색인 0)
-  [R3] exact 대조            최종 운영점 + 검색범위 3종
-```
-
-재적재 여부가 sweep 방식을 가릅니다. `num_candidates`·`oversample`·`top_k_clusters`는 ConfigMap patch만으로 바뀌므로 운영 중 조정 가능한 레버이고, 나머지는 인덱스 하나가 한 점입니다.
----
-
-# Part 2. forwardRAG → LLM Evaluator
-
-> 목표는 **"이상 판정에 LLM을 어디까지 쓸 것인가"** 를 감이 아니라 단계별 측정으로 정하는 것입니다. 전수 LLM 추론(forwardRAG)에서 출발해, 학습 데이터 품질 → 역할 분리 → 모델 축소 순으로 진행했습니다.
-
-<p align="center"><img src="picture/streamlit_forwardRAG.jpg" width="100%"><br><i>ForwardRAG streamlit UI</i></p>
-
-## 5️⃣ Pipeline-Aware Hard Negative Mining
-
-무작위 샘플링 대신 **파이프라인이 실제로 틀리는 지점**을 3가지 패턴으로 정의하고, 그 구간을 집중 채굴했습니다.
-
-| 패턴 | 정의 | 왜 어려운가 |
-|---|---|---|
-| **Router 오배정** | percolate top-1이 GT 클러스터와 불일치 | 잘못된 memory bank와 비교하게 됨 |
-| **Cross-Cluster** | GT 클러스터가 top-5 안에 있으나 top-1이 아님 | 재검색으로 복구 가능한 구간 |
-| **Distance boundary** | nd가 판정 임계 근처 | 거리만으로 판정이 갈리지 않는 구간 |
-
-이 세 패턴이 이후 Evaluator의 `what_missing` 채널(`cluster_mismatch` / `neighbor_insufficient`)과 Agent tool 설계의 직접 근거가 됩니다.
-
-## 6️⃣ 학습 데이터 생성 — Prompt v2 + 3중 Rejection Sampling
-
-Teacher(Qwen2.5-14B) 증류 데이터의 품질 문제를 **프롬프트와 필터를 2단계에 걸쳐 고도화**해 해결했습니다.
-
-#### **Version 1: GT-conditioned 생성 (rejection 없음)**
-
-```text
-프롬프트: [이웃 원시 feature 덤프 ~200 tok] + [mean/std 통계표] + GROUND TRUTH: ABNORMAL
-→ teacher: reasoning을 GT에 맞춰 사후 합리화(rationalization)
-```
-
-- **의도**: GT 조건화로 라벨-설명 일관성 확보
-- **한계**: reason ↔ label 인과가 파괴되어 student가 관계가 아닌 **템플릿을 암기** (고유율 18.9%, 최빈 문장 점유 28.2%, confidence 평균회귀 std<10). teacher 정답률 60~65%의 오답도 그대로 학습 신호를 오염
-
-#### **Version 2: Prompt v2 + GT-free 생성 → 3중 Rejection**
-
-**"통계는 시스템이 계산하고, 해석만 LLM에 남긴다"** — 프롬프트에서 산술을 제거하고 blind 생성 후 코드로 거릅니다.
-
-```text
-[정적 instruction 선두 (~120 tok, KV prefix cache 대상)]
-[Deviation Table]  purchase_value: z=+0.79 [ok] ...        ← z를 사전 계산 (모델 암산 제거)
-[RETRIEVAL digest] top-k agrees: sex(3/3) | differs: browser(1/3) ...   ← 원시 덤프 15 tok 압축
-```
-
-| 필터 | 내용 | 해결한 실패 모드 |
-|---|---|---|
-| ① cls-GT | blind teacher 판정 ≠ GT → 기각 | teacher 오답(60~65%) 오염 |
-| ② grounded | 인용 feature의 **사실 방향**을 코드 검증 | "인용율 71.8%"의 함정 — 정합 서술도 통과하던 문제 |
-| ③ dedup cap | soft-key(40자) 키당 ≤2% | 최빈 문장 점유 붕괴 |
-
-- **의도**: 검증 가능한 것(z, 합의)은 코드가 계산·필터 → LLM은 "표에서 골라 서술"만
-- **한계**: grounded 기각 ~38%의 수율 비용 (oversample ×1.7~2.5로 상쇄)
-
-#### 📊 실험 결과 — 학습 데이터 품질
-
-| 지표 | v1 (GT-conditioned) | **v2 (+Rejection)** | 목표 |
-|---|---:|---:|---:|
-| reasoning 고유율 | 18.9% | **75.8%** | >40% |
-| top-1 문장 점유율 | 28.2% | **4.6%** | <10% |
-| confidence ↔ \|nd−0.5\| 상관 | — | **0.985** | ≈1.0 |
-| ECE (라벨 함수) | — | **0.109** | 서빙 비교 기준선 |
-
-<table>
-<tr>
-<td width="50%" align="center">
-<img src="picture/mining_data.jpg" width="100%"><br>
-<b>Rejection Funnel (Sankey)</b><br>생성 → parse/GT/grounded/dup 기각 → train
-</td>
-<td width="50%" align="center">
-<img src="picture/nb03-fig3.png" width="100%"><br>
-<b>다양성 산점 (고유율 × soft-top1)</b><br>v1 → v2 개선 + student 붕괴점 대비
-</td>
-</tr>
-</table>
-
-## 7️⃣ Deterministic–LLM 역할 분리 — 출력 자유도 3키 → 1키 (Data정제에도 student model 및 환경 제약성 극복)
-
-**"어디까지 LLM에 맡길 것인가"를 단계별 실험(S1→S4)으로 측정해 축소**했습니다.
-
-#### **Version 1: 3-key Evaluator (cls · sufficiency · what_missing 전부 LLM)**
-
-ambiguous 구간(nd ∈ [0.3, 0.55))에서는 nd가 신뢰 불가하므로 LLM이 evidence로 cls까지 판정하게 하는 설계였습니다.
-
-- **한계**: 데이터는 완벽(coupling 위반 0/995)했으나 **0.5B가 판정과 서술을 동시에 못 합니다**
-
-| SUF_BALANCE A/B | nd→cls 유지 | wm 품질(P1) | 판정 |
-|---|---:|---:|---|
-| ambiguous만 학습 (224) | **53.8%** ❌ | 92.7% | 판정 붕괴 |
-| 전 밴드 학습 (1,014) | 94.7% | **79.6%** | 서술 희석 |
-
-#### **Version 2: 1-key + Deterministic 판정 (최종 채택)**
-
-```python
-sufficiency  = "ambiguous" if 0.3 <= nd < 0.55 else "confident"   # 코드
-cls          = "ABNORMAL"  if nd >= 0.5 else "NORMAL"             # 코드
-what_missing = LLM(prompt + "[SYSTEM-COMPUTED] sufficiency=...")  # 유일한 LLM 자유 출력
-```
-
-| 신호 | 담당 | 근거 (실측) |
-|---|---|---|
-| sufficiency | 코드 (nd-band 주입) | 이산 판정의 SFT collapse — 주입 후 wm 생성 타이밍 11% → **100%** |
-| cls | 코드 (nd threshold) | ambiguous에서도 student(0.703) < nd(0.791), **net gain −14** |
-| confidence | 코드 (50+50·tanh 재라벨) | teacher 자체 conf는 평균회귀 (std<10) |
-| what_missing | **LLM** (감사 주석) | 실제 이탈 feature 지목 정합도 70% |
-
-- **의도**: "표에서 골라 서술" 과제로 격하 → **3B를 0.5B로 대체**하는 근거. instruction은 서빙과 verbatim 동일(train-serve 정합)
-- **한계**: wm의 판정 기여는 기각 — 가치는 감사 주석 + 선택적 호출로 재정의
-
-#### 📊 실험 결과 — 역할 분리 (Step 0 직접 검정, eval n=300 / ambiguous 158)
-
-| 측정 | 실측 | 판정 |
-|---|---:|---|
-| nd AUROC (ambiguous 밴드 내) | **0.832** | 밴드 안에서도 nd가 강신호 |
-| student cls acc vs nd acc | 0.703 vs **0.791** | evidence < nd |
-| net gain (student가 nd를 이긴 순증) | **−14** | ⛔ LLM 판정 개입은 손해 → deterministic 전환 확정 |
-
-## 7️⃣ CPU 서빙을 위한 경량화 — 14B → 0.5B, 출력 5키 → 1키, GGUF
-
-> **제약** — free-tier GKE(e2, GPU 없음)에서 LLM을 매 요청 호출해야 합니다. 3B는 CPU에서 요청당 수 초~수십 초가 걸려 파이프라인 전체를 지배합니다.
->
-> **접근** — 모델 크기를 줄이는 것만으로는 품질이 무너집니다. **과제 자체를 0.5B가 감당할 수 있는 형태로 먼저 축소**하고, 그다음 모델을 줄였습니다. 7-1 → 7-2 → 7-3 순서가 곧 인과 순서입니다.
-
-### 7-1. 프롬프트 — "통계는 코드가, 해석만 LLM이"
-
-0.5B가 틀리는 지점을 추적하니 대부분 **산술**이었습니다(z-score 암산, 이웃 합의 집계). 모델에게 계산을 시키지 않도록 입력을 재구성했습니다.
-
-| | v1 | v2 (운영) |
-| :--- | :--- | :--- |
-| 이웃 정보 | 원시 feature 덤프 **~200 tok** | RETRIEVAL digest **~15 tok** (`agrees: sex(3/3) \| differs: browser(1/3)`) |
-| 수치 비교 | mean/std 표 → 모델이 z 암산 | **Deviation Table** — z를 사전 계산해 `[ok]`/`[DEVIANT]` 태그로 주입 |
-| 판정 신호 | 모델이 추론 | `[SYSTEM-COMPUTED] sufficiency=...` **결정론 주입** |
-| 정적 instruction | 본문 중간 | **선두 배치 (~120 tok)** — KV prefix cache 대상 |
-
-```text
-[정적 instruction ~120 tok ← 요청 간 공유, KV cache 재사용]
-[SYSTEM-COMPUTED] sufficiency=ambiguous
-[Deviation Table]  purchase_value: z=+0.79 [ok]   age: z=-2.31 [DEVIANT] ...
-[RETRIEVAL]        agrees: sex(3/3), source(2/3) | differs: browser(1/3)
-```
-
-> 정적 prefix를 선두로 옮긴 것은 **CPU 서빙 비용**을 위한 선택입니다. llama.cpp는 공통 prefix의 KV를 재사용하므로, 요청마다 달라지는 부분만 새로 prefill됩니다.
-
-### 7-2. 출력 — 자유도 5키 → 1키
-
-6️⃣에서 "cls 판정에 LLM 개입은 순손실(net −14)"이 확인됐으므로, 판정·확신도·충분성을 전부 코드로 옮기고 **LLM에는 감사 주석 하나만** 남겼습니다.
-
-```jsonc
-// Before — 5키 (0.5B가 판정과 서술을 동시에 못 함)
-{"cls": "ABNORMAL", "sufficiency": "ambiguous", "confidence": 72,
- "what_missing": "...", "reasoning": "..."}
-
-// After — 1키 typed. 형식이 곧 파서 스키마
-{"what_missing": "cluster_mismatch: age z=-2.31 — deviates from persona"}
-//               └── type ──────┘  └── evidence ──┘ └── rationale ──┘
-```
-
-`type ∈ {cluster_mismatch, neighbor_insufficient, accept}` 3종이 **Part 3 planner의 입력(DIAGNOSIS)** 이 됩니다.
-
-| 출력 길이 | mean | p95 | max | budget | 잘림 위험 |
-| :--- | ---: | ---: | ---: | ---: | ---: |
-| 1키 typed (S5) | **22.8** | 31 | 32 | 56 | **0.0%** |
-
-### 7-3. 모델 — 14B Teacher → 0.5B Student
-
-| 단계 | 모델 | 역할 |
-| :--- | :--- | :--- |
-| Teacher | Qwen2.5-14B | GT-free blind 생성 → 3중 rejection (5️⃣) |
-| ~~Student v1~~ | Qwen2.5-3B | 5키 출력. CPU 지연 과다 |
-| **Student (운영)** | **Qwen2.5-0.5B + LoRA** | 1키 typed. SFT → GRPO |
-
-#### 📊 실험 결과 — 0.5B Student, S5 (eval n=158, 무필터)
-
-| 지표 | 실측 | 의미 |
-| :--- | ---: | :--- |
-| **type accuracy** | **0.975** (154/158) | cm / ni / accept 3-way |
-| grounded-consistency (P1) | **100.0%** | 인용 feature의 사실 방향이 Deviation Table과 일치 |
-| hallucination (P6) | **0.000** | 존재하지 않는 feature 인용 0건 |
-| evidence axes F1 (P6) | 0.869 | 지목한 이탈 축 vs GT |
-| teacher-parity Jaccard (P2) | 0.579 | 14B와 **다른 표현**으로 같은 방향 (direction 일치 100%) |
-| 고유율 / top-1 점유 (P4) | 66.5% / 10.8% | 템플릿 붕괴 없음 |
-| parse rate | **100%** | 1키 스키마의 효과 |
-
-| type | precision | recall | f1 | support |
-| :--- | ---: | ---: | ---: | ---: |
-| cluster_mismatch | 1.000 | 1.000 | **1.000** | 32 |
-| neighbor_insufficient | 0.940 | 1.000 | 0.969 | 63 |
-| accept | 1.000 | 0.937 | 0.967 | 63 |
-
-#### SFT vs GRPO — 과제가 충분히 좁아지면 RL이 더 얻을 게 없다
-
-| | type acc | P1 grounded | axes F1 | 고유율 |
-| :--- | ---: | ---: | ---: | ---: |
-| SFT | 0.980 | 100% | **0.899** | 78.0% |
-| SFT → GRPO | 0.980 | 100% | 0.886 | 78.0% |
-
-> **동일합니다.** 8️⃣의 GRPO는 5키 시절 템플릿 암기·hacking을 교정하려고 설계했는데, 과제를 "표에서 골라 서술"로 격하하자 **SFT만으로 천장(type 0.98, 환각 0)에 도달**했습니다.
->
-> 이는 실패가 아니라 **축소의 효과를 역으로 증명**합니다 — RL이 필요했던 이유가 모델이 아니라 과제의 자유도에 있었다는 뜻입니다. 운영은 SFT adapter로 확정했습니다.
-
-### 7-4. GGUF 변환 — CPU 추론
-
-```
-LoRA adapter ─merge─▶ fp16 (HF) ─convert_hf_to_gguf─▶ GGUF ─quantize─▶ Q8_0 / Q4_K_M
-                                                                     │
-                                                      llama-cpp-python (CPU, local-analyzer)
-```
-
-| 변형 | 크기 (MB) | parse rate | type acc | P1 grounded | CPU p50 (ms) | 판정 |
-| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
-| HF fp16 (기준) | | 100% | 0.975 | 100% | — | GPU 평가 기준 |
-| GGUF **Q8_0** | | | | | | |
-| GGUF Q4_K_M | | | | | | |
-
-> **1키 스키마가 양자화 내성을 만듭니다.** planner(Part 3)에서는 Q4_K_M 변환 후 JSON 포맷이 붕괴(parse 0%)해 Q8_0로 되돌렸는데, evaluator는 출력이 `{"what_missing": "<type>: ..."}` 한 줄로 고정돼 **양자화 오차가 형식을 깨뜨릴 여지가 작습니다.** HF vs GGUF를 **동일 입력으로 A/B**해 품질 저하가 양자화 때문인지 템플릿 차이 때문인지를 분리 검증합니다.
-
-### 7️⃣ 요약 — 무엇을 줄였고, 무엇이 남았나
-
-| 축소 대상 | Before | After | 근거 |
-| :--- | :--- | :--- | :--- |
-| 입력 산술 | 모델이 z 암산 | 코드가 사전 계산 | 0.5B 오류의 주원인이 산술 |
-| 입력 길이 | 이웃 덤프 ~200 tok | digest ~15 tok | CPU prefill 비용 |
-| 출력 자유도 | 5키 | **1키 typed** | 판정 개입 net −14 (6️⃣) |
-| 모델 | 3B | **0.5B** | 과제 축소 후 SFT만으로 type 0.975 |
-| 학습 | SFT → GRPO | **SFT** | GRPO 순이득 0 |
-| 정밀도 | fp16 | **GGUF Q8_0** | CPU 서빙, 포맷 안정성 |
-
-## 8️⃣ Evaluator GRPO — 검증 가능 reward와 실패 진단
-
-SFT는 토큰 우도를 최적화해 **템플릿 암기를 보상**합니다. grounding을 직접 밀어올리기 위해 전 항이 **코드로 검증 가능한** reward를 설계했고, 두 번의 실패를 진단해 수정했습니다.
-
-| 항 | 정의 | 검증 방식 |
-|---|---|---|
-| R_direction | 결함 채널(cm/ni) ↔ 결정론 신호(DEVIANT 존재 / spread) 일관성 | 프롬프트 파싱 |
-| R_grounded | 인용 feature 실재 + z/value 명시 + 채널 정합 | Deviation Table |
-| R_format | `"<direction>: <evidence>"` 형식 | 정규식 |
-| − P_template/length/dist | 그룹 내 중복 · 토큰 초과 · 거리 재진술 | dedup key / tokenizer |
-
-#### 실패 진단 체인 — reward는 "지형"이다
-
-| 버전 | 실행 결과 | 진단된 원인 | 수정 |
-|---|---|---|---|
-| **v4** | 전 스텝 skip (updated 0/786) | reward 최상단이 cls를 요구 — 1-key 출력엔 cls가 없음 → 전 생성 0점 → **그룹 분산 0** | cls 검사를 forward 분기로 이동 |
-| **v5** | 학습은 됐으나 **P1 0%**, direction 단독 출력만 (cm:ni 57:39 flip) | ① direction 단독 = 0.375 **안전지대** ② mining-GT 방향 맞히기가 최대 분산원 ③ dup 페널티가 direction-flip을 "다양성"으로 보상 — 전형적 **reward hacking** | v6 ladder |
-| **v6** | *재실험 예정* | — | 무출력 0 < direction 단독 0.10 < evidence 시도 0.30 < 실인용 0.50 < 채널 정합 0.75 < +z 0.90 < +일관성 1.0 — **모든 계단에 gradient** |
-
-> **GRPO는 정책이 실제 샘플한 출력만 학습합니다.** 붕괴 모델은 temperature 1.1 / G=8 / prefix-forcing으로 **탐색을 먼저 복원**해야 ladder가 작동합니다. 이 진단 과정 자체가 RL 디버깅의 핵심 산출물입니다.
-
-## 9️⃣ 평가 체계 — 우선순위 지표 + LLM-as-Judge
-
-"통과하기 쉬운 지표(인용율·loss)"가 아니라 **사실 정합을 우선 채점**합니다.
-
-`P1` grounded-consistency → `P2` teacher-parity(Jaccard) → `P3` ECE/형식 → `P4` 다양성 → `P5` cls acc(det 서빙에선 참고). Judge는 자유출력만 이산 rubric(0/0.5/1)으로 채점하며, **신뢰성 3종(GT 상관·재현성·순서편향) 통과가 채택 조건**입니다.
-
-| 지표 (배포 후보 0.5B GGUF Q4, n=100) | 실측 | 해석 |
-|---|---:|---|
-| P1 grounded-consistency | **88.0%** | 인용 feature의 사실 정합 |
-| P3 confidence ECE | **0.099** | 라벨 함수 상한(0.109)에 근접 = 재라벨 학습 성공 |
-| P4 고유율 / soft-top1 | 100% / 2.7% | 붕괴 없음 |
-| P5 cls acc / FNR | 0.773 / 0.250 | FNR은 threshold 직교 레버 |
-
----
-
-# Part 3. Agent 시스템 구축
-
-> 목표는 **"검색 결과가 부족할 때 재검색을 계획하는 agent"** 입니다. Part 2에서 "판정에 LLM은 손해"라는 결론이 나왔으므로, agent의 가치를 **정확도가 아니라 선택적 호출과 계획 품질**에서 찾아야 했습니다.
-
-<p align="center"><img src="picture/streamlit_forwardRAGvsAgentRAG.jpg" width="100%"><br><i>AgentRAG vs forwardRAG streamlit UI</i></p>
-
-## 🔟 Planner 설계 — 전수 counterfactual 오라클로 상한 먼저 측정
-
-Planner에 LLM을 넣기 전에 **"넣을 가치가 있는가"를 먼저 측정**했습니다. action space가 닫혀 있어(`tool 2종 × feature 조합 ≤2`) **전수 counterfactual 오라클**을 만들 수 있었습니다 — 2,830 state × 46 후보 = **130,883 rollout, 158분**.
-
-그래서 "RL이 도달 가능한 상한의 몇 %를 회수했는가"를 직접 측정합니다. 문서검색 agent 연구가 tool별 전수 실행이 불가능해 못 하는 측정입니다.
-
-### A. Reward 커널 — 어디에 gradient를 줄 것인가
-
-`nd`가 `dnd`만큼 움직였을 때의 반응으로 보면 네 커널은 **gradient의 지지집합**이 다릅니다.
-
-| 커널 | 미분 형태 | EVPI | 여지>0 | 게이트 probe (RF vs nd단독) |
-|---|---|---:|---:|---|
-| `R_margin` | `(2y−1)·1·dnd` — 균등 | +0.0357 | 30.3% | 0.702 vs 0.697 (+0.005) |
-| **`R_flip`** | `(2y−1)·δ(nd−τ)·dnd` — τ에 Dirac | +0.0854 | 9.0% | 0.747 vs 0.681 (**+0.066**) |
-| `R_resolve` | band 경계에 Dirac | +0.1228 | 12.5% | 0.700 vs 0.642 (+0.058) |
-| `R_auroc` | 반대라벨 밀도 가중 | +0.0448 | 23.9% | 0.748 vs 0.813 (**−0.065**) |
-
-**`R_flip` 채택** — 게이트 probe 격차가 유일하게 유의미하게 양수입니다. `R_auroc`은 격차가 음수, 즉 **스칼라 임계값 하나가 25-feature RF보다 낫다 = LLM이 불필요하다**는 결론이 나오는 커널입니다. **어떤 reward를 고르느냐가 아키텍처 결론을 바꿉니다.**
-
-**하이브리드 보정** — `R_flip`은 `{−1,0,+1}` 이산이라 flip 가능 state(9%) 밖에서 모든 후보가 동점입니다(동률 99.6%). 연속 성분을 섞어 지지집합을 넓혔습니다.
-
-```
-R = R_flip + α·R_margin    (α = 2.5, flip ±1이 margin 최대 ±0.2를 5배 압도)
-→ 동률 99.6% → 64.2%,  EVPI +0.13 → +0.24
-```
-
-### B. Turn 수 — λ_turn 유도로 1-turn 확정
-
-`λ*`(검색할까 말까의 가격)와 같은 원리로 **`λ_turn`(한 번 더 할까의 가격)** 을 유도했습니다.
-
-| 커널 | 1턴 최적 | 2턴 최적 | 한계이득 | λ_turn/λ* | 2턴 우세 state |
-|---|---:|---:|---:|---:|---:|
-| `R_margin` | +0.0242 | +0.0242 | +0.0000 | 0.00× | 23.4% |
-| `R_auroc` | +0.0377 | +0.0551 | +0.0174 | 0.57× | 19.1% |
-| `R_resolve` | +0.1007 | +0.1332 | +0.0325 | 0.44× | 3.3% |
-| **`R_flip`** | **+0.0873** | **+0.0905** | **+0.0032** | **0.06×** | **0.3%** (9/2,830) |
-
-**`MAX_ROUND=1` 확정.** "복잡해서 1턴"이 아니라 **2턴의 한계이득이 1턴의 6%로 측정됐기 때문**입니다. 이산 커널일수록 1턴에 결판난다는 구조적 관찰이기도 합니다(margin 23.4% → flip 0.3%).
-
-### C. 비용 — reward 스칼라화 대신 admission control
-
-`stop`을 action space에 넣으면 라벨이 91% `stop`으로 편중되고(SFT eval 100% stop), 빼면 `−λ·n_calls`가 그룹 내 상수가 되어 **advantage에서 완전히 소거**됩니다(`mean_cost 0.14` 100 step 고정). λ 튜닝으로 풀리지 않는 구조입니다.
-
-```
-maximize E[gain]   s.t.  E[cost] ≤ B      ← 라그랑주 스칼라화가 아니라 제약으로
-Stage A: |nd − τ| 랭킹 상위 B%            ← 예산은 운영 파라미터
-Stage B: 그 예산 안에서 gain만 최적화      ← LLM
-```
-
-**근거 3가지** — ① λ 스칼라화는 파레토 곡선의 한 점만 주는데 운영 예산은 SLA/트래픽에 따라 바뀝니다 ② `nd` 단독 게이트 AUC 0.68~0.82 vs **LLM 게이트 0.443/0.463/0.481(3회 독립 실행 전부 무정보 이하)** ③ 비용 축을 분리하면 예산 곡선 전체를 보고할 수 있습니다.
-
-비용 단위는 latency(ms)가 아니라 **호출 수**입니다 — 실측 latency(contextual 3,677ms vs global 722ms)가 손으로 찍은 cost(1.2 vs 1.5)와 **역전**돼 있었고, 인덱스·구현 변경마다 바뀝니다.
-
-### D. 제약 디코딩 — format penalty를 구조적으로 제거
-
-`{"think":"[` 까지 강제 → think 자유(28 tok) → `","action":...` 부터 오라클 후보 trie. **집합 밖 출력이 생성 자체로 불가능**해집니다.
-
-| | 무제약 | 제약 |
-|---|---:|---:|
-| parse rate | 5.6% | **98.5~99.1%** |
-| achieved | −0.00186 | **+0.01401** (학습 0회) |
-
-### 📊 실험 결과 — 3축 비교 (동일 eval set n=337)
-
-| 축 | achieved | regret | parse | 해석 |
-|---|---:|---:|---:|---|
-| ① base + 제약 | +0.01401 | 0.190 | 99.1% | 제약만으로 얻은 것 (학습 0회) |
-| ①' base 무제약 | −0.00186 | 0.206 | 5.6% | 제약 없으면 붕괴 |
-| **② GRPO** | **+0.03127** | **0.173** | 98.5% | 학습 순이득 **+0.01725** |
-| ③ oracle 상한 | +0.20428 | 0.000 | 100% | 상한 대비 **15.3%** 달성 |
-
-**학습 가능성 사전 검정** — GBDT/RF는 표 데이터에서 0.5B LLM보다 강하므로, 이들이 majority를 못 넘으면 학습이 무의미합니다. 학습 전 게이트로 씁니다.
-
-| | majority | tree d=3 | RF-300 | leakage gap |
-|---|---:|---:|---:|---:|
-| 오라클 라벨 | 0.570 | **0.632** | 0.588 | −0.000 |
-
-### E. think — LLM 정당성의 직접 증거
-
-출력이 `43-way 선택`이면 원리적으로 분류기로 환원되어 0.5B를 쓸 이유가 없습니다. `think`를 붙여 **"모델이 evidence를 읽는가"** 를 측정 가능하게 만들었습니다.
-
-| | v5-a (구체 예시 제시) | v5-b (`[` 강제) |
-|---|---:|---:|
-| 태그 인용 | 10.8% | **41.7%** |
-| **없는 태그 지어냄** | **89.2%** | **0.8%** |
-| grounded (태그 ∧ 필드 언급) | 6.7% | 21.7% |
-
-> **🔧 정정** — 프롬프트에 진단-처방 힌트(`cluster_mismatch → attribute_knn`)를 명시했더니 모델이 83.5%로 따랐으나 **오라클 정합률은 61.2%(우연 수준)** 였고, 그 결과 `grounded=True` 케이스의 achieved가 오히려 낮았습니다(−0.168 vs +0.035). **설계 가설을 프롬프트로 주입하면 모델이 그 가설의 오류까지 학습합니다.**
-
-## 1️⃣1️⃣ Tool 설계 — sparse 축 도입과 정량적 실패 진단
-
-`contextual_knn`(dense pool 확장 + soft rerank)과 `attribute_knn`(exact term filter)을 **서로 다른 정보축**으로 설계했습니다. 전자는 `neighbor_insufficient`, 후자는 `cluster_mismatch`를 겨냥합니다.
-
-**이론적 임계** — contextual pool 크기 `P`, 반환 수 `k`, 필터 선택도 `s = support/N`일 때
-
-```
-P·s ≥ k  →  contextual이 이미 필터 일치 top-k를 pool 안에 갖고 있음 → 두 tool 동일
-임계 s* = k/P = 5/25 = 0.20  →  support* ≈ 24,600
-```
-
-**실측이 예측과 일치**합니다.
-
-| support | n | Jaccard(attr, global) | flip_rate |
-|---|---:|---:|---:|
-| <1k | 165 | **0.32** | 0.156 |
-| 1k–10k | 4,310 | **0.29** | 0.077 |
-| 10k–25k | 7,499 | 0.48 | 0.096 |
-| ≥25k | 9,586 | 0.58~0.68 | 0.12 |
-
-저선택도 구간에서는 **이질 축이 실증**되지만, **후보의 45%가 support ≥ 25,000** 입니다. candidate feature 조합이 전부 고선택도라 그 구간에 도달하지 못합니다.
-
-| 진단 | 값 | 의미 |
-|---|---:|---|
-| `Jaccard(contextual, attribute)` | 0.905 | 같은 이웃을 가져옴 |
-| attribute 순기여 (EVPI) | +0.0088 (3.4%) | 빼도 상한이 거의 안 변함 |
-| base logprob 차이 | 0.031 | 모델은 두 tool을 동등하게 봄 |
-
-> **원인은 tool 설계가 아니라 임베딩입니다.** AnoLLM 임베딩이 categorical feature를 이미 인코딩하고 있어, **같은 인덱스 안에서는 어떤 필터도 새 축이 되지 못합니다.** 코퍼스를 바꾸는 tool(사기 memory bank 조회 등)이 남은 탈출구입니다.
-
-## 4️⃣ MCP Transport 벤치마크 · 운영 관측
-
-Router/Retriever를 **MCP tool로 표준화**하고 3가지 transport를 동일 wall-clock 구간(`mcp_transport_latency_seconds`)으로 감싸 비교했습니다.
-
-| transport | mode | tool Δ P95 (ms) | vs direct | dist AUROC |
-|---|---|---:|---:|---:|
-| direct | REST | 7,889.8 | +0.0 | 0.8283 |
-| mcp | HTTP wrapper | 8,186.9 | **+42.6** | 0.8283 |
-| mcpnative | stdio/SSE | 8,106.1 | **+63.1** | 0.8283 |
-
-> **AUROC가 세 행에서 동일해야 정상**입니다 — 다르면 transport가 결과를 바꾼 것이므로 버그입니다. 이 불변량을 sweep의 sanity check로 썼습니다.
->
-> 다만 `tool Δ`는 `total − base_retrieve`라 **analyzer 추론 수 초가 통째로 섞여** 있어 수십 ms짜리 transport overhead를 재기엔 부적합합니다(2.7초 vs 12.5ms). 정확한 값은 Prometheus의 `mcp p95`로 봐야 하며, 이는 **지표 정의 자체가 측정 가능성을 결정한다**는 사례로 기록했습니다.
-
-
-## 1️⃣2️⃣ 서빙 평가 — 결과 산출 포맷
-
-세 산출물이 자동 생성됩니다. **아래 수치는 planner v2(Gemini) 시점 스모크(n=20)이며, v3 GRPO planner 서빙 후 교체 예정**입니다.
-
-#### (1) `results.md` — 컴포넌트 ablation (planner 무관 축)
-
-```
-T1-A  Percolate      | variant | cand_recall@5 | routing_acc | MRR | P95(ms) | dist AUROC |
-T1-B  Coreset        | coreset | docs | store(MB) | dist AUROC | recall@5 adj | ε-recall |
-T1-C  Quantization   | variant | quant | oversample | working set(MB) | dist AUROC | cls@0.42 |
-T2-D  HNSW sweep     | m | ef_c | segs | recall@5 | base P95 |
-T3-F  MCP transport  | transport | tool Δ P95 | vs direct | dist AUROC |
-T1-D  재검색 인과분해 | run | AUROC pre→post | rescued | degraded | net_gain | dir_acc |
-```
-
-`T1-D`가 planner 교체의 직접 비교축입니다 — v2에서 `net_gain −2~−6`, `dir_acc 0.48~0.57`로 **재검색이 순손실**이었고, 이것이 Part 3 재설계의 출발점입니다.
-
-#### (2) `agent_eval_report.json` — 서빙 배치 추론 집계
-
-```jsonc
-{
-  "run_id", "pipeline_mode", "n_total",
-  "threshold_info":   { "auroc", "best_threshold", "best_fpr/tpr/fnr", "youden_j" },
-  "agent_nd_dual":    { "n_researched", "cls_nd_threshold", "agent_nd_auroc_all" },
-  "research_effect":  { "auroc": {"pre","post","delta"},
-                        "by_view": {"fixed": {"overall": {"TP","FP","TN","FN","FNR","FPR"}}} },
-  "planner_policy":   { "action_distribution", "search_rate", "gate_rate", "gate_reasons",
-                        "planner_latency_ms": {"p50","p95"}, "output_tokens", "mean_cost" },
-  "evidence_novelty": { "mean_jaccard_round0_final", "mean_novelty",
-                        "cross_cluster_escape_rate", "mean_support", "jaccard_by_action" },
-  "budget_curve":     [ { "budget", "n_search", "accuracy", "delta_vs_no_search" } ],
-  "verdict_change":   { "n_changed", "verdict_change_rate", "correct_flip_n", "wrong_flip_n" },
-  "latency_breakdown":{ "base_retrieve_ms", "total_ms" },
-  "agent_summary":    { "distance_auroc", "anomaly_auroc", "research_net_gain", "agent_rag_fnr/fpr" }
-}
-```
-
-**v3에서 핵심으로 볼 4개 블록**
-
-| 블록 | 무엇을 답하는가 | v2 스모크 (n=20) |
-|---|---|---|
-| `budget_curve` | **§10-C의 예산 곡선** — LLM 호출 B%로 상한의 몇 %를 얻는가 | B=0% acc 0.65 → B=20% **0.75** (Δ+0.10) |
-| `planner_policy` | tool 분포 / 게이트 발동 / p50·p95 latency | `attribute 0.75 / stop 0.25`, gate 25%, p50 **10.3s** |
-| `evidence_novelty` | **재검색이 실제로 새 근거를 가져왔는가** | v2 미계측(`null`) — v3에서 채워짐 |
-| `verdict_change` | 판정이 바뀐 비율과 방향 | 13.3% 변경, **correct_flip 2/2** |
-
-> `evidence_novelty`가 v3의 신규 축입니다. outcome(`flip`)과 **검색 품질(novelty)** 을 분리 보고해야 "검색 개선 → 탐지 개선"의 인과를 주장할 수 있습니다.
-
-#### (3) `agent_predictions.json` — 건별 trace
-
-```jsonc
-{ "classification", "confidence", "final_verdict", "primary_cluster_id", "top_5_clusters",
-  "planner_used", "agent_trace", "agent_rounds", "termination",
-  "_nd_round0", "_nd_final", "_nd_n_rounds", "_researched", "_wm_type",
-  "retrieved_original_indices", "latency_ms" }
-```
-
-`_nd_round0 → _nd_final` 변화와 `retrieved_original_indices`가 있어 **오프라인에서 novelty/escape를 재계산**할 수 있습니다(재수집 불필요).
-
----
----
-
-## 📎 부록 — 데이터 직접 검증 (Intuition)
-
-설계 결정의 근거가 된 원데이터 실험 (모델 불필요).
-
-**A-1. 신호 융합 천장 (boundary n=11,440)** — "거리가 유일 신호"의 실측
-
-| 신호 | AUROC | 판정 |
-|---|---:|---|
-| top5_spread / persona_dev 단독 | 0.403 / 0.496 | 무신호 |
-| **nd only** → **nd + std(top3)** | 0.779 → **0.857 (Δ+0.077)** | spread 가치는 **코드 융합**에서만 — LLM 재진술 활용 0% |
-| + persona | 0.873 (Δ+0.016) | 정제 천장 닫힘 → 판별 확대는 새 차원(graph)으로만 |
-
-**A-2. nd 통제 후 feature별 추가 정보량** — categorical 6종 전부 partial corr **+0.000** / AUROC 0.500. numeric도 partial −0.10대(nd에 흡수) → `cluster_mismatch` 근거를 numeric으로 한정한 설계의 실증.
-
-**A-3. misroute 가설 기각** — "배정 클러스터에서 크게 벗어나면 배정이 틀렸다": max|z| AUROC **0.421**(재측정 0.514) — 오배정 샘플의 이탈이 오히려 작음. ambiguous 중 clean 59~77%로 "ambiguous ⟺ 검색 결함" 전제도 붕괴.
-
-**A-4. reroute 재정렬 진단 (n=28,302)** — 전체는 재정렬 성격(Spearman 0.653)이나 **boundary에서 순위 보존이 깨지며(0.102) min-fusion Δ+0.062** → nd min-fusion 서빙 반영의 직접 근거.
-
-**A-5. 지표 착시 2건 (정직한 기록)** — ① "evidence-GT 100%"는 rejection이 정답만 남긴 **순환논증**(무필터 Step 0에서 net −14로 반전) ② P1 100%도 rejection 생존자의 성질. 평가는 반드시 **무필터 eval set**에서.
-
----
-
-## 🗂 의사결정 기록 (채택 / 정정 / 기각)
-
-### Part 1 — RAG
-
-| 결정 | 근거 |
+| Router–Retriever | 거래 특성·임베딩 → 후보 클러스터·정상 이웃·거리 | percolate 라우팅 + 중심 거리 보완 + filtered ANN |
+| 코드 판정·호출 게이트 | 초기 거리·불확실성·가용 예산 → 기본 판정·모델 진입 여부 | 검증 집합에서 결정한 정책 적용; 평가 정답 미사용 |
+| LLM Evaluator | 거래·이웃 통계·코드 계산 근거 → 부족 유형·근거 문장 | Qwen2.5-14B 증류 → Qwen2.5-0.5B LoRA SFT |
+| LLM Planner | 검색 결과·Evaluator 진단 → think·action·features | Qwen2.5-0.5B 기반 GRPO; 짧은 판단 근거와 검색 행동 생성 |
+| Re-search Tools | 도구·허용 속성 → 새 정상 이웃·거리·상태 | contextual_knn / attribute_knn; 재검색 최대 1회 |
+| Controller | 새 거리·실행 상태 → 최종 판정·종료 사유 | LangGraph 기반 예산·deadline·fallback·trace 관리 |
+
+### 데이터와 측정 경계
+
+| 구분 | 본문에서 사용하는 범위 |
 |---|---|
-| ❌ Bucket prefilter | `routing_acc` 0.80→0.34, `cand_recall@5` 1.0 유지 — 후보가 아니라 **점수 서열이 희석**됨 |
-| ❌ int8 + oversample 0 | AUROC 0.86으로 멀쩡한데 `cls@τ acc 0.47 / FPR 1.0` — **rescore 없으면 절대 임계 판정이 붕괴** |
-| ✅ Coreset 10% + BBQ os3 | 메모리 −89% / working set 1/12, AUROC 손실 0.4%p 이내 |
-| ✅ HNSW `m=16, ef=100` 고정 | 3조합 AUROC 동일 → 최속 운영점. 검색이 흔들리면 이후 측정이 교란됨 |
+| 주요 데이터 | FraudEcom 공개 거래 데이터. purchase value·age·browser·source 등 거래 특성과 AnoLLM 기반 임베딩 |
+| 기존 데이터 기록 [R] | 정상 학습 임베딩 122,810×576, 평가 임베딩 28,302×576. 최신 공통 10,000건 비교와 동일 평가 집합이라고 가정하지 않음 |
+| 학습·검증 분리 | 정상 메모리 뱅크·Teacher 생성 데이터·검증·최종 평가 분리. 동일 거래의 모든 후보 행동은 같은 split에 배치 |
+| 재검색 정책 공통 평가 [T] | 10,000건, 동일 인덱스·거리 계산·점수 보정·고정 임계값·도구 집합. 최초 검색 오판 1,600건으로 설정 |
+| Evaluator 독립 평가 [T] | Teacher 생성·학습용 rejection에서 분리한 고정 평가셋. Teacher 92% / Student 75%·90%는 이 집합의 비교 목표 |
+| 학습 / 서빙 | 모델 학습은 별도 GPU 환경, 서빙 검증은 CPU-only GKE(e2-standard-2급 노드). 노드 2 vCPU·8 GB와 Pod의 CPU·메모리 제한을 구분 |
+| 검색 API 부하 범위 | 사전 계산한 임베딩을 입력받는 Router–Retriever 경로. 임베딩 생성·LLM 지연 제외 |
+| 모델 경로 부하 범위 | 모델 경로 진입 후 대기·Evaluator·Planner·도구 실행·결과 적용까지. 검색 API p95와 분리 계측 |
 
-### Part 2 — Evaluator
+**데이터 규모:** CV의 ‘1,200만 건’은 원본 거래 수와 확장 인덱스 문서 수의 대응 근거가 별도로 필요합니다. 이 README에서는 원본 고유 거래 수로 사용하지 않으며, 확장 적재량은 실제 인덱스 manifest로 확인 후 추가합니다.
 
-| 결정 | 근거 |
+**판정 기준:** 이상 점수가 클수록 이상 가능성이 높도록 방향을 통일하고, 임계값과 정규화 통계는 검증 단계에서 고정합니다. 재검색 결과에 맞춰 테스트 임계값을 다시 최적화하지 않습니다. 과거 버전의 0.42/0.5 임계값과 호출 구간을 혼합하지 않습니다.
+
+<a id="retrieval"></a>
+## 2. Router–Retriever: 검색 품질과 인덱스 비용
+
+### 2.1 Two-Stage Retrieval — 후보 클러스터 누락 개선
+
+**문제:** 트리의 수치 범위 규칙을 엄격한 AND 조건으로 결합하면 후보 클러스터의 다양성이 제한됩니다.  
+**접근:** 정상 임베딩의 클러스터 구조를 트리 규칙으로 표현하고 Elasticsearch의 **percolator 필드에 규칙 등록 → percolate query로 입력 거래 매칭 → 클러스터 중심 거리 기반 후보 보완 → filtered ANN** 수행.
+
+![정상 벡터에서 클러스터 후보와 최근접 이웃으로의 검색 과정 [D]](picture/cv_20261026/router_vectors.png)
+
+*PPT의 벡터 검색 도식 재사용 [D]. 하단의 PCA·BBQ는 선택적 인덱스 압축 요소를 나타내며, 이번 본문의 대표 압축 결과는 아래 coreset 비교입니다.*
+
+| 구성 | Router Recall@5 | 선택 이유 | 상태 |
+|---|---:|---|:---:|
+| Strict AND | 0.816 | 후보 보완 전 기준선 | [R] |
+| Strict AND + 중심 거리 기반 후보 보완 | **0.905** | +8.9%p, 관련 클러스터 회수 개선 | [R] |
+
+여기서 Router Recall@5는 기존 기록의 **후보 클러스터 회수 지표**이며, 개별 문서의 ANN Recall@k와 구분합니다. 동일한 클러스터 정답 생성 방식과 분모를 유지해 비교합니다.
+
+**기각한 시도:** 수치 구간을 bucket term filter로 변환해 범위 비교 비용을 줄이는 후보도 검토했으나, 일부 설정에서 후보 포함 여부가 유지되어도 top-1 순위가 악화됐습니다. 따라서 **0.816→0.905를 bucket filter의 효과로 귀속하지 않습니다.** 후보 포함률과 순위 품질을 함께 평가한 뒤 중심 거리 보완을 대표 구성으로 정리했습니다.
+
+### 2.2 Coreset·HNSW — 품질을 유지하는 인덱스 후보 선정
+
+**문제:** 전체 정상 벡터의 저장·검색 비용과 작은 coreset의 대표성 손실 사이의 절충.  
+**접근:** exact kNN을 참조해 coreset 비율·HNSW 설정별 품질·크기·지연 비교. 동일 coreset 내 ANN 근사 오차와 전체 메모리 뱅크 대비 표본 축소 손실을 분리합니다.
+
+| Coreset 비율 | 인덱스 문서 수 | 인덱스 크기 | AUROC | 단건 median latency | 판단 | 상태 |
+|---|---:|---:|---:|---:|---|:---:|
+| 100% | 140,128 | 2.80 GB | 0.956 | 125 ms | 비교 기준 | [R] |
+| **10%** | **14,012** | **0.31 GB** | **0.952** | **68 ms** | **운영 후보** | [R] |
+| 1% | 1,401 | 0.035 GB | 0.901 | 52 ms | 품질 손실로 미채택 | [R] |
+
+**결론:** 10% coreset에서 AUROC 손실 0.004, 인덱스 크기 약 89% 감소, 단건 median 지연 약 46% 감소. 인덱스 크기는 디스크 저장량이며 RSS·벡터 working set과 동일하지 않습니다. 이 실험의 140,128개 문서와 평가 설정은 별도 기록으로, 앞의 정상 학습 122,810건 및 최종 Agent 10,000건과 혼합하지 않습니다.
+
+HNSW의 연결도·구축 탐색 폭은 오프라인 품질 검증, 검색 후보 수·재채점 범위·샤드 구성은 품질 재확인 후 부하 검증에 사용합니다. **단건 68 ms를 동시 부하 p95 또는 최대 QPS로 환산하지 않습니다.** 최종 부하 결과 형식은 [6.2절](#search-load)에 정리했습니다.
+
+<a id="evaluator"></a>
+## 3. Evaluator: 실패 데이터 구축·증류·SFT
+
+### 3.1 Pipeline-aware Hard Negative Mining
+
+**문제:** 일반적인 거래 설명 학습만으로는 검색 근거가 왜 부족한지 진단하기 어려움.  
+**접근:** 기존 검색이 정상 이웃을 놓치거나 부적절한 비교 집단을 반환하는 상태를 중심으로 학습 데이터 구성. 여기서 hard negative는 단순히 사기 라벨인 거래가 아니라 **검색·진단 과제의 어려운 상태**를 의미합니다.
+
+| 학습 상태 | 수집 기준 | 진단·학습 목적 |
+|---|---|---|
+| Router 오류 | 초기 top-1과 참조 클러스터 불일치 | 부적절한 비교 집단에 대한 근거 진단 |
+| Cross-Cluster | 관련 클러스터가 후보 집합에는 있으나 top-1 밖에 존재 | 정상 이웃의 누락·비교 범위 문제 진단 |
+| Distance 경계 | 초기 이상 점수가 판정 임계값 주변 | 정상/이상 판정이 민감한 상태에서 근거 검토 |
+
+![검색 실패 유형별 학습 상태 [D]](picture/cv_20261026/mining_types.png)
+
+*세 유형은 중복 가능한 수집 태그입니다. 참조 클러스터와 불일치하거나 경계 구간에 있다는 사실만으로 실제 판정 오류·재검색 성공을 확정하지 않습니다.*
+
+### 3.2 Teacher Distillation·Rejection Sampling
+
+**초기 실패:** 정답을 먼저 제시한 Teacher가 결론에 맞는 설명을 반복 생성.  
+**개선:** Teacher 생성 시 평가 정답을 감추고 거래·검색 근거만 제공, 생성 후 학습 샘플의 라벨 일치·근거 사실성·중복 검사 적용. 정제된 Qwen2.5-14B 진단을 Qwen2.5-0.5B에 LoRA 기반 증류·SFT.
+
+![Teacher 생성, 데이터 정제, Student SFT 흐름 [D]](picture/cv_20261026/distillation_flow.png)
+
+| 정제 단계 | 검증 내용 | 적용 경계 |
+|---|---|---|
+| 라벨 일치 | 학습용 Teacher 출력과 해당 학습 라벨의 불일치 제거 | 학습 데이터 정제에만 사용 |
+| Grounding | 인용 속성·수치·방향이 실제 검색 근거와 일치하는지 검사 | 없는 속성·잘못된 수치·반대 방향 설명 제거 |
+| Deduplication | 반복 문구·유사 템플릿의 과다 비중 제한 | 문장 정규화·중복 기준을 버전으로 고정 |
+
+| 생성 데이터 지표 | 정제 전 | 정제 후 | 변화 | 상태 |
+|---|---:|---:|---:|:---:|
+| 문장 고유율 | 18.9% | **75.8%** | +56.9%p | [R] |
+| 최빈 문장 비중 | 28.2% | **4.6%** | −23.6%p | [R] |
+
+이 지표들은 **생성 데이터의 다양성**입니다. 근거 정합률이나 이상탐지 정확도와 동일하지 않습니다. 평가셋은 Teacher가 맞힌 샘플이나 rejection을 통과한 샘플만으로 구성하지 않으며, 정제 전후 Student를 같은 독립 평가셋에서 비교합니다.
+
+### 3.3 과제 특화 평가 — 무엇을 진단했는가
+
+Evaluator는 코드가 계산한 거래·정상 이웃의 속성 차이와 통계를 읽고 **cluster_mismatch / neighbor_insufficient / accept** 유형과 근거 문장을 출력합니다. 진단은 재검색 선택을 위한 가설이며, 실제 검색 오류의 확정 라벨로 사용하지 않습니다.
+
+![코드 계산 근거와 단일 진단 출력 [D]](picture/cv_20261026/evaluator_evidence.png)
+
+**근거 정합률:** 전체 평가 요청 중 필수 근거를 제시하고, 인용한 속성·수치·방향이 근거와 일치하는 응답의 비율. 빈 출력·파싱 실패는 실패로 포함합니다. accept도 근거와 모순 없는 충분성 설명을 요구하며, Teacher의 표현을 그대로 재현해야 통과하는 기준은 사용하지 않습니다.
+
+| 동일 독립 평가 조건 | 근거 정합률 | 비교 목적 | 상태 |
+|---|---:|---|:---:|
+| 0.5B Student, 정제 전 데이터 SFT | 75% | 데이터 정제 전 기준선 | [T] |
+| **0.5B Student, 정제 후 데이터 SFT** | **90%** | 동일 역할·입력 구성에서 정제 효과 +15%p | [T] |
+| Qwen2.5-14B Teacher, 동일 진단 과제 | 92% | Student의 품질 손실 2%p | [T] |
+
+**결론:** 대형 모델을 그대로 서빙하기보다 검증 가능한 진단 과제로 범위를 좁히고, 데이터 정제·증류로 0.5B Student의 품질–비용 절충을 평가합니다. 근거 정합률 90%를 재검색 행동 정확도나 최종 탐지 AUROC로 대체하지 않습니다.
+
+<a id="planner"></a>
+## 4. Planner: GRPO와 재검색 정책 비교
+
+### 4.1 ReAct 기반 판단 근거·행동 생성
+
+**문제:** 검색 결과와 Evaluator 진단을 종합해 어느 재검색 행동이 판정을 개선할지 선택해야 함.  
+**접근:** Observation(검색 근거·진단) → think(짧은 판단 근거) → Action(도구·속성) → 새 Observation(이웃·거리) 흐름을 갖는 1-step Planner 설계. 도구 호출 후 코드가 최종 점수와 판정을 다시 계산합니다.
+
+![검색 관측에서 판단 근거와 도구 선택으로 이어지는 Planner [D]](picture/cv_20261026/planner_action.png)
+
+| 도구 | 검색 동작 | 확인할 한계 |
+|---|---|---|
+| contextual_knn | Dense 후보 집합 안에서 선택 속성에 따른 soft reranking | 후보 밖의 문서를 자동으로 회수하는 것은 아님 |
+| attribute_knn | 선택 속성의 일치 조건으로 비교 집단을 제한한 뒤 최근접 검색 | 작은 support·zero-hit·잘못된 필터로 정상 이웃 누락 가능 |
+
+도구의 속성 값은 원본 거래에서 조회하고 허용된 속성만 실행합니다. MCP는 도구의 입력·출력 계약과 호출을 연결하며, 올바른 행동 선택이나 탐지 개선 자체를 보장하지 않습니다. **진단 유형을 특정 도구에 무조건 매핑하지 않고**, 실제 재검색 결과로 정책을 평가합니다.
+
+### 4.2 GRPO Post-training — 형식이 아닌 행동 결과 최적화
+
+같은 검색 상태에서 여러 행동을 생성하고, 재검색 후 판정 효과의 상대 보상으로 정책을 업데이트합니다. 현재 저장 노트북은 Qwen2.5-0.5B-Instruct에서 시작한 GRPO 실험이며, 아래 SFT Planner는 **별도의 비교군**입니다. SFT→GRPO 순차 학습 결과로 해석하지 않습니다.
+
+| 보상 요소 | 의도 |
 |---|---|
-| ❌ Teacher rationalization (GT-conditioned) | reason↔label 인과 파괴 → GT-free 생성 + 필터 |
-| ❌ 인용율을 품질 지표로 | 정합 서술도 통과 → grounded-consistency로 교체 |
-| ❌ categorical을 `cluster_mismatch` 근거로 | partial corr +0.000 (부록 A-2) |
-| ❌ eval_loss 기반 best-checkpoint | 템플릿 암기 보상 → P1 기반 early-stop |
-| **🔧 정정** "ambiguous cls = evidence 판정" | **순환논증** — rejection이 정답만 잔존. 무필터 net −14로 반전 → cls 전면 deterministic |
-| **🔧 정정** "GRPO AUROC +2.3%p" | v4 무효(cls-gate 버그) → v5 무효(안전지대 + hacking, P1 0%) → v6 ladder 재실험 |
-| ✅ 출력 자유도 5→1키 + 0.5B 전환 | 판정·진단은 코드, 서술만 LLM — S1→S4 측정의 귀결 |
+| 오판→정답 교정 보상 / 정답→오답 전환 감점 | 재검색이 실제 판정을 개선하는 방향 유도 |
+| 정답 방향 점수 margin 개선 | 판정이 바뀌지 않는 상태에도 연속적인 보상 차이 제공 |
+| 도구별 보조 신호 | 노트북의 spread 감소·cluster escape 보조 항은 판정 악화 방지 조건과 함께 해석; 최종 성과는 교정·AUROC로 별도 평가 |
 
-### Part 3 — Agent
+**희소 보상 진단 [R]:** flip 중심 보상에 margin 성분을 추가한 후보 행동 비교에서 보상 동률 비율 **99.6%→64.2%(−35.4%p)**. 이는 해당 후보 비교의 동률 지표이며, 실제 GRPO sampling group의 무신호 비율이나 학습 효율 향상 배수와 동일하지 않습니다. 정답 라벨은 학습 보상·평가에만 사용하고 Planner 입력에서는 제외합니다.
 
-| 결정 | 근거 |
-|---|---|
-| ❌ Planner에 `stop` 포함 (flat action space) | 라벨 91% stop 편중 → SFT argmax 붕괴, GRPO 게이트 AUC 0.443~0.481 **3회 연속 무정보 이하** → 2-stage 분리 |
-| ❌ 비용을 reward에 λ 스칼라화 | `−λ·n_calls`가 그룹 상수 → advantage에서 소거. λ 튜닝으로 불가 → **admission control** |
-| ❌ latency(ms)를 cost 단위로 | 실측(3,677 / 722ms)이 손으로 찍은 값(1.2 / 1.5)과 **역전** → 호출 수로 통일 |
-| ❌ `R_auroc` 커널 | probe 격차 −0.065 — 스칼라 임계값이 25-feature RF보다 나음 = LLM 불필요 결론이 나오는 커널 |
-| ❌ 2-turn 확장 | 2턴 우세 0.3%(9/2,830) — 이산 커널에서 판정은 1턴에 결판 |
-| **🔧 정정** 진단-처방 힌트 주입 | 모델 정합률 83.5%인데 오라클은 61.2%(우연) → `grounded=True`의 achieved가 오히려 낮음. **가설을 주입하면 오류까지 학습** |
-| **🔧 정정** `attribute_knn` = 이질 축 | 저선택도에서만 Jaccard 0.29. 후보 45%가 임계 위 → 순기여 EVPI의 3.4%. **임베딩이 categorical을 이미 인코딩** |
-| ✅ `R_flip + 2.5·R_margin` | Dirac 커널의 좁은 지지집합을 균등 성분으로 확장 — 동률 99.6%→64.2% |
-| ✅ 제약 디코딩 (think 자유 + JSON trie) | parse 5.6%→98.5%, format penalty가 구조적으로 발생 불가 |
+### 4.3 Constrained Decoding — 출력 유효성과 학습 효과 분리
 
-> **일관된 결론** — 이 도메인에서 판정 신호는 임베딩 거리(nd)가 유일하며, LLM의 판정·게이트 개입은 순손실입니다. 따라서 LLM의 역할을 **감사 주석(what_missing)과 tool·feature 선택**으로 좁히고, agent의 가치를 "정확도 개선"이 아니라 **선택적 호출에 의한 비용 절감(호출량 100% → ≈43%)과 계획 품질**로 재정의했습니다.
+think의 자유 생성은 유지하고 도구명·인자의 허용 범위를 제한합니다. 생성 형식의 실패를 줄이더라도 특정 도구 편중이나 잘못된 검색 선택은 남을 수 있으므로 별도로 평가합니다.
 
----
+| 동일 저장 평가 n=337 | 출력 제약 | 파싱 성공률 | 비교 의미 | 상태 |
+|---|---|---:|---|:---:|
+| Base Qwen2.5-0.5B-Instruct | 없음 | 84.0% | 초기 형식 오류 | [N] |
+| 동일 Base | 적용 | 95.5% | 제약 디코딩 효과 +11.5%p | [N] |
+| GRPO 모델 | 적용 | 96.4% | 동일 제약하 형식 변화 +0.9%p | [N] |
 
-## 🔜 남은 작업
+노트북의 파싱 지표는 JSON 파싱·action 문자열 여부 중심의 정의입니다. **전체 schema 유효율·도구 실행 성공률이 아니며**, 파싱 개선을 GRPO의 탐지 성능 개선으로 해석하지 않습니다. 저장 결과의 도구 선택 편중은 후속 평가에서 함께 점검할 실패 모드입니다.
 
-- [ ] **Planner v3 서빙 교체** — GRPO adapter → GGUF Q8 → `local_planner` 배포 → §12 결과 실측 교체
-- [ ] 진단-처방 힌트 제거 후 재실험 — `grounded × achieved` 부호 확인 (§10-E)
-- [ ] `evidence_novelty` 실측 — 재검색 novelty/escape/support를 outcome과 분리 보고
-- [ ] tool 축 재설계 — 같은 인덱스 내 필터로는 새 축이 안 나옴(§11) → 코퍼스를 바꾸는 tool 타당성 측정
-- [ ] Evaluator GRPO v6 ladder 재실험 → §8 표 기입
-- [ ] Locust 부하 3단계(light/medium/heavy) 실행 → Prometheus 지표와 교차 검증
-- [ ] Prometheus `mcp p95` 실측 — §4의 `tool Δ`는 analyzer 추론이 섞여 transport overhead를 못 잼
-- [ ] 하위 10% split 오라클로 EVPI 전이성 검증 (현재 상한은 상위 10% in-sample)
+### 4.4 Controlled Evaluation — LLM 정책의 추가 가치
 
----
+**공통 조건 [T]:** 10,000건, 같은 초기 검색 결과·도구 집합·최대 재검색 1회·고정 판정 임계값. LLM 정책의 출력 제약은 동일하게 적용합니다. GBDT는 최종 사기 분류기가 아니라 **재검색 행동 선택 기준선**입니다. 입력 정보의 범위를 맞추되, GBDT에는 학습 시 확정한 수치·범주형 특징 표현을 사용합니다.
 
-## 💻 기술 스택 & 실행
+| 정책 | 전체 AUROC | 오판→정답 | 정답→오판 | 순교정률¹ | 최종 오판 | 상태 |
+|---|---:|---:|---:|---:|---:|:---:|
+| 검색 단독 | 0.892 | — | — | — | 1,600 | [T] |
+| 고정 재검색 도구 | 0.905 | 150 | 50 | 1.0% | 1,500 | [T] |
+| GBDT 정책, LLM 진단 없음 | 0.910 | 235 | 65 | 1.7% | 1,430 | [T] |
+| 공통 Evaluator + GBDT | 0.914 | 280 | 60 | 2.2% | 1,380 | [T] |
+| 공통 Evaluator + SFT Planner | 0.918 | 300 | 60 | 2.4% | 1,360 | [T] |
+| **공통 Evaluator + GRPO Planner, 전수 재검색** | **0.925** | **380** | **60** | **3.2%** | **1,280** | **[T]** |
 
-**Infra** GKE(e2), Elasticsearch 8.x(ECK), GCS, Artifact Registry, Prometheus + Grafana, Locust
-**ML** Qwen2.5(0.5B/3B/14B), PEFT/LoRA, TRL(GRPO), llama-cpp-python(GGUF)
-**Serving** FastAPI, LangGraph StateGraph, MCP wrapper
-**Eval** Colab L4, Streamlit
+¹ 순교정률 = (오판→정답 − 정답→오판) / 전체 10,000건. 모든 전환 건수는 **동일한 초기 검색 판정**을 기준으로 계산합니다. ‘각 60건’은 집계 건수가 같다는 뜻이며 같은 사례라는 의미가 아닙니다.
 
-```bash
-# 모드 전환 (agent ↔ forwardRAG baseline)
-kubectl patch configmap anomaly-config -n elastic --type merge \
-  --patch '{"data": {"PIPELINE_MODE": "forward"}}'
-kubectl rollout restart deployment/anomaly-orchestrator deployment/local-analyzer -n elastic
+![재검색 정책별 AUROC와 판정 전환 비교 — 미실측 가상 보정 시나리오 [T]](picture/cv_20261026/policy_comparison_target.png)
 
-# 평가 (고정 eval set — 버전/모드 간 동일 문제지)
-python evaluation/agent_eval/agent_batch_inference.py \
-    --eval-source eval_set --n-samples 100 \
-    --gcs-upload gs://fraud_ecomm/evaluation/agent-eval
-```
+**결과 해석 [T]**
 
-```
-apps/          # router, retriever, local_analyzer, controller, orchestrator, local_planner
-common/        # config, prompts(학습·서빙 단일 소스), judge
-evaluation/    # agent_eval, gt_loader, hard_negative_miner, oracle_rollout_batch
-k8s/           # configmap 매니페스트 + batch jobs (sweep, oracle)
-notebooks/     # NB01(생성) → NB02(Evaluator SFT·GRPO) → NB02b(Planner GRPO) → NB03(검증·Judge)
-```
+- **전체 보강 파이프라인:** 검색 단독 대비 전수 GRPO AUROC **+0.033**. 이 전체 효과를 GRPO 단독 학습의 기여로 표시하지 않음.
+- **정책 학습 비교:** 공통 Evaluator에서 SFT 대비 GRPO AUROC **+0.007**, 순교정률 **2.4%→3.2%(+0.8%p)**.
+- **단순 기준선 대비:** 공통 Evaluator+GBDT 대비 GRPO AUROC **+0.011**, 최종 오판 **1,380→1,280건**.
 
-## 📚 참조
+이 비교는 LLM 정책의 추가 품질을 평가하지만, 동일 계산 비용에서의 우위까지 입증하지는 않습니다. 필요한 품질 수준과 아래 호출 비용·부하 조건을 함께 적용해 운영 후보를 선택합니다. **AUROC에서 교정 건수를 역산하거나, 1−AUROC를 거래 오판율로 사용하지 않습니다.**
 
-- Multi-Cluster Memory Bank 이상탐지 (EAAI 2025, 공동 1저자) — 알고리즘 기반
-- PatchCore (CVPR 2022) — Coreset sampling
-- Elasticsearch Percolate Query / HNSW / BBQ, LangGraph, MCP
+<a id="serving"></a>
+## 5. LLM 역할 분리·양자화·입력 축약
+
+### 5.1 Deterministic–LLM 역할 분리
+
+**문제:** CPU 서빙에 적합한 소형 모델이 이상 판정·충분성·근거 서술을 동시에 수행할 때 판정 품질 저하.  
+**결정:** 판정·충분성 계산은 코드로 분리하고, LLM에는 검색 근거 진단만 유지. 3B 모델의 역할을 축소해 0.5B Student로 전환하는 설계 근거로 사용했습니다.
+
+| 기존 역할 검증: 전체 300건 중 불확실 158건 | 판정 정확도 | 상태 |
+|---|---:|:---:|
+| LLM 직접 판정 | 0.703 | [R] |
+| 거리 기반 코드 판정 | **0.791** | [R] |
+
+이 결과는 **불확실 부분집합의 판정 정확도**이며, Evaluator 근거 정합률 90%나 전체 Agent AUROC와 다른 지표입니다. ‘3역할→1개 진단 출력’은 역할 축소를 뜻하며, 과거 버전별 JSON 필드 수 차이와 구분합니다.
+
+### 5.2 Quantization·Prompt Compression
+
+**접근:** 학습 adapter 병합 후 GGUF 변환·가중치 양자화, 검색 결과의 원시 덤프를 코드 계산 통계·속성 편차·이웃 합의 digest로 축약. 동일 task를 수행하는 0.5B 서빙 구성 사이에서 품질과 CPU 사용 시간을 비교합니다.
+
+| 동일 요청 집합의 서빙 비교 | 최적화 전 | 양자화·입력 축약 후 | 상태 |
+|---|---:|---:|:---:|
+| Evaluator 근거 정합률 | 90% | 90% | [T] |
+| Planner 근거–행동 정합률² | 92% | 92% | [T] |
+| 모델 경로 요청당 CPU 사용 시간, 기준=1.00 | 1.00 | **0.80** | [T] |
+
+² 근거–행동 정합률은 인용 근거가 실제 입력에 존재하고, 허용 도구·인자가 해당 근거와 모순 없이 연결되는 응답 비율입니다. 독립 평가 기준에 따른 진단·행동의 결합 지표이며, 파싱 성공률·최적 도구 선택률·최종 판정 교정률과 구분합니다. 노트북 n=337 파싱 비교와 동일 집합의 수치로 간주하지 않습니다.
+
+**프로파일링:** prefill·decode·도구 실행·대기를 분리하고, Evaluator·Planner 프로세스의 누적 CPU 시간을 완료된 모델 경로 요청 수로 나눠 비교합니다. 동일 CPU 할당·동시성·입력 집합·cache 조건에서 측정하며, CPU 시간 20% 감소를 wall-clock 지연 20% 감소로 전환하지 않습니다. 실패·재시도에서 소비한 CPU도 집계에 포함합니다.
+
+양자화만의 효과와 입력 축약 효과를 분리한 값은 아직 제시하지 않습니다. **표의 20%는 두 변경을 결합한 보정 목표**이며, 모델별 정밀도·토큰 수·실제 CPU초는 실행 로그로 보완할 항목입니다.
+
+<a id="agent"></a>
+## 6. Agent 호출 예산·부하·실패 복귀
+
+### 6.1 Quality-constrained Budgeting — 전체 품질을 유지하는 선택 호출
+
+**목표:** 전수 재검색 대비 전체 AUROC 손실≤0.002 조건에서 모델 진입 비율과 실행 비용 축소. 초기 검색의 불확실성으로 요청을 우선 선정하고, 재검색 횟수는 최대 1회로 제한합니다. 선정 정책은 검증 집합에서 확정하며 테스트 정답을 보고 교정 가능한 요청을 고르지 않습니다.
+
+| 동일 전체 10,000건 평가 | 모델 진입률 | 전체 AUROC | 최종 오판 | 검색 단독 대비 순교정 | 상태 |
+|---|---:|---:|---:|---:|:---:|
+| 검색 단독 | 0% | 0.892 | 1,600 | — | [T] |
+| **선택 호출 운영 후보** | **40%** | **0.923** | **1,300** | **300건, 3.0%** | **[T]** |
+| GRPO 전수 재검색 | 100% | 0.925 | 1,280 | 320건, 3.2% | [T] |
+
+![모델 진입률별 전체 품질과 오판 수 — 미실측 가상 보정 시나리오 [T]](picture/cv_20261026/budget_target.png)
+
+*그림은 합의된 0%·40%·100%의 세 조건만 표시합니다. 측정하지 않은 중간 예산의 곡선·최적점·신뢰구간을 생성하지 않았습니다.*
+
+| 선택 호출 정책의 집계 구간 | 요청 수 | 초기 오판 | 오판→정답 | 정답→오판 | 최종 오판 | 상태 |
+|---|---:|---:|---:|---:|---:|:---:|
+| 모델 진입 요청 | 4,000 | 1,300 | 350 | 50 | **1,000** | [T] |
+| 미진입 요청 | 6,000 | 300 | 0 | 0 | 300 | [T] |
+| **전체** | **10,000** | **1,600** | **350** | **50** | **1,300** | **[T]** |
+
+**해석:** 선택된 4,000건의 오판은 **23.1% 감소**, 전체 요청의 오판은 **18.8% 감소**입니다. 전수 재검색은 미선정 6,000건에서도 30건 교정·10건 악화로 20건의 추가 순교정을 얻는 가정입니다. 두 정책은 같은 요청에서 같은 재검색 결과를 사용하는 오프라인 replay 비교이며, 부하 중 실행 순서·실패의 영향은 별도 검증합니다.
+
+40% 요청에 기존 오판의 **81.25%**가 집중되고, 전수 재검색 순교정의 **93.75%**를 회수하는 시나리오입니다. 따라서 **선정 정책의 오류 집중도 검증이 핵심**이며, AUROC 수치만으로 이 성과를 입증할 수 없습니다. 모델 진입률 40%를 전체 CPU·비용 60% 감소로 해석하지 않습니다.
+
+<a id="search-load"></a>
+### 6.2 검색 API — Quality-constrained Load Testing
+
+**문제:** 오프라인 검색 품질이 같아도 동시 요청에서는 CPU 제한·메모리 압박·대기열로 처리량과 tail latency가 달라짐.  
+**접근:** 샤드 수·검색 후보 수·재채점 범위 변경 후 오프라인 품질을 재확인하고, 통과한 구성만 Locust 부하 검증. Prometheus·Grafana에서 CPU 사용량/limit/throttling·메모리·대기열과 요청 지표를 같은 시간 구간으로 연결합니다.
+
+| 부하 검증 기준 | 기존 구성 | 최적화 후보 | 상태 |
+|---|---|---|:---:|
+| 총자원·데이터·검색 품질 | 공통 기준 | 동일 기준 | [D] |
+| 검색 API 지연 목표 | p95≤250 ms | p95≤250 ms | [T] |
+| 실패율 목표 | ≤0.5% | ≤0.5% | [T] |
+| 최대 지속 성공 QPS, 기준=1.00 | 1.00 | **1.20, +20%** | [T] |
+
+실패율은 오류·타임아웃 요청 수/전체 시도 요청 수이며 탐지 오판율과 다릅니다. 지속 성공 QPS는 품질·지연·실패율 제약을 만족하고 대기열이 계속 증가하지 않는 구간의 성공 완료 처리량입니다. 부하 발생기의 송신 한계와 서버의 포화도 구분합니다.
+
+**실제 결과 그림의 축:** offered RPS를 증가시키며 성공 QPS·클라이언트 p95·실패율·대기열을 동시 표시하고, 같은 run의 CPU throttling·RSS/heap·page fault를 연결합니다. 250 ms는 잠정 SLO이며 단건 median에서 유도한 값이 아닙니다. 샤드 변경이 배치를 바꾸는 경우에도 총 CPU·메모리 예산은 고정합니다.
+
+![기존 검색 Grafana 화면 — 구현·계측 예시 [R]](picture/cv_20261026/grafana_search_original.png)
+
+*PPT의 과거 배포 화면을 그대로 재사용했습니다. Locust RPS·users 패널의 No data는 0이 아니며, 이 캡처로 포화점·QPS 20% 향상·최신 SLO 충족을 입증하지 않습니다. 화면의 store bytes도 프로세스 상주 메모리와 구분합니다.*
+
+### 6.3 Agent 부하 — 모델 경로 지연과 전달 품질
+
+| 운영 제약·관측 | 기준 또는 기록 내용 | 상태 |
+|---|---|:---:|
+| 모델 경로 지연 | 모델 경로 진입부터 결과 적용까지 p95≤8초; 대기 포함 | [T] |
+| 요청 deadline | 전체 요청 deadline 10초, 남은 시간을 고려해 보강 경로 진입·중단 | [T] |
+| 모델 경로 시간 초과율 | 모델 경로 진입 요청 중 시간 초과≤1% | [T] |
+| 동시 실행·호출 예산 | CPU·대기열·남은 시간에 따라 admission 조정 | [D] |
+| 부하 중 탐지 품질 | fallback을 포함한 전체 응답의 AUROC·오판·적용률을 별도 집계 | 실측 교체 대상 |
+
+**오프라인 0.923을 부하 중 AUROC로 그대로 사용하지 않습니다.** 요청을 selected → started → applied / fallback으로 추적하고, 과부하로 선택한 보강이 적용되지 않은 비율을 함께 보고합니다. timeout을 지연 표본에서 임의로 제외해 p95를 낮추지 않으며, 중단 요청은 시간 초과율·deadline 도달 시간으로 별도 기록합니다.
+
+![기존 LLM 동시 실행·지연 Grafana 패널 — 구현·계측 예시 [R]](picture/cv_20261026/grafana_llm_panels.png)
+
+*기존 화면의 모델 버전·표본·시간 구간은 최신 가상 비교와 다릅니다. 모델 요청당 CPU −20%와 모델 경로 p95≤8초의 검증 자료는 해당 지표를 함께 수집한 최신 run으로 교체해야 합니다.*
+
+### 6.4 Fallback·회귀 검증
+
+LangGraph에서 예산 초과·시간 초과·도구 실패 시 기본 거리 판정으로 복귀합니다. **정책상 미선정**, **실행 중 실패 복귀**, **정상 보강 적용**을 다른 종료 사유로 기록합니다.
+
+| 고정 검증 사례 | 기대 동작 | 결과 확인 |
+|---|---|---|
+| 희귀 속성·필터 zero-hit | 무효 이웃으로 판정하지 않고 기본 결과 복귀 | support·오류 사유·최종 이웃·판정 |
+| Evaluator 오진단 | 고정 진단→도구 매핑 대신 근거·실행 결과 검증 | 신규 오판·잘못된 행동·기존 판정 대비 변화 |
+| 도구 오류·인자 오류 | 허용 계약 검사 및 기본 결과 복귀 | 실행 성공률·오류율·복귀율 |
+| 과부하·deadline 부족 | 모델 진입 제한·중단, 기본 판정 반환 | selected/started/applied·대기·시간 초과 |
+| 모델·prompt·인덱스 갱신 | 같은 요청으로 변경 전후 비교 | 전체 및 slice AUROC·오판 전환·근거 정합률 |
+
+<details>
+<summary>기존 Streamlit 구현 화면</summary>
+
+![검색·Agent 결과 확인 UI — 과거 배포 예시 [R]](picture/cv_20261026/streamlit_original.jpg)
+
+개별 요청의 판정·이웃·근거·처리 경로를 확인하는 UI입니다. 화면의 단일 latency·confidence·옛 모델명은 본문의 공통 평가 결과가 아니며, 전수 비교나 현재 성능 증거로 사용하지 않습니다.
+
+</details>
+
+<a id="artifacts"></a>
+## 7. 결과 재현과 시각 자료
+
+### 7.1 핵심 실험별 산출물
+
+| 실험 | 반드시 남길 자료 | 본문 대응 |
+|---|---|---|
+| Router·coreset | 요청별 참조 이웃·후보 클러스터·검색 결과, index manifest, 단건 지연 | Recall@5·인덱스 크기·AUROC 손실 |
+| Evaluator | 생성/정제 데이터 버전·기각 사유·독립 평가 응답·grounding 판정 | 다양성·Teacher/Student 근거 정합률 |
+| Planner | 모델·출력 제약 버전, think/action, 도구 반환값, 전후 점수·판정 | 파싱·AUROC·correct/harmful flip |
+| Quantization·prompt | 같은 입력의 모델별 응답·token 수·prefill/decode·누적 CPU | 품질 유지·요청당 CPU −20% |
+| Budget | gate 점수·selected/started/applied·초기/최종 판정·종료 사유 | 40% 진입·전체/부분집합 오판 |
+| Locust·GKE | offered/success QPS·오류·지연 원자료, Pod 자원 설정, Grafana 동일 시간 캡처 | 검색 처리량 +20%·LLM SLO·fallback |
+
+기존 실행 흐름은 notebooks(데이터 생성·학습·평가), apps(Router·Retriever·Evaluator·Planner·Controller), evaluation(배치 평가), k8s(배포·부하 설정)로 구분합니다. 모델 학습과 CPU 배포를 같은 환경에서 수행한 것으로 서술하지 않습니다.
+
+각 run에는 데이터 split·인덱스·임베딩·점수 보정·임계값·모델 adapter·prompt·grammar·seed·CPU/메모리 설정을 연결합니다. 독립 평가셋을 정제 필터로 다시 거르지 않고, 순교정은 같은 request ID의 전후 판정으로 계산합니다. AUROC 차이의 신뢰구간은 요청별 점수와 정답의 paired bootstrap으로 산출하며, 사용자·시간 의존성이 있으면 해당 단위로 묶어 재표집합니다. 학습 seed 편차는 별도로 보고합니다. **현재 [T] 표에 유의성·신뢰구간을 임의로 추가하지 않았습니다.**
+
+### 7.2 시각 자료 구성·교체 기준
+
+표로 충분한 coreset·Teacher/Student·파싱·CPU 비교는 표로 유지했습니다. 본문 이미지는 기존 PPT·보고서의 개념/구현 그림과, 보정 수치로 다시 작성한 **정책 비교·호출 예산 그래프 2개**만 사용합니다. 모두 picture/cv_20261026/ 상대 경로로 연결했습니다.
+
+| 자료 | 이번 반영 | 다음 갱신 조건 |
+|---|---|---|
+| 시스템·Router·Mining·Distillation·Evaluator·Planner 도식 | 기존 그림 재사용 [D] | 실제 입력·출력 계약 변경 시 수정 |
+| 정책 비교 그래프 | 0.892/0.910/0.914/0.918/0.925 및 flip 건수로 재작성 [T] | 공통 10,000건 실험·GBDT 기준선 실행 후 교체 |
+| 호출 예산 그래프 | 진입률 0/40/100%, AUROC 0.892/0.923/0.925로 재작성 [T] | 라벨을 보지 않은 gate의 선택 결과·오판 집중도 확인 후 교체 |
+| Grafana 검색·LLM 화면 | 원본 유지, 과거 구현 예시로 표시 [R] | 동일 run의 부하·자원·지연·실패 지표 수집 후 교체 |
+| 검색 포화 곡선·CPU 단계별 비용 그림 | 근거 부족으로 본문 삽입 보류; 현재는 목표 표 사용 | 실제 QPS·p95·오류율 및 prefill/decode/CPU초 확보 후 추가 |
+| rejection Sankey·실제 ROC 곡선 | 단계별 건수·요청별 점수 부재로 삽입 제외 | 원자료 수집 후만 작성; 비율에서 가상 건수·곡선을 역생성하지 않음 |
+
+**수치 우선순위:** 최종 CV와 직전 보정안의 [T] 수치가 이전 PPT·보고서의 가상 수치를 대체합니다. 옛 5% QPS 목표·다른 AUROC 시나리오·오라클 회수율은 이번 README의 핵심 결과에 포함하지 않습니다. 다만 기존 자료에서 확인한 실패 원인과 실제 구현의 한계는 설계 판단의 근거로 유지했습니다.
+
+### 기술 스택
+
+- **모델·학습:** PyTorch, Transformers, Qwen2.5, PEFT/LoRA, SFT, TRL/GRPO
+- **검색·Agent:** Elasticsearch, LangGraph, MCP, FastAPI, Streamlit
+- **추론·운영:** llama.cpp/GGUF, Docker, Kubernetes/GKE, Locust, Prometheus, Grafana
+
+### 자료 기반
+
+- 최종 국문 CV: cv_korean(1).pdf — 대표 항목·최신 보정값의 기준.
+- 기존 README(2).md — 검색·데이터 정제·역할 분리의 기존 보고값과 실패 기록.
+- 프레젠테이션1(3).pptx 및 AgentRAG_Online_Experiment_Update.pptx — 시스템·벡터·학습·도구 도식과 과거 배포 화면.
+- AgentRAG 통합 보고서 및 Toss AgentRAG 직무별 검증 보고서 — 평가 경계·부하 검증·시각 자료 구성. 과거 가상 결과는 최신 보정안으로 교체.
+- 02b_planner_grpo_only_v6 노트북의 저장 평가 — Base/GRPO 출력 제약 비교 [N].
+- 다중 클러스터 메모리 뱅크 연구: [WaferDC — EAAI 2025](https://github.com/SpatialAILab/WaferDC), 공동 제1저자. 해당 연구를 정상 벡터 검색 구조의 출발점으로 사용.
+
+**범위:** 본문은 개인 프로젝트의 연구·구현·검증 자료입니다. 제한된 CPU 환경의 결과를 대규모 운영 서비스·실사용자 A/B 실험·GPU 서빙 성능으로 확대하지 않습니다.
