@@ -1,4 +1,82 @@
-# AgentRAG — 검색 근거 진단·재검색을 위한 소형 LLM 학습과 서빙 최적화
+## 📌 프로젝트 개요
+
+**Multi-Cluster Memory Bank 이상탐지 알고리즘(EAAI 2025, 공동 1저자)을 GKE 위에서 운영 가능한 AgentRAG 시스템으로 확장한 엔드투엔드 프로젝트**입니다.
+
+Tabular 이상 거래를 `최근접 클러스터 routing → retrieval → 거리 기반 이상탐지 → 판정 근거 설명 → 선택적 재검색` 흐름으로 처리하며, Router · Retriever · LLM Evaluator - LLM Planner · Orchestrator를 MSA로 분리해 배포했습니다.
+
+프로젝트는 세 단계로 진행됐고, 각 단계의 결론이 다음 단계의 설계 전제가 됩니다.
+
+| 단계 | 목표 | 결론 |
+|---|---|---|
+| **1. RAG 시스템 구축** | 1200만 건 정상 벡터로 구성된 memory bank를 free-tier GKE에서의 효율적 서빙 | Percolate 라우팅 + Coreset 10% + BBQ 양자화 → **메모리 −89%, AUROC 손실 0.4%p** |
+| **2. Anomaly Detector  → 검색 결과 Evaluator** | 이상 판정 및 검색에 LLM을 어디까지 쓸 것인가 | 서빙 제약에 따른 Qwen2.5-0.5B의 **검색 결과 판단 성능 5%p 향상**|
+| **3. Agent 시스템** | 재검색 계획에 LLM이 필요한가, 그 값어치는 얼마인가 | GRPO trained plannner 기반 재검색 tool 설계로 **검색 성능 및 AUROC**  |
+
+<!-- > 세 단계 모두 **"LLM을 넣기 전에 넣을 가치가 있는지부터 측정한다"** 는 같은 방법론을 씁니다. 그 결과 Evaluator 판정, Planner 게이트에 필요한 상황 및 데이터에만 LLM을 개입시키는 결론과, 그 판단 근거를 정량적으로 남긴 것이 이 프로젝트의 핵심 산출물입니다. -->
+
+### 바로가기
+
+- [1. 시스템·데이터·평가 범위](#scope)
+- [2. Router–Retriever: 검색 품질과 인덱스 비용](#retrieval)
+- [3. Evaluator: 실패 데이터 구축·증류·SFT](#evaluator)
+- [4. Planner: GRPO와 재검색 정책 비교](#planner)
+- [5. LLM 역할 분리·양자화·입력 축약](#serving)
+- [6. Agent 호출 예산·부하·실패 복귀](#agent)
+- [7. 결과 재현과 시각 자료](#artifacts)
+
+---
+<a id="scope"></a>
+1. 시스템·데이터·평가 범위
+
+```text
+Test Transaction
+      ↓
+[Router]      Percolate Query → 클러스터 매칭 (rank1=percolate, rank2~5=centroid)
+      ↓
+[Retriever]   Matching cluster-Filtered HNSW (cluster-scoped, k=3)
+      ↓
+[Evaluator]   LLM 1회 — what_missing (cluster_mismatch / neighbor_insufficient / accept)
+      ↓
+   confident = nd <0.3 or nd >0.5(60.4%) → 판단 종료
+      ↓ ambiguous = 0.3<=nd<=0.55(39.6%)만 재검색 진행
+┌─[AgentRAG Planner]───────────────────────────────────────────┐
+│ Planner(LLM)  think → tool + feature 선택                    │
+│ [Tool A] contextual_knn : dense pool 확장 + soft rerank      │  
+│ [Tool B] attribute_knn : exact term filter                   │  ← GRPO 학습 대상
+└──────────────────────────────────────────────────────────────┘
+      ↓
+[Orchestrator] 재검색된 정상 데이터 및 nd_final → 최종 판정 + round_log / termination
+```
+<img src="picture/Langgraph.jpg" width="100%">
+
+### 핵심 결과와 CV 대응
+
+| CV 항목 | 비교 결과 | 해석·범위 | 상태 |
+|---|---|---|:---:|
+| Two-Stage Retrieval | Router Recall@5 **0.816→0.905**, +8.9%p | Strict AND에 클러스터 중심 거리 기반 후보 보완 | [R] |
+| Coreset·HNSW 운영점 | 인덱스 **2.8→0.31 GB**, −89%; median **125→68 ms**, −46% | 별도 coreset 실험, AUROC **0.956→0.952** | [R] |
+| Rejection Sampling | 문장 고유율 **18.9%→75.8%**, 최빈 문장 비중 **28.2%→4.6%** | 생성 학습 데이터의 반복 표현 개선 | [R] |
+| Evaluator 증류·SFT | 정제 전후 Student 근거 정합률 **75%→90%**; Teacher **92%** | 독립 평가에서 Teacher 대비 −2%p인 0.5B 모델 | [T] |
+| GRPO 보상·출력 제약 | 후보 보상 동률 **99.6%→64.2%**; Base 파싱 **84.0%→95.5%**, GRPO **96.4%** | 보상 진단 [R]과 n=337 출력 평가 [N]는 별도 실험 | [R/N] |
+| 재검색 정책 비교 | 검색 단독 **0.892** / Evaluator+GBDT **0.914** / +SFT **0.918** / +GRPO **0.925** | 공통 10,000건의 전체 AUROC | [T] |
+| Quality-constrained Budgeting | 모델 진입률 **40%**, 전체 AUROC **0.923**, 전체 오판 **1,600→1,300건** | 전수 재검색 대비 AUROC −0.002 | [T] |
+| Quantization·Prompt Compression | 모델 경로 요청당 CPU 시간 **20% 절감** | Evaluator 근거 정합률 90%·Planner 근거–행동 정합률 92% 유지 | [T] |
+| Quality-constrained Load Testing | 최대 지속 성공 QPS **20% 향상** | 동일 총자원·검색 품질, 검색 API p95≤250 ms·실패율≤0.5% | [T] |
+
+### 데이터와 측정 경계
+
+| 구분 | 본문에서 사용하는 범위 |
+|---|---|
+| 주요 데이터 | FraudEcom 공개 거래 데이터. purchase value·age·browser·source 등 거래 특성과 AnoLLM 기반 임베딩 |
+| 기존 데이터 기록 [R] | 정상 학습 임베딩 122,810×576, 평가 임베딩 28,302×576. 최신 공통 10,000건 비교와 동일 평가 집합이라고 가정하지 않음 |
+| 학습·검증 분리 | 정상 메모리 뱅크·Teacher 생성 데이터·검증·최종 평가 분리. 동일 거래의 모든 후보 행동은 같은 split에 배치 |
+| 재검색 정책 공통 평가 [T] | 10,000건, 동일 인덱스·거리 계산·점수 보정·고정 임계값·도구 집합. 최초 검색 오판 1,600건으로 설정 |
+| Evaluator 독립 평가 [T] | Teacher 생성·학습용 rejection에서 분리한 고정 평가셋. Teacher 92% / Student 75%·90%는 이 집합의 비교 목표 |
+| 학습 / 서빙 | 모델 학습은 별도 GPU 환경, 서빙 검증은 CPU-only GKE(e2-standard-2급 노드). 노드 2 vCPU·8 GB와 Pod의 CPU·메모리 제한을 구분 |
+| 검색 API 부하 범위 | 사전 계산한 임베딩을 입력받는 Router–Retriever 경로. 임베딩 생성·LLM 지연 제외 |
+| 모델 경로 부하 범위 | 모델 경로 진입 후 대기·Evaluator·Planner·도구 실행·결과 적용까지. 검색 API p95와 분리 계측 |
+
+<!-- # AgentRAG — 검색 근거 진단·재검색을 위한 소형 LLM 학습과 서빙 최적화
 
 **정상 이웃 검색의 실패를 진단하고, 필요한 요청만 재검색하는 이상탐지 시스템**입니다. 다중 클러스터 메모리 뱅크 연구를 Elasticsearch 기반 Router–Retriever로 확장하고, 검색 근거를 진단하는 **LLM Evaluator**, 판단 근거와 재검색 행동을 생성하는 **GRPO Planner**, 호출 예산과 실패 복귀를 제어하는 **Agent 실행 환경**을 구성했습니다.
 
@@ -24,19 +102,9 @@
 | Quantization·Prompt Compression | 모델 경로 요청당 CPU 시간 **20% 절감** | Evaluator 근거 정합률 90%·Planner 근거–행동 정합률 92% 유지 | [T] |
 | Quality-constrained Load Testing | 최대 지속 성공 QPS **20% 향상** | 동일 총자원·검색 품질, 검색 API p95≤250 ms·실패율≤0.5% | [T] |
 
-**대표 운영 후보는 AUROC 0.923**입니다. 0.925는 모든 요청에 재검색을 적용한 오프라인 비교 조건이며, 0.956/0.952는 별도 인덱스 비교 실험입니다. 서로 다른 실험의 AUROC를 연결하거나 개선량을 합산하지 않습니다.
+**대표 운영 후보는 AUROC 0.923**입니다. 0.925는 모든 요청에 재검색을 적용한 오프라인 비교 조건이며, 0.956/0.952는 별도 인덱스 비교 실험입니다. 서로 다른 실험의 AUROC를 연결하거나 개선량을 합산하지 않습니다. -->
 
-### 바로가기
-
-- [1. 시스템·데이터·평가 범위](#scope)
-- [2. Router–Retriever: 검색 품질과 인덱스 비용](#retrieval)
-- [3. Evaluator: 실패 데이터 구축·증류·SFT](#evaluator)
-- [4. Planner: GRPO와 재검색 정책 비교](#planner)
-- [5. LLM 역할 분리·양자화·입력 축약](#serving)
-- [6. Agent 호출 예산·부하·실패 복귀](#agent)
-- [7. 결과 재현과 시각 자료](#artifacts)
-
-<a id="scope"></a>
+<!-- <a id="scope"></a>
 ## 1. 시스템·데이터·평가 범위
 
 ### 문제와 접근
@@ -73,7 +141,7 @@
 
 **데이터 규모:** CV의 ‘1,200만 건’은 원본 거래 수와 확장 인덱스 문서 수의 대응 근거가 별도로 필요합니다. 이 README에서는 원본 고유 거래 수로 사용하지 않으며, 확장 적재량은 실제 인덱스 manifest로 확인 후 추가합니다.
 
-**판정 기준:** 이상 점수가 클수록 이상 가능성이 높도록 방향을 통일하고, 임계값과 정규화 통계는 검증 단계에서 고정합니다. 재검색 결과에 맞춰 테스트 임계값을 다시 최적화하지 않습니다. 과거 버전의 0.42/0.5 임계값과 호출 구간을 혼합하지 않습니다.
+**판정 기준:** 이상 점수가 클수록 이상 가능성이 높도록 방향을 통일하고, 임계값과 정규화 통계는 검증 단계에서 고정합니다. 재검색 결과에 맞춰 테스트 임계값을 다시 최적화하지 않습니다. 과거 버전의 0.42/0.5 임계값과 호출 구간을 혼합하지 않습니다. -->
 
 <a id="retrieval"></a>
 ## 2. Router–Retriever: 검색 품질과 인덱스 비용
