@@ -34,7 +34,7 @@ Tabular 이상 거래를 `최근접 클러스터 routing → retrieval → 거�
 
 ---
 <a id="scope"></a>
-## 🏗️ 시스템 아키텍처·데이터·평가 범위
+## 🏗️ 1️⃣ 시스템 아키텍처·데이터·평가 범위
 
 ```text
 Test Transaction
@@ -67,9 +67,10 @@ Test Transaction
 <img src="picture/Langgraph.jpg" width="100%">
 
 # Part 1. RAG 시스템 구축
+> 목표는 **"1200만 건 정상 벡터로 구성된 memory bank를 free-tier GKE(e2, 메모리 2GB 제한)에서 최적화 서빙"** 입니다. 검색 축을 하나씩 sweep해 최적 운영점을 도출하고, 그 위에서 LLM 실험을 진행했습니다. 
 
 <a id="retrieval"></a>
-## 2. Router–Retriever: 오프라인 후보 선정 → 부하 검증 → exact 대조
+## 2️⃣ Router–Retriever: 오프라인 후보 선정 → 부하 검증 → exact 대조
 
 **목적:** 정상 이웃의 검색 품질을 먼저 제한하고, 그 조건을 만족하는 구성에서 검색 API의 지속 처리량을 높입니다. 아래 순서는 기존 보고서의 **9장 R01–R02, 10–11장 R03**을 CV의 대표 수치에 맞춰 정리한 것입니다. 하이퍼파라미터 전 조합 대신 채택·기각 이유가 달라지는 후보만 비교합니다.
 
@@ -80,6 +81,8 @@ Test Transaction
 | **③ exact 대조·설정 고정** | global / routed exact / routed ANN | 검색 범위 손실과 ANN 근사 손실 분리, 최종 설정 manifest |
 
 샤드는 인덱스 토폴로지 변경 항목이며 단순 런타임 파라미터가 아닙니다. `num_candidates`·rescore 범위·후보 클러스터 수도 품질에 영향을 주므로 **Locust에서만 결정하지 않고, 각 변경 뒤 오프라인 품질을 다시 확인**합니다.
+
+
 
 ### 2.1 오프라인: Router·Coreset·Quantization 후보 선정
 
@@ -95,12 +98,62 @@ Test Transaction
 
 **이번 보정 [T]:** 기존 개선폭을 기준점으로 삼되, bucket은 **범위 규칙을 만족할 수 있는 후보를 넓게 통과시키는 term prefilter → 원래 range 조건 재검사 → 기존 순위 유지**로 설계합니다. 경계 bucket과 제한 없는 속성·결측 처리까지 포함해 실제 일치 규칙을 누락하지 않는 경우에만 V2와 같은 품질을 기대할 수 있습니다. 기존의 `tolerance ±1`·점수 혼합 구현이 자동으로 이 조건을 만족하는 것은 아닙니다.
 
+<details>
+<summary>Percolate query 형태</summary>
+
+#### **Version 1: Strict AND**
+
+Decision Tree의 리프 노드 경로를 `bool.filter`의 range 조건으로 직접 변환해 정밀 매칭합니다.
+
+```python
+# 예시: feature v1 ∈ [0.8, ∞) AND v3 ∈ [-1.2, ∞) → Cluster 63
+{"query": {"bool": {"filter": [
+    {"range": {"v1": {"gte": 0.8}}},
+    {"range": {"v3": {"gte": -1.2}}}
+]}}}
+```
+
+- **의도**: Decision tree leaf를 각 클러스터의 rule로 표현해 직관적으로 매칭
+- **한계**: Strict AND 다수 결합으로 Top-5 매칭 다양성이 떨어짐 (같은 클러스터 1개만 매칭)
+
+#### **Version 2: Centroid-Augmented Diversity**
+
+Top-1 매칭 결과에 **벡터 유사도 기반 Top-4**를 추가해 다양성을 보완합니다.
+
+```python
+top_1 = percolate_strict_and(test_vec)                       # Phase 1
+top_4 = sorted(centroids, key=lambda c: 1 - cos(test_vec, c))[:4]   # Phase 2
+candidates = [top_1] + top_4
+```
+
+- **의도**: Recall@5 및 Top-5 다양성 ↑
+- **한계**: Strict AND 대비 검색 지연 ↑
+
+#### **Version 3: Optimized Bucketization**
+
+Range 조건을 **Bucket index + Term filter**로 변환해 후보군 pruning을 최적화합니다. 부동소수점 range 비교를 term filter bitset 연산으로 바꾸는 것이 목적입니다.
+
+```python
+# Ingest: v1 ≤ 0.8 → bucket_3, direction="lte"
+# Query : test_vec["v1"]=0.05 → bucket_3, tolerance ±1 → terms [2,3,4]
+{"bool": {"must": [
+    {"percolate": {"field": "query", "document": {...}}},
+    {"bool": {"should": [ ... 9개 feature ... ], "minimum_should_match": 3}}
+]}}
+```
+
+- **의도**: Range 비교 → Term bitset
+- **한계**: Percolate index 크기 ↑, rule 수 증가 시 지연 가능성
+
+</details>
+
 | Router 구성 — E-TARGET, 전체 [T]¹ | Routing Acc@1 | Router Recall@5 | MRR@5 | Router 단독 p50 | 탐지 AUROC | 판단 |
 |---|---:|---:|---:|---:|---:|---|
 | V1: Strict AND | 0.816 | 0.816 | 0.816 | 22 ms | 0.880 | 기준선 |
 | V2: V1 + 중심 거리 후보 보완 | 0.816 | **0.905** | **0.854** | 27 ms | **0.892** | 검색 품질 후보 |
 | **V3-safe: V2 + 보수적 bucket prefilter·range 재검사** | **0.816** | **0.905** | **0.854** | **23 ms** | **0.892** | 구현·동등성 검증 후 채택할 후보 |
 | V3-lossy: bucket 허용 폭·점수 혼합 | 0.790 | 0.897 | 0.836 | 21 ms | 0.887 | 빨라도 품질 저하로 기각 |
+
 
 ¹ 0.816/0.905는 과거 [R] 숫자를 재사용한 **새 평가 계약의 가상 기준점**입니다. 나머지 수치는 [T]이며 같은 holdout에서 실제 재측정한 결과가 아닙니다. V2가 기존 top-1을 보존하는 설계이므로 Acc@1도 유지했습니다. V3-safe의 27→23 ms는 예상 지연 감소로, Recall 개선과 분리합니다.
 
@@ -238,7 +291,7 @@ UI 캡처 자체가 성능 증거는 아닙니다. **동일 run_id·설정·시�
 > 목표는 **"이상 판정에 LLM을 어디까지 쓸 것인가"** 를 감이 아니라 단계별 측정으로 정하는 것입니다. 전수 LLM 추론(forwardRAG)에서 출발해, 학습 데이터 품질 → 역할 분리 → 모델 축소 순으로 진행했습니다.
 
 <a id="evaluator"></a>
-## 3. Evaluator: 실패 데이터 구축·증류·SFT
+## 3️⃣ Evaluator: 실패 데이터 구축·증류·SFT
 
 ### 3.1 Pipeline-aware Hard Negative Mining
 
@@ -309,10 +362,23 @@ Evaluator는 코드가 계산한 거래·정상 이웃의 속성 차이와 통�
 | **0.5B Student, 정제 후 데이터 SFT** | **90%** | 동일 역할·입력 구성에서 정제 효과 +15%p | [T] |
 | Qwen2.5-14B Teacher, 동일 진단 과제 | 92% | Student의 품질 손실 2%p | [T] |
 
+<table>
+<tr>
+<td width="50%" align="center">
+<img src="picture/mining_data.jpg" width="100%"><br>
+<b>Rejection Funnel (Sankey)</b><br>생성 → parse/GT/grounded/dup 기각 → train
+</td>
+<td width="50%" align="center">
+<img src="picture/nb03-fig3.png" width="100%"><br>
+<b>다양성 산점 (고유율 × soft-top1)</b><br>v1 → v2 개선 + student 붕괴점 대비
+</td>
+</tr>
+</table>
+
 **결론:** 대형 모델을 그대로 서빙하기보다 검증 가능한 진단 과제로 범위를 좁히고, 데이터 정제·증류로 0.5B Student의 품질–비용 절충을 평가합니다. 근거 정합률 90%를 재검색 행동 정확도나 최종 탐지 AUROC로 대체하지 않습니다.
 
 <a id="planner"></a>
-## 4. Planner: GRPO와 재검색 정책 비교
+## 4️⃣ Planner: GRPO와 재검색 정책 비교
 
 ### 4.1 ReAct 기반 판단 근거·행동 생성
 
@@ -378,7 +444,8 @@ think의 자유 생성은 유지하고 도구명·인자의 허용 범위를 제
 이 비교는 LLM 정책의 추가 품질을 평가하지만, 동일 계산 비용에서의 우위까지 입증하지는 않습니다. 필요한 품질 수준과 아래 호출 비용·부하 조건을 함께 적용해 운영 후보를 선택합니다. **AUROC에서 교정 건수를 역산하거나, 1−AUROC를 거래 오판율로 사용하지 않습니다.**
 
 <a id="serving"></a>
-## 5. LLM 역할 분리·양자화·입력 축약
+## 5️⃣ LLM 역할 분리·양자화·입력 축약
+![key분리 — prompt 축약 예시 [R]](picture/deterministic_key.png)
 
 ### 5.1 Deterministic–LLM 역할 분리
 
@@ -409,7 +476,7 @@ think의 자유 생성은 유지하고 도구명·인자의 허용 범위를 제
 양자화만의 효과와 입력 축약 효과를 분리한 값은 아직 제시하지 않습니다. **표의 20%는 두 변경을 결합한 보정 목표**이며, 모델별 정밀도·토큰 수·실제 CPU초는 실행 로그로 보완할 항목입니다.
 
 <a id="agent"></a>
-## 6. Agent 호출 예산·부하·실패 복귀
+## 7️⃣ Agent 호출 예산·부하·실패 복귀
 
 ### 6.1 Quality-constrained Budgeting — 전체 품질을 유지하는 선택 호출
 
@@ -494,7 +561,7 @@ LangGraph에서 예산 초과·시간 초과·도구 실패 시 기본 거리 �
 </details>
 
 <a id="artifacts"></a>
-## 7. 결과 재현과 시각 자료
+## 7️⃣ 결과 재현과 시각 자료
 
 ### 7.1 핵심 실험별 산출물
 
