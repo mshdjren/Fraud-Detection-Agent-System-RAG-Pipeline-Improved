@@ -154,7 +154,7 @@ Test Transaction
 
 576차원에서 순수 검색 코드의 크기는 FP32 **2,304 B/벡터**, INT8 **576 B**, BBQ **72 B**입니다. 이는 표현 비트 수로 계산한 값으로 **graph·보정값·원벡터·metadata·cache를 제외**합니다. Elasticsearch는 재채점을 위해 원벡터를 디스크에 보관하므로 양자화 후 총 디스크가 늘 수도 있습니다. 따라서 이전의 `working set 1/12`를 이번 bank의 확정 결과로 옮기지 않습니다. PCA는 이번 비교에서 고정·제외했습니다.[S2]
 
-![오프라인 후보 선정: Router 품질 보존, coreset 기준점, 양자화 품질 제약](picture/retrieval_20261026/offline_selection_target.png)
+![오프라인 후보 선정: Router 품질 보존, coreset 기준점, 양자화 품질 제약](picture/cv_20261026/offline_selection_target.png)
 
 *그림 1. Router·양자화는 미실측 [T], coreset은 기존 집계 [R]입니다. C-HIST와 E-TARGET의 AUROC는 서로 다른 평가이므로 한 개선 곡선으로 연결하지 않습니다. 표의 전체 후보 조합이 아니라 채택 근거만 보여 줍니다.*
 
@@ -189,7 +189,7 @@ BBQ·10% coreset·원벡터 rescore ×3·K=5를 고정하고, 벡터 인덱스 �
 
 **절차:** warm-up 5분 → 단계당 steady 10분 → 경계 부근 30분 유지 → 독립 run 3회. 위 표는 아직 반복 실험의 평균이 아닙니다. 실제 송신·완료 시각과 generator CPU를 저장하고, 목표 송신률을 유지하지 못한 Locust 단계는 용량 근거에서 제외합니다. `constant_throughput`은 서버가 느려도 원하는 RPS를 자동 보장하지 않습니다.[S4]
 
-![shard·후보 수 조합의 품질 제약과 Locust 부하 경계 — 미실측 가상 시나리오](picture/retrieval_20261026/load_operating_point_target.png)
+![shard·후보 수 조합의 품질 제약과 Locust 부하 경계 — 미실측 가상 시나리오](picture/cv_20261026/load_operating_point_target.png)
 
 *그림 2. 실선/빈 점은 가상 부하 곡선, 별은 지연·실패 제약을 함께 통과한 최대 시험 지점입니다. 실제 Grafana 화면이나 Locust 리포트를 재현한 이미지는 아닙니다. 수학적인 최대 용량이나 실사용 트래픽 권장량이 아니라 **시험한 조합·부하 구간 내 운영 후보**입니다.*
 
