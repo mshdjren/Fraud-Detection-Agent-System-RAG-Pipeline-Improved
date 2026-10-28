@@ -30,7 +30,7 @@ Tabular 이상 거래를 `최근접 클러스터 routing → retrieval → 거�
 - [4. Planner: GRPO와 재검색 정책 비교](#planner)
 - [5. LLM 역할 분리·양자화·입력 축약](#serving)
 - [6. Agent 호출 예산·부하·실패 복귀](#agent)
-- [7. 결과 재현과 시각 자료](#artifacts)
+<!-- - [7. 결과 재현과 시각 자료](#artifacts) -->
 
 ---
 <a id="scope"></a>
@@ -560,7 +560,7 @@ LangGraph에서 예산 초과·시간 초과·도구 실패 시 기본 거리 �
 
 </details>
 
-<a id="artifacts"></a>
+<!-- <a id="artifacts"></a>
 ## 7️⃣ 결과 재현과 시각 자료
 
 ### 7.1 핵심 실험별 산출물
@@ -608,7 +608,40 @@ LangGraph에서 예산 초과·시간 초과·도구 실패 시 기본 거리 �
 - 02b_planner_grpo_only_v6 노트북의 저장 평가 — Base/GRPO 출력 제약 비교 [N].
 - 다중 클러스터 메모리 뱅크 연구: [WaferDC — EAAI 2025](https://github.com/SpatialAILab/WaferDC), 공동 제1저자. 해당 연구를 정상 벡터 검색 구조의 출발점으로 사용.
 
-**범위:** 본문은 개인 프로젝트의 연구·구현·검증 자료입니다. 제한된 CPU 환경의 결과를 대규모 운영 서비스·실사용자 A/B 실험·GPU 서빙 성능으로 확대하지 않습니다.
+**범위:** 본문은 개인 프로젝트의 연구·구현·검증 자료입니다. 제한된 CPU 환경의 결과를 대규모 운영 서비스·실사용자 A/B 실험·GPU 서빙 성능으로 확대하지 않습니다. -->
+
+## 💻 기술 스택 & 실행
+
+- **모델·학습:** PyTorch, Transformers, Qwen2.5, PEFT/LoRA, SFT, TRL/GRPO
+- **검색·Agent:** Elasticsearch, LangGraph, MCP, FastAPI, Streamlit
+- **추론·운영:** llama.cpp/GGUF, Docker, Kubernetes/GKE, Locust, Prometheus, Grafana
+
+```bash
+# 모드 전환 (agent ↔ forwardRAG baseline)
+kubectl patch configmap anomaly-config -n elastic --type merge \
+  --patch '{"data": {"PIPELINE_MODE": "forward"}}'
+kubectl rollout restart deployment/anomaly-orchestrator deployment/local-analyzer -n elastic
+
+# 평가 (고정 eval set — 버전/모드 간 동일 문제지)
+python evaluation/agent_eval/agent_batch_inference.py \
+    --eval-source eval_set --n-samples 100 \
+    --gcs-upload gs://fraud_ecomm/evaluation/agent-eval
+```
+
+```
+apps/          # router, retriever, local_analyzer, controller, orchestrator, local_planner
+common/        # config, prompts(학습·서빙 단일 소스), judge
+evaluation/    # agent_eval, gt_loader, hard_negative_miner, oracle_rollout_batch
+k8s/           # configmap 매니페스트 + batch jobs (sweep, oracle)
+notebooks/     # NB01(생성) → NB02(Evaluator SFT·GRPO) → NB02b(Planner GRPO) → NB03(검증·Judge)
+```
+
+## 📚 참조
+
+- Multi-Cluster Memory Bank 이상탐지 (EAAI 2025, 공동 1저자) — 알고리즘 기반
+- PatchCore (CVPR 2022) — Coreset sampling
+- Elasticsearch Percolate Query / HNSW / BBQ, LangGraph, MCP
+
 
 <details>
 <summary> 미정리 </summary>
