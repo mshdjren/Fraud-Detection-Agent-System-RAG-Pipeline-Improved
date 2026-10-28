@@ -280,7 +280,7 @@ UI 캡처 자체가 성능 증거는 아닙니다. **동일 run_id·설정·시�
 [Deviation Table]  purchase_value: z=+0.79 [ok] ...        ← z를 사전 계산 (모델 암산 제거)
 [RETRIEVAL digest] top-k agrees: sex(3/3) | differs: browser(1/3) ...   ← 원시 덤프 15 tok 압축
 ```
-<details>
+</details>
 
 | 필터 | 내용 | 해결한 실패 모드 |
 |---|---|---|
